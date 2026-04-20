@@ -75,6 +75,30 @@
         panel.scrollTop = panel.scrollHeight;
       }
 
+      function postServerLog(level, message, detail) {
+        if (!currentAuthToken) return;
+        try {
+          fetch('/api/cast/log?token=' + encodeURIComponent(currentAuthToken), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              source: 'cast-receiver',
+              session: FORCED_CAST_CODEC,
+              level: level,
+              message: message,
+              detail: detail || ''
+            })
+          }).catch(function() {});
+        } catch (e) {
+          // Ignore receiver-side logging failures to avoid affecting playback
+        }
+      }
+
+      function logAndPost(level, tag, msg) {
+        log(level, tag, msg);
+        postServerLog(level, '[' + tag + '] ' + msg);
+      }
+
       function withAuth(url) {
         if (!url) return url;
         try {
@@ -95,7 +119,7 @@
         if (currentAuthToken && !requestInfo.headers.Authorization) {
           requestInfo.headers.Authorization = 'Bearer ' + currentAuthToken;
         }
-        log('ok', LOG_TAG, resourceType + ' request: ' + requestInfo.url);
+        logAndPost('ok', LOG_TAG, resourceType + ' request: ' + requestInfo.url);
       }
 
       var playbackConfig = new cast.framework.PlaybackConfig();
@@ -107,22 +131,22 @@
       };
       playbackConfig.manifestHandler = function(manifest, responseInfo) {
         var status = responseInfo && responseInfo.statusCode ? responseInfo.statusCode : 'unknown';
-        log('ok', LOG_TAG, 'Manifest response: ' + status);
+        logAndPost('ok', LOG_TAG, 'Manifest response: ' + status);
         return manifest;
       };
       playbackConfig.segmentHandler = function(segment, responseInfo) {
         var status = responseInfo && responseInfo.statusCode ? responseInfo.statusCode : 'unknown';
-        log('ok', LOG_TAG, 'Segment response: ' + status);
+        logAndPost('ok', LOG_TAG, 'Segment response: ' + status);
         return segment;
       };
 
       // ─── Receiver Init ─────────────────────────────────────────────
       context.addEventListener(cast.framework.system.EventType.READY, function() {
-        log('ok', LOG_TAG, 'Receiver started — forced codec: ' + FORCED_CAST_CODEC);
+        logAndPost('ok', LOG_TAG, 'Receiver started — forced codec: ' + FORCED_CAST_CODEC);
       });
 
       context.addEventListener(cast.framework.system.EventType.ERROR, function(e) {
-        log('error', LOG_TAG, 'Receiver error: ' + JSON.stringify(e));
+        logAndPost('error', LOG_TAG, 'Receiver error: ' + JSON.stringify(e));
       });
 
       // ─── LOAD Interceptor ──────────────────────────────────────────
@@ -142,15 +166,15 @@
                   urlObj.searchParams.set('token', currentAuthToken);
                 }
                 m.contentId = urlObj.toString();
-                log('ok', LOG_TAG, 'Prepared HLS URL for forced AAC playback');
+                logAndPost('ok', LOG_TAG, 'Prepared HLS URL for forced AAC playback');
               } catch (e) {
-                log('error', LOG_TAG, 'Failed to parse contentId URL');
+                logAndPost('error', LOG_TAG, 'Failed to parse contentId URL');
               }
             }
 
-            log('ok', LOG_TAG, 'LOAD contentId: ' + m.contentId);
-            log('ok', LOG_TAG, 'LOAD contentType: ' + m.contentType);
-            log('ok', LOG_TAG, 'LOAD customData: ' + JSON.stringify(m.customData));
+            logAndPost('ok', LOG_TAG, 'LOAD contentId: ' + m.contentId);
+            logAndPost('ok', LOG_TAG, 'LOAD contentType: ' + m.contentType);
+            logAndPost('ok', LOG_TAG, 'LOAD customData: ' + JSON.stringify(m.customData));
 
             m.contentType = m.contentType || 'application/vnd.apple.mpegurl';
           }
@@ -175,14 +199,14 @@
       playerManager.addEventListener(
         cast.framework.events.EventType.ERROR,
         function(e) {
-          log('error', LOG_TAG, 'Player error: ' + decodeError(e));
+          logAndPost('error', LOG_TAG, 'Player error: ' + decodeError(e));
         }
       );
 
       playerManager.addEventListener(
         cast.framework.events.EventType.BUFFERING,
         function(e) {
-          log('ok', LOG_TAG, 'Buffering: ' + e.isBuffering);
+          logAndPost('ok', LOG_TAG, 'Buffering: ' + e.isBuffering);
         }
       );
 
@@ -190,16 +214,16 @@
         cast.framework.events.EventType.MEDIA_STATUS,
         function(e) {
           if (e.mediaStatus) {
-            log('ok', LOG_TAG, 'State: ' + e.mediaStatus.playerState +
+            logAndPost('ok', LOG_TAG, 'State: ' + e.mediaStatus.playerState +
               (e.mediaStatus.idleReason ? ' (' + e.mediaStatus.idleReason + ')' : ''));
           }
         }
       );
 
       // ─── Start receiver ────────────────────────────────────────────
-      log('ok', LOG_TAG, 'Starting receiver...');
+      logAndPost('ok', LOG_TAG, 'Starting receiver...');
       context.start({ playbackConfig: playbackConfig });
-      log('ok', LOG_TAG, 'context.start() returned OK');
+      logAndPost('ok', LOG_TAG, 'context.start() returned OK');
 
     } catch (initError) {
       _rawLog('[INIT ERROR] ' + initError.message);

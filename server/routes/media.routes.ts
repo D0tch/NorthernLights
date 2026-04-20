@@ -11,6 +11,7 @@ import {
   getSessionOutputDir,
   getActiveSessionVariants,
 } from '../services/hlsStream.service';
+import { writeCastReceiverLog, writeHlsServerLog, writeHlsSessionLog } from '../services/debugLogger.service';
 
 const router = Router();
 const HLS_SEGMENT_LINE = /^(segment\d+\.ts)$/gm;
@@ -84,6 +85,17 @@ function validateHlsPlaylist(playlist: string): { valid: boolean; error?: string
   return { valid: true };
 }
 
+router.post('/cast/log', (req, res) => {
+  const source = typeof req.body?.source === 'string' ? req.body.source : 'receiver';
+  const level = typeof req.body?.level === 'string' ? req.body.level : 'info';
+  const message = typeof req.body?.message === 'string' ? req.body.message : '';
+  const detail = typeof req.body?.detail === 'string' ? req.body.detail : '';
+  const session = typeof req.body?.session === 'string' ? req.body.session : '';
+
+  writeCastReceiverLog(`[${level}] [${source}]${session ? ` [${session}]` : ''} ${message}${detail ? ` :: ${detail}` : ''}`);
+  res.sendStatus(204);
+});
+
 // Serve HLS playlist for a track
 router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
   setCorsHeaders(req, res);
@@ -141,6 +153,7 @@ router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
     const session = await getOrCreateHlsSession(trackId, fileBuf, quality, bitrate, sourceFormat, targetCodec);
 
     if (!fs.existsSync(session.playlistPath)) {
+      writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Session created but playlist path missing: ${session.playlistPath}`);
       return res.status(500).send('HLS playlist generation failed');
     }
 
@@ -173,13 +186,18 @@ router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
     const validation = validateHlsPlaylist(output);
     if (!validation.valid) {
       console.error('[HLS] Invalid playlist generated:', validation.error);
+      writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Invalid playlist: ${validation.error}`);
+      writeHlsSessionLog(trackId, quality, targetCodec, `Invalid served playlist: ${validation.error}`);
       return res.status(500).send(`Invalid HLS playlist: ${validation.error}`);
     }
 
     console.log('[HLS DEBUG] Serving playlist:', JSON.stringify(output));
+    writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Served playlist with ${output.match(HLS_SEGMENT_LINE)?.length || 0} segment entries`);
+    writeHlsSessionLog(trackId, quality, targetCodec, `Served playlist snapshot: ${output.split(/\r?\n/).slice(0, 20).join('\\n')}`);
     res.send(output);
   } catch (err: any) {
     console.error('[HLS] Playlist error:', err?.message || err);
+    writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Error: ${err?.message || String(err)}`);
     if (!res.headersSent) {
       if (err?.code === 'ENOENT' || err?.message?.includes('ENOENT')) {
         res.status(501).send('FFmpeg not installed — HLS streaming unavailable');
@@ -200,6 +218,7 @@ router.all('/stream/:trackId/:segment', async (req, res) => {
   const codec = (req.query.codec as string) || 'aac';
 
   console.log(`[HLS DEBUG] Segment request: trackId=${trackId} segment=${segment} quality=${quality} codec=${codec}`);
+  writeHlsSessionLog(trackId, quality, codec, `Segment request for ${segment}`);
 
   // Only serve .ts segment files
   if (!segment.endsWith('.ts')) {
@@ -210,16 +229,20 @@ router.all('/stream/:trackId/:segment', async (req, res) => {
 
   if (!outputDir) {
     console.log(`[HLS DEBUG] No exact session for trackId=${trackId}; active variants=${JSON.stringify(getActiveSessionVariants(trackId))}`);
+    writeHlsSessionLog(trackId, quality, codec, `Missing exact session for ${segment}; active variants=${JSON.stringify(getActiveSessionVariants(trackId))}`);
     return res.status(404).send('No active HLS session for this track');
   }
 
   const segmentPath = path.join(outputDir, segment);
   if (!fs.existsSync(segmentPath)) {
     console.log(`[HLS DEBUG] Segment not found: ${segmentPath}`);
+    writeHlsSessionLog(trackId, quality, codec, `Segment missing on disk: ${segmentPath}`);
     return res.status(404).send('Segment not found');
   }
 
   console.log(`[HLS DEBUG] Serving segment: ${segmentPath}`);
+  const stat = fs.statSync(segmentPath);
+  writeHlsSessionLog(trackId, quality, codec, `Serving ${segment} (${stat.size} bytes) from ${segmentPath}`);
 
   // Touch the session to keep it alive
   touchSession(trackId, quality, codec);

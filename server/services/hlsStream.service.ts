@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { writeHlsServerLog, writeHlsSessionLog } from './debugLogger.service';
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
@@ -39,6 +40,30 @@ function getSessionKeyParts(key: string): { trackId: string; quality: string; co
   const parts = key.split('::');
   if (parts.length !== 3) return null;
   return { trackId: parts[0], quality: parts[1], codec: parts[2] };
+}
+
+function logHlsSession(trackId: string, quality: string, codec: string, line: string) {
+  writeHlsServerLog(`[session ${trackId} ${quality} ${codec}] ${line}`);
+  writeHlsSessionLog(trackId, quality, codec, line);
+}
+
+function summarizePlaylist(content: string): string {
+  return content
+    .split(/\r?\n/)
+    .slice(0, 16)
+    .join('\\n');
+}
+
+function inspectTransportSegment(segmentPath: string): string {
+  try {
+    const output = execSync(
+      `ffprobe -v error -show_entries format=format_name,duration,size:stream=index,codec_name,codec_type,codec_tag_string,profile,sample_rate,channels -of json "${segmentPath.replace(/"/g, '\\"')}"`,
+      { timeout: 5000 }
+    ).toString().trim();
+    return output || '{"error":"empty ffprobe output"}';
+  } catch (err: any) {
+    return JSON.stringify({ error: err?.message || String(err) });
+  }
 }
 
 // ─── Core API ───────────────────────────────────────────────────────────
@@ -81,9 +106,13 @@ export async function getOrCreateHlsSession(
   // Determine encoding strategy
   const inputPath = trackPath.toString('utf8');
   const shouldRemux = getRemuxDecision(quality, sourceBitrate, sourceFormat, targetCodec, inputPath);
+  logHlsSession(trackId, quality, targetCodec, `Creating session in ${outputDir}`);
+  logHlsSession(trackId, quality, targetCodec, `Input path: ${inputPath}`);
+  logHlsSession(trackId, quality, targetCodec, `Remux decision: ${shouldRemux ? 'copy' : 'transcode'}`);
 
   // Build FFmpeg args
   const ffmpegArgs = buildFfmpegArgs(inputPath, playlistFilename, segmentFilename, quality, shouldRemux, targetCodec);
+  logHlsSession(trackId, quality, targetCodec, `FFmpeg args: ${ffmpegArgs.join(' ')}`);
 
   // Create the readiness promise — resolves when segment000.ts appears
   let resolveReady: () => void;
@@ -111,12 +140,14 @@ export async function getOrCreateHlsSession(
   console.log(`[HLS DEBUG] cwd: ${outputDir}`);
   const ffmpeg = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'], cwd: outputDir });
   session.ffmpegProcess = ffmpeg;
+  logHlsSession(trackId, quality, targetCodec, 'FFmpeg process spawned');
 
   ffmpeg.stderr?.on('data', (data: Buffer) => {
     // FFmpeg writes ALL output to stderr (config banner, progress, AND errors).
     // Only log lines that look like actual errors, not config/progress noise.
     const msg = data.toString();
     console.log(`[HLS DEBUG] FFmpeg stderr: ${msg.substring(0, 200)}`);
+    logHlsSession(trackId, quality, targetCodec, `FFmpeg stderr: ${msg.trim()}`);
     if (/^\[?error|Error while|Invalid|No such file|could not|Cannot/mi.test(msg)) {
       console.error(`[HLS] FFmpeg error for ${trackId}:`, msg.trim());
     }
@@ -124,6 +155,7 @@ export async function getOrCreateHlsSession(
 
   ffmpeg.on('exit', (code, signal) => {
     session.ffmpegProcess = null;
+    logHlsSession(trackId, quality, targetCodec, `FFmpeg exited with code=${code} signal=${signal}`);
     if (code !== 0 && code !== null && signal !== 'SIGKILL') {
       console.error(`[HLS] FFmpeg exited with code ${code} for track ${trackId}`);
     }
@@ -131,6 +163,7 @@ export async function getOrCreateHlsSession(
 
   ffmpeg.on('error', (err) => {
     console.error(`[HLS] FFmpeg spawn error for ${trackId}:`, err);
+    logHlsSession(trackId, quality, targetCodec, `FFmpeg spawn error: ${err?.message || String(err)}`);
     session.ffmpegProcess = null;
     // Resolve the promise anyway so callers don't hang
     if (!session.ready) {
@@ -151,10 +184,17 @@ export async function getOrCreateHlsSession(
       if (fs.existsSync(playlistPath)) {
         const content = fs.readFileSync(playlistPath, 'utf8');
         console.log(`[HLS DEBUG] Poll: playlist exists, content: ${JSON.stringify(content.substring(0, 200))}`);
+        logHlsSession(trackId, quality, targetCodec, `Playlist poll snapshot: ${summarizePlaylist(content)}`);
         if (/^segment\d+\.ts$/m.test(content)) {
           clearInterval(pollInterval);
           session.ready = true;
           console.log(`[HLS DEBUG] Session ready for track ${trackId}`);
+          const firstSegmentPath = path.join(outputDir, 'segment000.ts');
+          if (fs.existsSync(firstSegmentPath)) {
+            logHlsSession(trackId, quality, targetCodec, `First segment probe: ${inspectTransportSegment(firstSegmentPath)}`);
+          } else {
+            logHlsSession(trackId, quality, targetCodec, 'First segment probe skipped: segment000.ts missing at ready time');
+          }
           resolveReady!();
           return;
         }
@@ -164,6 +204,7 @@ export async function getOrCreateHlsSession(
     if (Date.now() - pollStart > POLL_TIMEOUT_MS) {
       clearInterval(pollInterval);
       console.error(`[HLS] Timeout waiting for first segment of track ${trackId}`);
+      logHlsSession(trackId, quality, targetCodec, 'Timed out waiting for playlist to contain first segment');
       session.ready = true;
       resolveReady!();
     }
@@ -195,7 +236,10 @@ export async function getOrCreateHlsSession(
 export function touchSession(trackId: string, quality: string, codec?: string): void {
   if (codec) {
     const session = activeSessions.get(sessionKey(trackId, quality, codec));
-    if (session) { session.lastAccessedAt = Date.now(); return; }
+    if (session) {
+      session.lastAccessedAt = Date.now();
+      return;
+    }
   }
 }
 
@@ -244,6 +288,7 @@ export function cleanupSession(trackId: string, quality: string, codec?: string)
   }
   const session = activeSessions.get(key!);
   if (!session) return;
+  logHlsSession(session.trackId, session.quality, session.codec, 'Cleaning up session');
 
   // Kill FFmpeg if still running
   if (session.ffmpegProcess && !session.ffmpegProcess.killed) {
@@ -416,6 +461,7 @@ function startCleanupTimer(): void {
     for (const [key, session] of activeSessions) {
       if (now - session.lastAccessedAt > SESSION_TTL_MS) {
         console.log(`[HLS] Reaping expired session: ${key}`);
+        logHlsSession(session.trackId, session.quality, session.codec, 'Reaping expired session due to TTL');
         cleanupSession(session.trackId, session.quality);
       }
     }
