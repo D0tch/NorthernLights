@@ -9,11 +9,11 @@ import {
   getOrCreateHlsSession,
   touchSession,
   getSessionOutputDir,
-  findSessionByTrackId,
-  cleanupSession,
+  getActiveSessionVariants,
 } from '../services/hlsStream.service';
 
 const router = Router();
+const HLS_SEGMENT_LINE = /^(segment\d+\.ts)$/gm;
 
 // Mime type map
 const MIME_TYPES: Record<string, string> = {
@@ -38,6 +38,51 @@ const setCorsHeaders = (req: any, res: any) => {
 };
 
 // ─── HLS Streaming ─────────────────────────────────────────────────────
+
+function validateHlsPlaylist(playlist: string): { valid: boolean; error?: string } {
+  if (!playlist.startsWith('#EXTM3U')) {
+    return { valid: false, error: 'Playlist is missing #EXTM3U header' };
+  }
+
+  const lines = playlist.split(/\r?\n/);
+  const singleInstanceTags = [
+    '#EXT-X-TARGETDURATION:',
+    '#EXT-X-MEDIA-SEQUENCE:',
+    '#EXT-X-PLAYLIST-TYPE:',
+    '#EXT-X-VERSION:',
+    '#EXT-X-ENDLIST',
+    '#EXT-X-INDEPENDENT-SEGMENTS',
+  ];
+  for (const tag of singleInstanceTags) {
+    const count = lines.filter((line) => line === tag || line.startsWith(tag)).length;
+    if (count > 1) {
+      return { valid: false, error: `Playlist contains duplicate ${tag.replace(/:$/, '')} tags` };
+    }
+  }
+
+  const targetDurationLine = lines.find((line) => line.startsWith('#EXT-X-TARGETDURATION:'));
+  if (!targetDurationLine) {
+    return { valid: false, error: 'Playlist is missing EXT-X-TARGETDURATION' };
+  }
+
+  const targetDuration = parseInt(targetDurationLine.split(':')[1] || '', 10);
+  if (!Number.isFinite(targetDuration) || targetDuration <= 0) {
+    return { valid: false, error: 'Playlist has invalid EXT-X-TARGETDURATION' };
+  }
+
+  for (const line of lines) {
+    if (!line.startsWith('#EXTINF:')) continue;
+    const durationValue = parseFloat(line.slice('#EXTINF:'.length).split(',')[0] || '');
+    if (!Number.isFinite(durationValue)) {
+      return { valid: false, error: 'Playlist has invalid EXTINF duration' };
+    }
+    if (Math.round(durationValue) > targetDuration) {
+      return { valid: false, error: 'EXTINF exceeds EXT-X-TARGETDURATION' };
+    }
+  }
+
+  return { valid: true };
+}
 
 // Serve HLS playlist for a track
 router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
@@ -105,33 +150,30 @@ router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
       // The TTL cleanup will handle it
     });
 
-    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl');
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache'); // Playlist should always be fresh
 
     // Rewrite segment URLs to include auth token so external clients (Chromecast)
     // can fetch them. The browser's hls.js injects Bearer headers via xhrSetup,
-    // but the Chromecast Default Media Receiver can only pass tokens via URL params.
-    // When FFmpeg is still running (no ENDLIST), inject PLAYLIST-TYPE:EVENT so
-    // the player re-fetches the manifest and picks up new segments seamlessly.
+    // but some Cast paths still need query tokens for relative segment URLs.
     const token = req.query.token as string | undefined;
     const needsTokenRewrite = !!token;
     const playlist = fs.readFileSync(session.playlistPath, 'utf8');
-    const hasEndlist = playlist.includes('#EXT-X-ENDLIST');
     let output = playlist;
+    const segmentSuffix = `?quality=${encodeURIComponent(session.quality)}&codec=${encodeURIComponent(session.codec)}`
+      + (token ? `&token=${encodeURIComponent(token)}` : '');
 
-    if (needsTokenRewrite) {
+    if (needsTokenRewrite || output.match(HLS_SEGMENT_LINE)) {
       output = output.replace(
-        /^(segment\d+\.ts)$/gm,
-        `$1?token=${encodeURIComponent(token!)}`
+        HLS_SEGMENT_LINE,
+        `$1${segmentSuffix}`
       );
     }
 
-    if (!hasEndlist) {
-      // Inject PLAYLIST-TYPE:EVENT after TARGETDURATION per HLS spec order
-      output = output.replace(
-        /(#EXT-X-TARGETDURATION:\d+\n)/,
-        '$1#EXT-X-PLAYLIST-TYPE:EVENT\n'
-      );
+    const validation = validateHlsPlaylist(output);
+    if (!validation.valid) {
+      console.error('[HLS] Invalid playlist generated:', validation.error);
+      return res.status(500).send(`Invalid HLS playlist: ${validation.error}`);
     }
 
     console.log('[HLS DEBUG] Serving playlist:', JSON.stringify(output));
@@ -155,26 +197,19 @@ router.all('/stream/:trackId/:segment', async (req, res) => {
 
   const { trackId, segment } = req.params;
   const quality = (req.query.quality as string) || '128k';
+  const codec = (req.query.codec as string) || 'aac';
 
-  console.log(`[HLS DEBUG] Segment request: trackId=${trackId} segment=${segment} quality=${quality}`);
+  console.log(`[HLS DEBUG] Segment request: trackId=${trackId} segment=${segment} quality=${quality} codec=${codec}`);
 
   // Only serve .ts segment files
   if (!segment.endsWith('.ts')) {
     return res.status(400).send('Invalid segment request');
   }
 
-  // Try exact quality match first, then fallback to any session for this trackId.
-  // hls.js doesn't forward query params on segment requests, so quality may be missing.
-  let outputDir = getSessionOutputDir(trackId, quality);
-  if (!outputDir) {
-    const found = findSessionByTrackId(trackId);
-    if (found) {
-      outputDir = found.outputDir;
-    }
-  }
+  const outputDir = getSessionOutputDir(trackId, quality, codec);
 
   if (!outputDir) {
-    console.log(`[HLS DEBUG] No session for trackId=${trackId}, returning 404`);
+    console.log(`[HLS DEBUG] No exact session for trackId=${trackId}; active variants=${JSON.stringify(getActiveSessionVariants(trackId))}`);
     return res.status(404).send('No active HLS session for this track');
   }
 
@@ -187,9 +222,9 @@ router.all('/stream/:trackId/:segment', async (req, res) => {
   console.log(`[HLS DEBUG] Serving segment: ${segmentPath}`);
 
   // Touch the session to keep it alive
-  touchSession(trackId, quality);
+  touchSession(trackId, quality, codec);
 
-  res.setHeader('Content-Type', 'video/MP2T');
+  res.setHeader('Content-Type', 'video/mp2t');
   res.setHeader('Cache-Control', 'public, max-age=31536000, immutable'); // Chunks never change
   fs.createReadStream(segmentPath).pipe(res);
 });

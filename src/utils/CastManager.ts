@@ -12,6 +12,7 @@ const toast = {
 export type CastState = 'NO_DEVICES_AVAILABLE' | 'NOT_CONNECTED' | 'CONNECTING' | 'CONNECTED';
 
 const SESSION_STORAGE_KEY = 'cast_session_id';
+const CUSTOM_RECEIVER_HLS_CODEC = 'aac';
 
 // Maps audio format strings (from music-metadata and file extensions) to MIME types.
 // Keys must be lowercase. Covers: MPEG, FLAC, OGG, MP4/M4A, WAV/WAVE, WMA, AAC.
@@ -410,8 +411,16 @@ export class CastManager {
 
         // Select URL based on mode: custom receiver → HLS, default → raw file
         const useHls = !!(this.customAppId && hlsUrl);
-        const mediaUrl = useHls ? hlsUrl : (rawUrl || hlsUrl);
+        let mediaUrl = useHls ? hlsUrl : (rawUrl || hlsUrl);
         const authToken = token || this.extractTokenFromUrl(mediaUrl);
+
+        if (useHls) {
+            try {
+                const url = new URL(mediaUrl);
+                url.searchParams.set('codec', CUSTOM_RECEIVER_HLS_CODEC);
+                mediaUrl = url.toString();
+            } catch { /* ignore */ }
+        }
 
         // Warn if the Chromecast can't reach the server (localhost / 127.0.0.1)
         try {
@@ -438,7 +447,7 @@ export class CastManager {
 
         // Pass auth token to custom receiver via customData for Bearer header injection
         if (useHls && authToken) {
-            mediaInfo.customData = { token: authToken };
+            mediaInfo.customData = { token: authToken, codec: CUSTOM_RECEIVER_HLS_CODEC };
         }
 
         // Serialize loadMedia calls to prevent concurrent loads from clashing
@@ -514,7 +523,14 @@ export class CastManager {
         // Build QueueItems from playlist
         const useHls = !!this.customAppId;
         const queueItems: any[] = tracks.map((t, i) => {
-            const mediaUrl = useHls ? (t.url || t.rawUrl || '') : (t.rawUrl || t.url || '');
+            let mediaUrl = useHls ? (t.url || t.rawUrl || '') : (t.rawUrl || t.url || '');
+            if (useHls) {
+                try {
+                    const url = new URL(mediaUrl);
+                    url.searchParams.set('codec', CUSTOM_RECEIVER_HLS_CODEC);
+                    mediaUrl = url.toString();
+                } catch { /* ignore */ }
+            }
             const contentType = useHls ? 'application/vnd.apple.mpegurl' : inferContentType(mediaUrl, t.format);
             const mediaInfo = new chrome.cast.media.MediaInfo(mediaUrl, contentType);
             mediaInfo.metadata = new chrome.cast.media.MusicTrackMediaMetadata();
@@ -528,7 +544,7 @@ export class CastManager {
             if (useHls) {
                 const authToken = this.extractTokenFromUrl(mediaUrl);
                 if (authToken) {
-                    mediaInfo.customData = { token: authToken };
+                    mediaInfo.customData = { token: authToken, codec: CUSTOM_RECEIVER_HLS_CODEC };
                 }
             }
 
@@ -603,7 +619,14 @@ export class CastManager {
         if (!mediaSession) return;
 
         const useHls = !!this.customAppId;
-        const mediaUrl = useHls ? (track.url || track.rawUrl || '') : (track.rawUrl || track.url || '');
+        let mediaUrl = useHls ? (track.url || track.rawUrl || '') : (track.rawUrl || track.url || '');
+        if (useHls) {
+            try {
+                const url = new URL(mediaUrl);
+                url.searchParams.set('codec', CUSTOM_RECEIVER_HLS_CODEC);
+                mediaUrl = url.toString();
+            } catch { /* ignore */ }
+        }
         const contentType = useHls ? 'application/vnd.apple.mpegurl' : inferContentType(mediaUrl, track.format);
 
         const mediaInfo = new chrome.cast.media.MediaInfo(mediaUrl, contentType);
@@ -616,7 +639,7 @@ export class CastManager {
 
         if (useHls) {
             const authToken = this.extractTokenFromUrl(mediaUrl);
-            if (authToken) mediaInfo.customData = { token: authToken };
+            if (authToken) mediaInfo.customData = { token: authToken, codec: CUSTOM_RECEIVER_HLS_CODEC };
         }
 
         const item = new chrome.cast.media.QueueItem(mediaInfo);

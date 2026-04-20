@@ -52,35 +52,15 @@
     // ─── Main init wrapped in try-catch ────────────────────────────
     try {
       var LOG_TAG = 'NorthernLights';
+      var FORCED_CAST_CODEC = 'aac';
 
       var context = cast.framework.CastReceiverContext.getInstance();
       var playerManager = context.getPlayerManager();
 
-      // ─── Codec Detection via canDisplayType() ───────────────────────
-      var CODEC_PROBES = [
-        { codec: 'eac3',   mime: 'audio/mp4',  codecs: 'ec-3' },
-        { codec: 'ac3',    mime: 'audio/mp4',  codecs: 'ac-3' },
-        { codec: 'aac_he', mime: 'audio/mp4',  codecs: 'mp4a.40.5' },
-        { codec: 'aac',    mime: 'audio/mp4',  codecs: 'mp4a.40.2' },
-        { codec: 'mp3',    mime: 'audio/mpeg', codecs: '' },
-      ];
-
-      var bestCodec = 'aac'; // universal fallback
-      for (var i = 0; i < CODEC_PROBES.length; i++) {
-        var c = CODEC_PROBES[i];
-        try {
-          if (context.canDisplayType(c.mime, c.codecs)) {
-            bestCodec = c.codec;
-            break; // first match = highest priority
-          }
-        } catch (e) {
-          // canDisplayType may throw for unknown types — skip
-        }
-      }
-
       // ─── Custom Debug Panel ────────────────────────────────────────
       var panel = document.getElementById('debug-panel');
       var MAX_LINES = 80;
+      var currentAuthToken = '';
 
       function log(level, tag, msg) {
         var ts = ((performance.now() / 1000).toFixed(1));
@@ -95,9 +75,50 @@
         panel.scrollTop = panel.scrollHeight;
       }
 
+      function withAuth(url) {
+        if (!url) return url;
+        try {
+          var parsed = new URL(url, window.location.href);
+          if (currentAuthToken && !parsed.searchParams.has('token')) {
+            parsed.searchParams.set('token', currentAuthToken);
+          }
+          return parsed.toString();
+        } catch (e) {
+          return url;
+        }
+      }
+
+      function applyAuth(requestInfo, resourceType) {
+        if (!requestInfo) return;
+        requestInfo.url = withAuth(requestInfo.url);
+        requestInfo.headers = requestInfo.headers || {};
+        if (currentAuthToken && !requestInfo.headers.Authorization) {
+          requestInfo.headers.Authorization = 'Bearer ' + currentAuthToken;
+        }
+        log('ok', LOG_TAG, resourceType + ' request: ' + requestInfo.url);
+      }
+
+      var playbackConfig = new cast.framework.PlaybackConfig();
+      playbackConfig.manifestRequestHandler = function(requestInfo) {
+        applyAuth(requestInfo, 'Manifest');
+      };
+      playbackConfig.segmentRequestHandler = function(requestInfo) {
+        applyAuth(requestInfo, 'Segment');
+      };
+      playbackConfig.manifestHandler = function(manifest, responseInfo) {
+        var status = responseInfo && responseInfo.statusCode ? responseInfo.statusCode : 'unknown';
+        log('ok', LOG_TAG, 'Manifest response: ' + status);
+        return manifest;
+      };
+      playbackConfig.segmentHandler = function(segment, responseInfo) {
+        var status = responseInfo && responseInfo.statusCode ? responseInfo.statusCode : 'unknown';
+        log('ok', LOG_TAG, 'Segment response: ' + status);
+        return segment;
+      };
+
       // ─── Receiver Init ─────────────────────────────────────────────
       context.addEventListener(cast.framework.system.EventType.READY, function() {
-        log('ok', LOG_TAG, 'Receiver started — best codec: ' + bestCodec);
+        log('ok', LOG_TAG, 'Receiver started — forced codec: ' + FORCED_CAST_CODEC);
       });
 
       context.addEventListener(cast.framework.system.EventType.ERROR, function(e) {
@@ -110,16 +131,18 @@
         function(loadRequestData) {
           if (loadRequestData.media) {
             var m = loadRequestData.media;
+            currentAuthToken = (m.customData && m.customData.token) || '';
 
-            // Inject codec parameter into contentId URL
+            // The backend emits HLS in MPEG-TS; keep the cast path pinned to AAC-LC.
             if (m.contentId) {
               try {
                 var urlObj = new URL(m.contentId, window.location.href);
-                if (!urlObj.searchParams.has('codec')) {
-                  urlObj.searchParams.set('codec', bestCodec);
-                  m.contentId = urlObj.toString();
-                  log('ok', LOG_TAG, 'Injected codec: ' + bestCodec);
+                urlObj.searchParams.set('codec', FORCED_CAST_CODEC);
+                if (currentAuthToken && !urlObj.searchParams.has('token')) {
+                  urlObj.searchParams.set('token', currentAuthToken);
                 }
+                m.contentId = urlObj.toString();
+                log('ok', LOG_TAG, 'Prepared HLS URL for forced AAC playback');
               } catch (e) {
                 log('error', LOG_TAG, 'Failed to parse contentId URL');
               }
@@ -175,7 +198,7 @@
 
       // ─── Start receiver ────────────────────────────────────────────
       log('ok', LOG_TAG, 'Starting receiver...');
-      context.start();
+      context.start({ playbackConfig: playbackConfig });
       log('ok', LOG_TAG, 'context.start() returned OK');
 
     } catch (initError) {

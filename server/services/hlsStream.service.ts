@@ -35,6 +35,12 @@ function sessionKey(trackId: string, quality: string, codec: string): string {
   return `${trackId}::${quality}::${codec}`;
 }
 
+function getSessionKeyParts(key: string): { trackId: string; quality: string; codec: string } | null {
+  const parts = key.split('::');
+  if (parts.length !== 3) return null;
+  return { trackId: parts[0], quality: parts[1], codec: parts[2] };
+}
+
 // ─── Core API ───────────────────────────────────────────────────────────
 
 /**
@@ -191,13 +197,6 @@ export function touchSession(trackId: string, quality: string, codec?: string): 
     const session = activeSessions.get(sessionKey(trackId, quality, codec));
     if (session) { session.lastAccessedAt = Date.now(); return; }
   }
-  // Fallback: find any session matching trackId + quality
-  for (const [_key, session] of activeSessions) {
-    if (session.trackId === trackId && session.quality === quality) {
-      session.lastAccessedAt = Date.now();
-      return;
-    }
-  }
 }
 
 /**
@@ -209,27 +208,21 @@ export function getSessionOutputDir(trackId: string, quality: string, codec?: st
     const session = activeSessions.get(sessionKey(trackId, quality, codec));
     if (session) return session.outputDir;
   }
-  // Fallback: find any session matching trackId + quality
-  for (const [_key, session] of activeSessions) {
-    if (session.trackId === trackId && session.quality === quality) {
-      return session.outputDir;
-    }
-  }
   return null;
 }
 
 /**
- * Find any active session for a trackId, regardless of quality.
- * Used by the segment route since hls.js doesn't forward query params.
+ * Return all active session variants for a trackId.
  */
-export function findSessionByTrackId(trackId: string): { outputDir: string; quality: string } | null {
-  for (const [_key, session] of activeSessions) {
-    if (session.trackId === trackId) {
-      session.lastAccessedAt = Date.now();
-      return { outputDir: session.outputDir, quality: session.quality };
-    }
+export function getActiveSessionVariants(trackId: string): Array<{ quality: string; codec: string }> {
+  const variants: Array<{ quality: string; codec: string }> = [];
+  for (const [key, session] of activeSessions) {
+    if (session.trackId !== trackId) continue;
+    const parts = getSessionKeyParts(key);
+    if (!parts) continue;
+    variants.push({ quality: parts.quality, codec: parts.codec });
   }
-  return null;
+  return variants;
 }
 
 /**
@@ -404,6 +397,8 @@ function buildFfmpegArgs(
   args.push(
     '-hls_time', String(HLS_SEGMENT_DURATION),
     '-hls_list_size', '0',          // VOD mode — keep all segments in playlist
+    '-hls_playlist_type', 'event',
+    '-hls_segment_type', 'mpegts',
     '-hls_segment_filename', segmentPattern,
     '-hls_flags', 'independent_segments',
     '-f', 'hls',

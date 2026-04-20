@@ -2,6 +2,7 @@
 
 ## Current Status
 The core music player architecture has transitioned to a client-server model using Node.js and PostgreSQL. The UI has been polished with a premium "Matte Glass" aesthetic and responsive library views.
+Chromecast HLS hardening is in progress as of 2026-04-20, focused on deterministic AAC casting, CAF request instrumentation, and stricter HLS playlist/session behavior for custom receivers.
 
 ## Milestone Completion History
 - [x] **v0.0.2: Core Player**: Basic playback, volume, and progress bar with persistence.
@@ -72,6 +73,11 @@ The core music player architecture has transitioned to a client-server model usi
   - **LLM Timeout**: Increased from 45s to 120s for local LLMs.
   - **Custom Playlist 8D Fix**: Vector dimension mismatch (7D→8D) resolved.
   - **Documentation Overhaul**: Updated all docs/ files to reflect 21D engine, MBDB taxonomy, and penalty system.
+- [x] **V18.2: Chromecast HLS Hardening** (2026-04-20):
+  - **Receiver Network Instrumentation**: Added CAF `PlaybackConfig` manifest/segment request handlers and response logging in `public/receiver.html` so Cast failures can be traced to manifest fetch, segment fetch, or player decode.
+  - **Deterministic Cast Codec Path**: Removed speculative receiver-side codec selection for the custom receiver flow and pinned Cast HLS to AAC-LC to match the current MPEG-TS packaging path.
+  - **Exact HLS Session Routing**: Playlist segment URLs now carry `quality` and `codec` query params, and the segment route resolves only exact `(trackId, quality, codec)` sessions instead of falling back to any active track session.
+  - **HLS Compliance Guardrails**: Added playlist validation for required header and target duration rules, normalized segment MIME to `video/mp2t`, and moved playlist typing to FFmpeg with `-hls_playlist_type event` and `-hls_segment_type mpegts`.
 
 
 ---
