@@ -80,6 +80,7 @@ Chromecast HLS hardening is in progress as of 2026-04-20, focused on determinist
   - **HLS Compliance Guardrails**: Added playlist validation for required header and target duration rules, normalized segment MIME to `video/mp2t`, and moved playlist typing to FFmpeg with `-hls_playlist_type event` and `-hls_segment_type mpegts`.
   - **Persistent Diagnostics**: Added file-backed logs under `logs/` for HLS server events, per-session FFmpeg/playlist traces, and Cast receiver events forwarded back to the server for later inspection.
   - **Runtime Quality Honor**: Browser HLS and Chromecast now rewrite HLS URLs at playback time to use the latest `streamingQuality` setting, avoiding stale queue URLs after settings changes. `source` remains browser-first; true lossless casting is still pending a dedicated fMP4-capable Cast path.
+  - **Dynamic Cast Queue Mutations**: Added stable per-queue entry IDs and sender-side Cast queue sync so `Play Next`, appends, removals, reorders, repeat-mode changes, and in-queue track jumps operate against the active Cast media session instead of reloading playback from scratch.
 
 
 ---

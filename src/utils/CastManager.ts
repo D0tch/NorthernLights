@@ -1,6 +1,7 @@
 import { playbackManager } from './PlaybackManager';
 import { usePlayerStore } from '../store';
 import { applyStreamingQualityToHlsUrl } from './streaming';
+import { createQueueEntryId, ensureQueueEntryIds } from './queue';
 declare const chrome: any;
 declare const cast: any;
 
@@ -79,6 +80,7 @@ export class CastManager {
     public onVolumeChange?: (volume: number) => void;
     public onMuteChange?: (muted: boolean) => void;
     public onTrackChange?: (index: number) => void;
+    private readonly queueItemIdByEntryId = new Map<string, number>();
 
     private constructor() {
         // The Cast API is loaded asynchronously via the script tag in index.html
@@ -276,19 +278,34 @@ export class CastManager {
                 cast.framework.RemotePlayerEventType.MEDIA_INFO_CHANGED,
                 () => {
                     if (!this.isConnected()) return;
-                    // When using the queue API, the receiver auto-advances.
-                    // The currentItemId from the media session tells us which track is playing.
                     try {
                         const session = this.castContext.getCurrentSession();
                         const mediaSession = session?.getMediaSession();
                         if (!mediaSession) return;
-                        const mediaInfo = mediaSession.media;
-                        if (!mediaInfo) return;
-                        // The metadata.index field on the current media tells us the queue position
-                        const index = mediaInfo.metadata?.index;
-                        if (typeof index === 'number' && index >= 0) {
-                            this.onTrackChange?.(index);
+                        this.syncQueueItemMapFromSession(mediaSession);
+                        const currentQueueEntryId = this.getCurrentQueueEntryId(mediaSession);
+                        if (currentQueueEntryId) {
+                            const playlist = usePlayerStore.getState().playlist;
+                            const index = playlist.findIndex((track) => track.queueEntryId === currentQueueEntryId);
+                            if (index >= 0) {
+                                this.onTrackChange?.(index);
+                                return;
+                            }
                         }
+
+                        const fallbackIndex = mediaSession.media?.metadata?.index;
+                        if (typeof fallbackIndex === 'number' && fallbackIndex >= 0) {
+                            this.onTrackChange?.(fallbackIndex);
+                        }
+                    } catch { /* ignore */ }
+                }
+            );
+
+            this.playerController.addEventListener(
+                cast.framework.RemotePlayerEventType.MEDIA_STATUS_CHANGED,
+                () => {
+                    try {
+                        this.syncQueueItemMapFromSession(this.castContext.getCurrentSession()?.getMediaSession());
                     } catch { /* ignore */ }
                 }
             );
@@ -299,6 +316,166 @@ export class CastManager {
         } catch (e) {
             console.error("Failed to initialize Google Cast API", e);
             toast.error('Failed to initialize Google Cast. Please refresh and try again.');
+        }
+    }
+
+    private getRepeatMode(repeat: 'none' | 'one' | 'all'): any {
+        if (repeat === 'one') return chrome.cast.media.RepeatMode.SINGLE;
+        if (repeat === 'all') return chrome.cast.media.RepeatMode.ALL;
+        return chrome.cast.media.RepeatMode.OFF;
+    }
+
+    private getMediaSession(): any | null {
+        return this.castContext?.getCurrentSession?.()?.getMediaSession?.() || null;
+    }
+
+    private ensureStoreQueueEntryIds() {
+        const state = usePlayerStore.getState();
+        const normalized = ensureQueueEntryIds(state.playlist);
+        if (normalized.changed) {
+            usePlayerStore.setState({ playlist: normalized.tracks });
+        }
+        return normalized.tracks;
+    }
+
+    private buildMediaInfo(track: {
+        queueEntryId?: string;
+        url?: string;
+        rawUrl?: string;
+        title?: string;
+        artist?: string;
+        artUrl?: string;
+        album?: string;
+        format?: string;
+        duration?: number;
+    }) {
+        const useHls = !!this.customAppId;
+        const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
+            track.url || '',
+            usePlayerStore.getState().streamingQuality
+        );
+        let mediaUrl = useHls ? (effectiveHlsUrl || track.rawUrl || '') : (track.rawUrl || effectiveHlsUrl || '');
+        if (useHls) {
+            try {
+                const url = new URL(mediaUrl);
+                url.searchParams.set('codec', CUSTOM_RECEIVER_HLS_CODEC);
+                mediaUrl = url.toString();
+            } catch { /* ignore */ }
+        }
+        const contentType = useHls ? 'application/vnd.apple.mpegurl' : inferContentType(mediaUrl, track.format);
+        const mediaInfo = new chrome.cast.media.MediaInfo(mediaUrl, contentType);
+        mediaInfo.metadata = new chrome.cast.media.MusicTrackMediaMetadata();
+        mediaInfo.metadata.title = track.title || 'Unknown Title';
+        mediaInfo.metadata.artist = track.artist || 'Unknown Artist';
+        if (track.album) mediaInfo.metadata.albumName = track.album;
+        if (track.artUrl) mediaInfo.metadata.images = [new chrome.cast.Image(track.artUrl)];
+        if (track.duration) mediaInfo.metadata.duration = track.duration;
+
+        const customData: Record<string, any> = {};
+        if (track.queueEntryId) {
+            customData.queueEntryId = track.queueEntryId;
+        }
+        if (useHls) {
+            const authToken = this.extractTokenFromUrl(mediaUrl);
+            if (authToken) customData.token = authToken;
+            customData.codec = CUSTOM_RECEIVER_HLS_CODEC;
+        }
+        if (Object.keys(customData).length > 0) {
+            mediaInfo.customData = customData;
+        }
+        return mediaInfo;
+    }
+
+    private buildQueueItem(track: {
+        queueEntryId?: string;
+        url?: string;
+        rawUrl?: string;
+        title?: string;
+        artist?: string;
+        artUrl?: string;
+        album?: string;
+        format?: string;
+        duration?: number;
+    }) {
+        const item = new chrome.cast.media.QueueItem(this.buildMediaInfo(track));
+        item.autoplay = true;
+        item.preloadTime = 30;
+        return item;
+    }
+
+    private syncQueueItemMapFromSession(mediaSession: any | null = this.getMediaSession()) {
+        this.queueItemIdByEntryId.clear();
+        const items = mediaSession?.items;
+        if (!Array.isArray(items)) return;
+        for (const item of items) {
+            const queueEntryId = item?.media?.customData?.queueEntryId;
+            if (queueEntryId && typeof item.itemId === 'number') {
+                this.queueItemIdByEntryId.set(queueEntryId, item.itemId);
+            }
+        }
+    }
+
+    private getSessionQueueEntryIds(mediaSession: any | null = this.getMediaSession()): string[] {
+        const items = mediaSession?.items;
+        if (!Array.isArray(items)) return [];
+        return items
+            .map((item: any) => item?.media?.customData?.queueEntryId)
+            .filter((entryId: string | undefined): entryId is string => !!entryId);
+    }
+
+    private getCurrentQueueEntryId(mediaSession: any | null = this.getMediaSession()): string | null {
+        if (!mediaSession) return null;
+        const currentItemId = mediaSession.currentItemId;
+        if (typeof currentItemId === 'number' && Array.isArray(mediaSession.items)) {
+            const currentItem = mediaSession.items.find((item: any) => item?.itemId === currentItemId);
+            const currentEntryId = currentItem?.media?.customData?.queueEntryId;
+            if (currentEntryId) return currentEntryId;
+        }
+        return mediaSession.media?.customData?.queueEntryId || null;
+    }
+
+    private getQueueItemId(queueEntryId: string, mediaSession: any | null = this.getMediaSession()): number | null {
+        this.syncQueueItemMapFromSession(mediaSession);
+        const itemId = this.queueItemIdByEntryId.get(queueEntryId);
+        return typeof itemId === 'number' ? itemId : null;
+    }
+
+    private isSessionQueueMatchingTracks(tracks: { queueEntryId?: string }[], mediaSession: any | null = this.getMediaSession()): boolean {
+        if (!mediaSession) return false;
+        const sessionEntryIds = this.getSessionQueueEntryIds(mediaSession);
+        if (sessionEntryIds.length !== tracks.length) return false;
+        return tracks.every((track, index) => track.queueEntryId && track.queueEntryId === sessionEntryIds[index]);
+    }
+
+    public async ensureQueuePlayback(
+        tracks: { queueEntryId?: string; url?: string; rawUrl?: string; title?: string; artist?: string; artUrl?: string; album?: string; format?: string; duration?: number }[],
+        startIndex: number = 0,
+        repeat: 'none' | 'one' | 'all' = 'none'
+    ) {
+        if (!this.isConnected()) return;
+        const mediaSession = this.getMediaSession();
+        if (!mediaSession || !this.isSessionQueueMatchingTracks(tracks, mediaSession)) {
+            await this.castQueue(tracks, startIndex, repeat);
+            return;
+        }
+
+        const desiredRepeatMode = this.getRepeatMode(repeat);
+        if (mediaSession.repeatMode !== desiredRepeatMode) {
+            try {
+                await mediaSession.queueSetRepeatMode(desiredRepeatMode);
+            } catch (e) {
+                console.warn('[Cast] Failed to sync repeat mode:', e);
+            }
+        }
+
+        const items = mediaSession.items;
+        if (!items || !items[startIndex]) return;
+        const targetItemId = items[startIndex].itemId;
+        if (targetItemId === mediaSession.currentItemId) return;
+        try {
+            await mediaSession.queueJumpToItem(targetItemId);
+        } catch (e) {
+            console.error('[Cast] Failed to jump to queue item:', e);
         }
     }
 
@@ -327,7 +504,8 @@ export class CastManager {
     private async handleCastConnected() {
         // Read current playback state from the store
         const state = usePlayerStore.getState();
-        const { playlist, currentIndex } = state;
+        const { currentIndex, repeat } = state;
+        const playlist = this.ensureStoreQueueEntryIds();
 
         if (!playlist.length || currentIndex === null) {
             console.log('[Cast] Connected but no playlist is active — nothing to auto-cast.');
@@ -349,16 +527,20 @@ export class CastManager {
             // on the Cast device yet. This would leave local audio playing.
             playbackManager.getLocalAudioElement().pause();
 
-            // Cast the current track to the device
-            await this.castMedia(
-                track.url || '',
-                track.rawUrl || '',
-                track.title || 'Unknown Title',
-                track.artist || ((track.artists as string[])?.join(', ')) || 'Unknown Artist',
-                track.artUrl,
-                track.album,
-                track.format,
-                this.extractTokenFromUrl(track.url || track.rawUrl || '')
+            await this.castQueue(
+                playlist.map((item) => ({
+                    queueEntryId: item.queueEntryId,
+                    url: item.url || '',
+                    rawUrl: item.rawUrl || '',
+                    title: item.title || 'Unknown Title',
+                    artist: item.artist || ((item.artists as string[])?.join(', ')) || 'Unknown Artist',
+                    artUrl: item.artUrl,
+                    album: item.album,
+                    format: item.format,
+                    duration: item.duration,
+                })),
+                currentIndex,
+                repeat
             );
 
             // Seek to where we left off locally (with a small delay to let the media load)
@@ -469,6 +651,7 @@ export class CastManager {
 
         try {
             await castSession.loadMedia(request);
+            this.queueItemIdByEntryId.clear();
         } catch (e: any) {
             const errorDetail = e?.code || e?.message || String(e);
             const errorDesc = e?.description || '';
@@ -495,78 +678,16 @@ export class CastManager {
      * @param startIndex Which track to start playing (0-based)
      * @param repeat 'none' | 'one' | 'all' — repeat mode
      */
-    public async castQueue(tracks: { url: string; rawUrl?: string; title: string; artist: string; artUrl?: string; album?: string; format?: string; duration?: number }[], startIndex: number = 0, repeat: 'none' | 'one' | 'all' = 'none') {
+    public async castQueue(tracks: { queueEntryId?: string; url?: string; rawUrl?: string; title?: string; artist?: string; artUrl?: string; album?: string; format?: string; duration?: number }[], startIndex: number = 0, repeat: 'none' | 'one' | 'all' = 'none') {
         if (!this.isConnected()) return;
 
         const castSession = this.castContext.getCurrentSession();
         if (!castSession) return;
-
-        // repeat='one': use single loadMedia with loop instead of queue
-        if (repeat === 'one' && tracks[startIndex]) {
-            const t = tracks[startIndex];
-            await this.castMedia(
-                t.url || '',
-                t.rawUrl || '',
-                t.title,
-                t.artist,
-                t.artUrl,
-                t.album,
-                t.format,
-                this.extractTokenFromUrl(t.url || t.rawUrl || '')
-            );
-            // Set the media to loop via the queue repeat mode API
-            const media = castSession.getMediaSession();
-            if (media) {
-                try {
-                    await media.queueSetRepeatMode(chrome.cast.media.RepeatMode.SINGLE);
-                } catch (e) {
-                    console.warn('[Cast] Failed to set repeat mode:', e);
-                }
-            }
-            return;
-        }
-
-        // Build QueueItems from playlist
-        const useHls = !!this.customAppId;
-        const queueItems: any[] = tracks.map((t, i) => {
-            const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
-                t.url || '',
-                usePlayerStore.getState().streamingQuality
-            );
-            let mediaUrl = useHls ? (effectiveHlsUrl || t.rawUrl || '') : (t.rawUrl || effectiveHlsUrl || '');
-            if (useHls) {
-                try {
-                    const url = new URL(mediaUrl);
-                    url.searchParams.set('codec', CUSTOM_RECEIVER_HLS_CODEC);
-                    mediaUrl = url.toString();
-                } catch { /* ignore */ }
-            }
-            const contentType = useHls ? 'application/vnd.apple.mpegurl' : inferContentType(mediaUrl, t.format);
-            const mediaInfo = new chrome.cast.media.MediaInfo(mediaUrl, contentType);
-            mediaInfo.metadata = new chrome.cast.media.MusicTrackMediaMetadata();
-            mediaInfo.metadata.title = t.title || 'Unknown Title';
-            mediaInfo.metadata.artist = t.artist || 'Unknown Artist';
-            if (t.album) mediaInfo.metadata.albumName = t.album;
-            if (t.artUrl) mediaInfo.metadata.images = [new chrome.cast.Image(t.artUrl)];
-            if (t.duration) mediaInfo.metadata.duration = t.duration;
-
-            // Pass auth token to custom receiver via customData
-            if (useHls) {
-                const authToken = this.extractTokenFromUrl(mediaUrl);
-                if (authToken) {
-                    mediaInfo.customData = { token: authToken, codec: CUSTOM_RECEIVER_HLS_CODEC };
-                }
-            }
-
-            const item = new chrome.cast.media.QueueItem(mediaInfo);
-            item.autoplay = true;
-            item.preloadTime = 30; // Start preloading 30s before track ends
-            return item;
-        });
+        const queueItems: any[] = tracks.map((track) => this.buildQueueItem(track));
 
         const request = new chrome.cast.media.QueueLoadRequest(queueItems);
         request.startIndex = startIndex;
-        request.repeatMode = repeat === 'all' ? chrome.cast.media.RepeatMode.ALL : chrome.cast.media.RepeatMode.OFF;
+        request.repeatMode = this.getRepeatMode(repeat);
         request.autoplay = true;
 
         // Serialize loadMedia calls to prevent concurrent loads from clashing
@@ -594,6 +715,7 @@ export class CastManager {
         if (sessionId) {
             localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
         }
+        this.syncQueueItemMapFromSession(castSession.getMediaSession());
     }
 
     /**
@@ -621,48 +743,87 @@ export class CastManager {
     /**
      * Appends a new track to the end of the active Cast queue without interrupting playback.
      */
-    public async appendToQueue(track: { url: string; rawUrl?: string; title: string; artist: string; artUrl?: string; album?: string; format?: string; duration?: number }) {
+    public async appendToQueue(track: { queueEntryId?: string; url?: string; rawUrl?: string; title?: string; artist?: string; artUrl?: string; album?: string; format?: string; duration?: number }) {
         if (!this.isConnected()) return;
         const session = this.castContext.getCurrentSession();
         if (!session) return;
         const mediaSession = session.getMediaSession();
         if (!mediaSession) return;
-
-        const useHls = !!this.customAppId;
-        const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
-            track.url || '',
-            usePlayerStore.getState().streamingQuality
-        );
-        let mediaUrl = useHls ? (effectiveHlsUrl || track.rawUrl || '') : (track.rawUrl || effectiveHlsUrl || '');
-        if (useHls) {
-            try {
-                const url = new URL(mediaUrl);
-                url.searchParams.set('codec', CUSTOM_RECEIVER_HLS_CODEC);
-                mediaUrl = url.toString();
-            } catch { /* ignore */ }
-        }
-        const contentType = useHls ? 'application/vnd.apple.mpegurl' : inferContentType(mediaUrl, track.format);
-
-        const mediaInfo = new chrome.cast.media.MediaInfo(mediaUrl, contentType);
-        mediaInfo.metadata = new chrome.cast.media.MusicTrackMediaMetadata();
-        mediaInfo.metadata.title = track.title || 'Unknown Title';
-        mediaInfo.metadata.artist = track.artist || 'Unknown Artist';
-        if (track.album) mediaInfo.metadata.albumName = track.album;
-        if (track.artUrl) mediaInfo.metadata.images = [new chrome.cast.Image(track.artUrl)];
-        if (track.duration) mediaInfo.metadata.duration = track.duration;
-
-        if (useHls) {
-            const authToken = this.extractTokenFromUrl(mediaUrl);
-            if (authToken) mediaInfo.customData = { token: authToken, codec: CUSTOM_RECEIVER_HLS_CODEC };
-        }
-
-        const item = new chrome.cast.media.QueueItem(mediaInfo);
-        item.preloadTime = 30;
+        const item = this.buildQueueItem({
+            ...track,
+            queueEntryId: track.queueEntryId || createQueueEntryId(),
+        });
 
         try {
-            await mediaSession.queueInsertItems([item]);
+            await mediaSession.queueAppendItem(item);
+            this.syncQueueItemMapFromSession(mediaSession);
         } catch (e) {
             console.error('[Cast] Failed to append track to queue:', e);
+        }
+    }
+
+    public async insertNextInQueue(track: { queueEntryId?: string; url?: string; rawUrl?: string; title?: string; artist?: string; artUrl?: string; album?: string; format?: string; duration?: number }) {
+        if (!this.isConnected()) return;
+        const mediaSession = this.getMediaSession();
+        if (!mediaSession) return;
+
+        const item = this.buildQueueItem({
+            ...track,
+            queueEntryId: track.queueEntryId || createQueueEntryId(),
+        });
+        const request = new chrome.cast.media.QueueInsertItemsRequest([item]);
+        const items = mediaSession.items;
+        const currentIndex = mediaSession.currentItemIndex;
+        if (Array.isArray(items) && typeof currentIndex === 'number' && currentIndex >= 0 && currentIndex < items.length - 1) {
+            request.insertBefore = items[currentIndex + 1].itemId;
+        }
+
+        try {
+            await mediaSession.queueInsertItems(request);
+            this.syncQueueItemMapFromSession(mediaSession);
+        } catch (e) {
+            console.error('[Cast] Failed to insert track after current item:', e);
+        }
+    }
+
+    public async removeFromQueue(queueEntryId: string) {
+        if (!this.isConnected()) return;
+        const mediaSession = this.getMediaSession();
+        if (!mediaSession) return;
+
+        const itemId = this.getQueueItemId(queueEntryId, mediaSession);
+        if (itemId === null) return;
+        try {
+            await mediaSession.queueRemoveItem(itemId);
+            this.syncQueueItemMapFromSession(mediaSession);
+        } catch (e) {
+            console.error('[Cast] Failed to remove track from queue:', e);
+        }
+    }
+
+    public async moveQueueItem(queueEntryId: string, newIndex: number) {
+        if (!this.isConnected()) return;
+        const mediaSession = this.getMediaSession();
+        if (!mediaSession) return;
+
+        const itemId = this.getQueueItemId(queueEntryId, mediaSession);
+        if (itemId === null) return;
+        try {
+            await mediaSession.queueMoveItemToNewIndex(itemId, newIndex);
+            this.syncQueueItemMapFromSession(mediaSession);
+        } catch (e) {
+            console.error('[Cast] Failed to reorder Cast queue:', e);
+        }
+    }
+
+    public async setRepeatMode(repeat: 'none' | 'one' | 'all') {
+        if (!this.isConnected()) return;
+        const mediaSession = this.getMediaSession();
+        if (!mediaSession) return;
+        try {
+            await mediaSession.queueSetRepeatMode(this.getRepeatMode(repeat));
+        } catch (e) {
+            console.error('[Cast] Failed to update repeat mode:', e);
         }
     }
 

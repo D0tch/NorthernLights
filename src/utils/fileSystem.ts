@@ -23,6 +23,7 @@ interface EmbeddedPicture {
 export interface TrackInfo {
   id: string;
   path: string;
+  queueEntryId?: string;
   title?: string;
   artist?: string;
   albumArtist?: string;

@@ -4,6 +4,7 @@ import type { TrackInfo } from '../utils/fileSystem';
 import { extractMetadata } from '../utils/fileSystem';
 import { playbackManager, PlaybackState } from '../utils/PlaybackManager';
 import { castManager } from '../utils/CastManager';
+import { cloneTrackForQueue, ensureQueueEntryIds } from '../utils/queue';
 
 import { clearExternalCache } from '../utils/externalImagery';
 import type { ToastType } from '../components/Toast';
@@ -1000,8 +1001,9 @@ export const usePlayerStore = create<PlayerState>()(
         },
 
         setPlaylist: async (playlist: TrackInfo[], startIndex: number = 0) => {
-          set({ playlist, currentIndex: startIndex });
-          if (playlist.length > 0 && startIndex < playlist.length) {
+          const queuePlaylist = playlist.map((track) => cloneTrackForQueue(track));
+          set({ playlist: queuePlaylist, currentIndex: startIndex });
+          if (queuePlaylist.length > 0 && startIndex < queuePlaylist.length) {
             await get().playAtIndex(startIndex);
           } else {
             get().stop();
@@ -1009,13 +1011,21 @@ export const usePlayerStore = create<PlayerState>()(
         },
 
         addTrackToPlaylist: (track: TrackInfo) => set((state: PlayerState) => {
-          return { playlist: [...state.playlist, track] };
+          const queueTrack = cloneTrackForQueue(track);
+          if (castManager.isConnected()) {
+            void castManager.appendToQueue(queueTrack);
+          }
+          return { playlist: [...state.playlist, queueTrack] };
         }),
 
         playNext: (track: TrackInfo) => set((state: PlayerState) => {
           const newPlaylist = [...state.playlist];
           const insertAt = state.currentIndex !== null ? state.currentIndex + 1 : newPlaylist.length;
-          newPlaylist.splice(insertAt, 0, track);
+          const queueTrack = cloneTrackForQueue(track);
+          newPlaylist.splice(insertAt, 0, queueTrack);
+          if (castManager.isConnected()) {
+            void castManager.insertNextInQueue(queueTrack);
+          }
           return { playlist: newPlaylist };
         }),
 
@@ -1026,14 +1036,21 @@ export const usePlayerStore = create<PlayerState>()(
 
         removeFromPlaylist: (index: number) => set((state: PlayerState) => {
           const newPlaylist = [...state.playlist];
-          newPlaylist.splice(index, 1);
+          const [removed] = newPlaylist.splice(index, 1);
 
           let newIndex = state.currentIndex;
           if (state.currentIndex === index) {
-            playbackManager.stop();
-            newIndex = null;
+            if (castManager.isConnected()) {
+              newIndex = state.currentIndex;
+            } else {
+              playbackManager.stop();
+              newIndex = null;
+            }
           } else if (state.currentIndex !== null && index < state.currentIndex) {
             newIndex = state.currentIndex - 1;
+          }
+          if (castManager.isConnected() && removed?.queueEntryId) {
+            void castManager.removeFromQueue(removed.queueEntryId);
           }
           return { playlist: newPlaylist, currentIndex: newIndex };
         }),
@@ -1053,13 +1070,21 @@ export const usePlayerStore = create<PlayerState>()(
               if (fromIndex > state.currentIndex && toIndex <= state.currentIndex) newIndex = state.currentIndex + 1;
             }
           }
+          if (castManager.isConnected() && moved?.queueEntryId) {
+            void castManager.moveQueueItem(moved.queueEntryId, toIndex);
+          }
 
           return { playlist: newPlaylist, currentIndex: newIndex };
         }),
 
         // Playback Actions
         playAtIndex: async (index: number) => {
-          const { playlist, volume, repeat } = get();
+          const { volume, repeat } = get();
+          const normalized = ensureQueueEntryIds(get().playlist);
+          const playlist = normalized.tracks;
+          if (normalized.changed) {
+            set({ playlist });
+          }
           const track = playlist[index];
           if (!track) return;
 
@@ -1074,15 +1099,20 @@ export const usePlayerStore = create<PlayerState>()(
             playbackManager.setVolume(volume);
 
             if (castManager.isConnected()) {
-              // Pass both HLS url and rawUrl — CastManager picks based on receiver mode
-              await castManager.castMedia(
-                track.url || '',
-                track.rawUrl || '',
-                track.title || 'Unknown Title',
-                track.artist || ((track.artists as string[])?.join(', ')) || 'Unknown Artist',
-                track.artUrl,
-                track.album,
-                track.format
+              await castManager.ensureQueuePlayback(
+                playlist.map((item) => ({
+                  queueEntryId: item.queueEntryId,
+                  url: item.url || '',
+                  rawUrl: item.rawUrl || '',
+                  title: item.title || 'Unknown Title',
+                  artist: item.artist || ((item.artists as string[])?.join(', ')) || 'Unknown Artist',
+                  artUrl: item.artUrl,
+                  album: item.album,
+                  format: item.format,
+                  duration: item.duration,
+                })),
+                index,
+                repeat
               );
             } else if (track.url) {
               // Not casting: play locally — pass both HLS and raw URLs
@@ -1186,6 +1216,9 @@ export const usePlayerStore = create<PlayerState>()(
 
         cycleRepeat: () => set((state: PlayerState) => {
           const nextMode = state.repeat === 'none' ? 'all' : state.repeat === 'all' ? 'one' : 'none';
+          if (castManager.isConnected()) {
+            void castManager.setRepeatMode(nextMode);
+          }
           return { repeat: nextMode };
         }),
 
