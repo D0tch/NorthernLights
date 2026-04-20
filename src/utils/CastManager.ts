@@ -685,10 +685,18 @@ export class CastManager {
         if (!castSession) return;
         const queueItems: any[] = tracks.map((track) => this.buildQueueItem(track));
 
-        const request = new chrome.cast.media.QueueLoadRequest(queueItems);
-        request.startIndex = startIndex;
-        request.repeatMode = this.getRepeatMode(repeat);
+        const startItem = queueItems[startIndex] || queueItems[0];
+        if (!startItem?.media) {
+            console.error('[Cast] Cannot load queue: missing start item media');
+            return;
+        }
+
+        const request = new chrome.cast.media.LoadRequest(startItem.media);
         request.autoplay = true;
+        request.queueData = new chrome.cast.media.QueueData();
+        request.queueData.items = queueItems;
+        request.queueData.startIndex = startIndex;
+        request.queueData.repeatMode = this.getRepeatMode(repeat);
 
         // Serialize loadMedia calls to prevent concurrent loads from clashing
         const previous = this.currentLoadPromise;
