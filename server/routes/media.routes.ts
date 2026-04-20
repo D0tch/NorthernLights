@@ -7,6 +7,7 @@ import { isPathAllowed, pathToBuffer } from '../state';
 import { initDB } from '../database';
 import {
   getOrCreateHlsSession,
+  getSessionInfo,
   touchSession,
   getSessionOutputDir,
   getActiveSessionVariants,
@@ -15,6 +16,7 @@ import { writeCastReceiverLog, writeHlsServerLog, writeHlsSessionLog } from '../
 
 const router = Router();
 const HLS_SEGMENT_LINE = /^(segment\d+\.ts)$/gm;
+const HLS_MEDIA_PLAYLIST_NAME = 'media.m3u8';
 
 // Mime type map
 const MIME_TYPES: Record<string, string> = {
@@ -85,6 +87,60 @@ function validateHlsPlaylist(playlist: string): { valid: boolean; error?: string
   return { valid: true };
 }
 
+function inferCodecString(codec: string): string {
+  switch (codec) {
+    case 'aac':
+    case 'aac_he':
+      return 'mp4a.40.2';
+    case 'mp3':
+      return 'mp4a.69';
+    case 'ac3':
+      return 'ac-3';
+    case 'eac3':
+      return 'ec-3';
+    default:
+      return 'mp4a.40.2';
+  }
+}
+
+function inferBandwidth(quality: string): number {
+  const parsed = parseInt(quality, 10);
+  if (Number.isFinite(parsed) && parsed > 0) {
+    return parsed * 1000;
+  }
+  return 192000;
+}
+
+function buildMasterPlaylist(trackId: string, quality: string, codec: string, token?: string): string {
+  const params = new URLSearchParams({
+    quality,
+    codec,
+  });
+  if (token) params.set('token', token);
+
+  const codecString = inferCodecString(codec);
+  const averageBandwidth = inferBandwidth(quality);
+  const bandwidth = Math.round(averageBandwidth * 1.15);
+
+  return [
+    '#EXTM3U',
+    '#EXT-X-VERSION:6',
+    `#EXT-X-STREAM-INF:BANDWIDTH=${bandwidth},AVERAGE-BANDWIDTH=${averageBandwidth},CODECS="${codecString}"`,
+    `${HLS_MEDIA_PLAYLIST_NAME}?${params.toString()}`,
+    '',
+  ].join('\n');
+}
+
+function rewriteMediaPlaylistSegments(playlist: string, quality: string, codec: string, token?: string): string {
+  const segmentSuffix = `?quality=${encodeURIComponent(quality)}&codec=${encodeURIComponent(codec)}`
+    + (token ? `&token=${encodeURIComponent(token)}` : '');
+
+  return playlist.replace(
+    HLS_SEGMENT_LINE,
+    `$1${segmentSuffix}`
+  );
+}
+
 router.post('/cast/log', (req, res) => {
   const source = typeof req.body?.source === 'string' ? req.body.source : 'receiver';
   const level = typeof req.body?.level === 'string' ? req.body.level : 'info';
@@ -106,15 +162,42 @@ router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
   let targetCodec = (req.query.codec as string) || 'aac'; // safe universal default
 
   try {
+    const token = req.query.token as string | undefined;
+    const output = buildMasterPlaylist(trackId, quality, targetCodec, token);
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+    res.setHeader('Cache-Control', 'no-cache');
+    writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Served master playlist`);
+    writeHlsSessionLog(trackId, quality, targetCodec, `Served master playlist: ${output.split(/\r?\n/).join('\\n')}`);
+    res.send(output);
+  } catch (err: any) {
+    console.error('[HLS] Playlist error:', err?.message || err);
+    writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Error: ${err?.message || String(err)}`);
+    if (!res.headersSent) {
+      if (err?.code === 'ENOENT' || err?.message?.includes('ENOENT')) {
+        res.status(501).send('FFmpeg not installed — HLS streaming unavailable');
+      } else {
+        res.status(500).send('HLS streaming error');
+      }
+    }
+  }
+});
+
+router.all('/stream/:trackId/media.m3u8', async (req, res) => {
+  setCorsHeaders(req, res);
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+
+  const { trackId } = req.params;
+  const quality = (req.query.quality as string) || '128k';
+  let targetCodec = (req.query.codec as string) || 'aac';
+
+  try {
     let fileBuf: Buffer;
     let bitrate: number | null = null;
     let sourceFormat: string | null = null;
-    
-    // Check if the trackId is a valid UUID
+
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-    
+
     if (uuidRegex.test(trackId)) {
-      // Look up the track from the database
       const db = await initDB();
       const result = await db.query('SELECT path, bitrate, format FROM tracks WHERE id = $1', [trackId]);
       if (result.rows.length === 0) {
@@ -124,13 +207,9 @@ router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
       bitrate = result.rows[0].bitrate;
       sourceFormat = result.rows[0].format;
     } else {
-      // trackId is base64(dbPath), where dbPath is itself base64(filesystemPath).
-      // decodeURIComponent undoes URL encoding, then we decode one layer of base64
-      // to recover the DB path string, which pathToBuffer decodes to the raw file path.
       const dbPath = Buffer.from(decodeURIComponent(trackId), 'base64').toString();
       fileBuf = pathToBuffer(dbPath);
 
-      // Quick DB lookup to grab metadata for legacy paths
       try {
         const db = await initDB();
         const result = await db.query('SELECT bitrate, format FROM tracks WHERE path = $1', [dbPath]);
@@ -138,10 +217,9 @@ router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
           bitrate = result.rows[0].bitrate;
           sourceFormat = result.rows[0].format;
         }
-      } catch { /* non-critical — bitrate/format stay null, will transcode */ }
+      } catch { /* non-critical */ }
     }
 
-    // Bitrate gate: AC-3/E-AC-3 sound poor below 256k — override to AAC
     if (targetCodec === 'ac3' || targetCodec === 'eac3') {
       if (quality !== 'source' && parseInt(quality) < 256) {
         console.log(`[HLS] Overriding ${targetCodec} → AAC (${quality} too low for AC-3)`);
@@ -149,55 +227,34 @@ router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
       }
     }
 
-    // Get or create the HLS session (waits for first segment to be ready)
-    const session = await getOrCreateHlsSession(trackId, fileBuf, quality, bitrate, sourceFormat, targetCodec);
+    await getOrCreateHlsSession(trackId, fileBuf, quality, bitrate, sourceFormat, targetCodec);
+    const sessionInfo = getSessionInfo(trackId, quality, targetCodec);
 
-    if (!fs.existsSync(session.playlistPath)) {
-      writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Session created but playlist path missing: ${session.playlistPath}`);
-      return res.status(500).send('HLS playlist generation failed');
+    if (!sessionInfo || !fs.existsSync(sessionInfo.playlistPath)) {
+      writeHlsServerLog(`[media-playlist ${trackId} ${quality} ${targetCodec}] Session ready but playlist path missing`);
+      return res.status(500).send('HLS media playlist generation failed');
     }
 
-    // Clean up session when client disconnects
-    req.on('close', () => {
-      // Don't immediately clean up — other clients may be using the same session
-      // The TTL cleanup will handle it
-    });
-
-    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
-    res.setHeader('Cache-Control', 'no-cache'); // Playlist should always be fresh
-
-    // Rewrite segment URLs to include auth token so external clients (Chromecast)
-    // can fetch them. The browser's hls.js injects Bearer headers via xhrSetup,
-    // but some Cast paths still need query tokens for relative segment URLs.
     const token = req.query.token as string | undefined;
-    const needsTokenRewrite = !!token;
-    const playlist = fs.readFileSync(session.playlistPath, 'utf8');
-    let output = playlist;
-    const segmentSuffix = `?quality=${encodeURIComponent(session.quality)}&codec=${encodeURIComponent(session.codec)}`
-      + (token ? `&token=${encodeURIComponent(token)}` : '');
-
-    if (needsTokenRewrite || output.match(HLS_SEGMENT_LINE)) {
-      output = output.replace(
-        HLS_SEGMENT_LINE,
-        `$1${segmentSuffix}`
-      );
-    }
+    const playlist = fs.readFileSync(sessionInfo.playlistPath, 'utf8');
+    const output = rewriteMediaPlaylistSegments(playlist, sessionInfo.quality, sessionInfo.codec, token);
 
     const validation = validateHlsPlaylist(output);
     if (!validation.valid) {
       console.error('[HLS] Invalid playlist generated:', validation.error);
-      writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Invalid playlist: ${validation.error}`);
-      writeHlsSessionLog(trackId, quality, targetCodec, `Invalid served playlist: ${validation.error}`);
+      writeHlsServerLog(`[media-playlist ${trackId} ${quality} ${targetCodec}] Invalid playlist: ${validation.error}`);
+      writeHlsSessionLog(trackId, quality, targetCodec, `Invalid media playlist: ${validation.error}`);
       return res.status(500).send(`Invalid HLS playlist: ${validation.error}`);
     }
 
-    console.log('[HLS DEBUG] Serving playlist:', JSON.stringify(output));
-    writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Served playlist with ${output.match(HLS_SEGMENT_LINE)?.length || 0} segment entries`);
-    writeHlsSessionLog(trackId, quality, targetCodec, `Served playlist snapshot: ${output.split(/\r?\n/).slice(0, 20).join('\\n')}`);
+    res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+    res.setHeader('Cache-Control', sessionInfo.finished ? 'public, max-age=30' : 'no-cache');
+    writeHlsServerLog(`[media-playlist ${trackId} ${quality} ${targetCodec}] Served media playlist with ${sessionInfo.segmentCount} segments; finished=${sessionInfo.finished}`);
+    writeHlsSessionLog(trackId, quality, targetCodec, `Served media playlist snapshot: ${output.split(/\r?\n/).slice(0, 20).join('\\n')}`);
     res.send(output);
   } catch (err: any) {
-    console.error('[HLS] Playlist error:', err?.message || err);
-    writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Error: ${err?.message || String(err)}`);
+    console.error('[HLS] Media playlist error:', err?.message || err);
+    writeHlsServerLog(`[media-playlist ${trackId} ${quality} ${targetCodec}] Error: ${err?.message || String(err)}`);
     if (!res.headersSent) {
       if (err?.code === 'ENOENT' || err?.message?.includes('ENOENT')) {
         res.status(501).send('FFmpeg not installed — HLS streaming unavailable');

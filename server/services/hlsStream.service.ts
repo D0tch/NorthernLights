@@ -18,6 +18,8 @@ interface HlsSession {
   lastAccessedAt: number;
   ready: boolean;               // true once playlist contains a segment entry
   readyPromise: Promise<void>;  // resolves when the playlist has a playable segment
+  segmentCount: number;
+  finished: boolean;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────
@@ -52,6 +54,10 @@ function summarizePlaylist(content: string): string {
     .split(/\r?\n/)
     .slice(0, 16)
     .join('\\n');
+}
+
+function countPlaylistSegments(content: string): number {
+  return (content.match(/^segment\d+\.ts$/gm) || []).length;
 }
 
 function inspectTransportSegment(segmentPath: string): string {
@@ -131,6 +137,8 @@ export async function getOrCreateHlsSession(
     lastAccessedAt: Date.now(),
     ready: false,
     readyPromise,
+    segmentCount: 0,
+    finished: false,
   };
 
   activeSessions.set(key, session);
@@ -155,6 +163,7 @@ export async function getOrCreateHlsSession(
 
   ffmpeg.on('exit', (code, signal) => {
     session.ffmpegProcess = null;
+    session.finished = true;
     logHlsSession(trackId, quality, targetCodec, `FFmpeg exited with code=${code} signal=${signal}`);
     if (code !== 0 && code !== null && signal !== 'SIGKILL') {
       console.error(`[HLS] FFmpeg exited with code ${code} for track ${trackId}`);
@@ -183,9 +192,11 @@ export async function getOrCreateHlsSession(
     try {
       if (fs.existsSync(playlistPath)) {
         const content = fs.readFileSync(playlistPath, 'utf8');
+        const segmentCount = countPlaylistSegments(content);
+        session.segmentCount = segmentCount;
         console.log(`[HLS DEBUG] Poll: playlist exists, content: ${JSON.stringify(content.substring(0, 200))}`);
-        logHlsSession(trackId, quality, targetCodec, `Playlist poll snapshot: ${summarizePlaylist(content)}`);
-        if (/^segment\d+\.ts$/m.test(content)) {
+        logHlsSession(trackId, quality, targetCodec, `Playlist poll snapshot (${segmentCount} segments): ${summarizePlaylist(content)}`);
+        if (segmentCount >= 2 || (segmentCount >= 1 && content.includes('#EXT-X-ENDLIST'))) {
           clearInterval(pollInterval);
           session.ready = true;
           console.log(`[HLS DEBUG] Session ready for track ${trackId}`);
@@ -253,6 +264,18 @@ export function getSessionOutputDir(trackId: string, quality: string, codec?: st
     if (session) return session.outputDir;
   }
   return null;
+}
+
+export function getSessionInfo(trackId: string, quality: string, codec: string): Pick<HlsSession, 'playlistPath' | 'quality' | 'codec' | 'segmentCount' | 'finished'> | null {
+  const session = activeSessions.get(sessionKey(trackId, quality, codec));
+  if (!session) return null;
+  return {
+    playlistPath: session.playlistPath,
+    quality: session.quality,
+    codec: session.codec,
+    segmentCount: session.segmentCount,
+    finished: session.finished,
+  };
 }
 
 /**
@@ -442,7 +465,6 @@ function buildFfmpegArgs(
   args.push(
     '-hls_time', String(HLS_SEGMENT_DURATION),
     '-hls_list_size', '0',          // VOD mode — keep all segments in playlist
-    '-hls_playlist_type', 'event',
     '-hls_segment_type', 'mpegts',
     '-hls_segment_filename', segmentPattern,
     '-hls_flags', 'independent_segments',
