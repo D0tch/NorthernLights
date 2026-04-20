@@ -5,43 +5,709 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NorthernLights Cast Receiver</title>
   <style>
-    body { margin: 0; padding: 0; background-color: #000; overflow: hidden; }
-    cast-media-player { width: 100vw; height: 100vh; }
-    #debug-panel {
-      position: fixed;
-      bottom: 0;
-      left: 0;
-      width: 100%;
-      height: 33vh;
-      background: rgba(0, 0, 0, 0.85);
-      color: #0f0;
-      font-family: monospace;
-      font-size: 1.5vh;
-      line-height: 1.6;
-      padding: 6px 10px;
-      box-sizing: border-box;
-      overflow-y: auto;
-      z-index: 9999;
-      white-space: pre-wrap;
-      word-break: break-all;
+    @import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;700&display=swap');
+
+    :root {
+      --color-background: #030208;
+      --color-surface: rgba(6, 4, 18, 0.72);
+      --color-surface-strong: rgba(10, 8, 28, 0.82);
+      --color-surface-soft: rgba(14, 11, 32, 0.48);
+      --color-primary: #22c983;
+      --color-primary-dark: #10b981;
+      --color-secondary: #0ea5e9;
+      --color-accent: #f43f5e;
+      --color-text-primary: #d8d8e8;
+      --color-text-secondary: #8e8ea0;
+      --color-text-muted: #55556a;
+      --color-border: rgba(255, 255, 255, 0.06);
+      --glass-shadow: 0 20px 80px rgba(0, 0, 0, 0.45);
+      --glow-green: rgba(34, 201, 131, 0.22);
+      --glow-blue: rgba(14, 165, 233, 0.18);
+      --glow-rose: rgba(244, 63, 94, 0.16);
+      --radius-lg: 34px;
+      --radius-md: 24px;
+      --radius-sm: 18px;
+      --font-display: 'Syne', sans-serif;
+      --font-body: 'DM Sans', sans-serif;
+      --progress: 0%;
+      --art-url: none;
     }
-    #debug-panel .err { color: #f44; }
-    #debug-panel .warn { color: #ff0; }
-    #debug-panel .ok { color: #0f0; }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 14% 18%, var(--glow-green), transparent 26%),
+        radial-gradient(circle at 86% 20%, var(--glow-blue), transparent 28%),
+        radial-gradient(circle at 56% 88%, var(--glow-rose), transparent 24%),
+        var(--color-background);
+      color: var(--color-text-primary);
+      font-family: var(--font-body);
+    }
+
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background:
+        linear-gradient(120deg, rgba(3, 2, 8, 0.88), rgba(3, 2, 8, 0.52)),
+        var(--art-url) center center / cover no-repeat;
+      filter: blur(42px) saturate(1.15);
+      transform: scale(1.08);
+      opacity: 0.72;
+      pointer-events: none;
+    }
+
+    body::after {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image:
+        radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.06), transparent 24%),
+        radial-gradient(circle at 78% 62%, rgba(255, 255, 255, 0.04), transparent 26%);
+      mix-blend-mode: screen;
+      opacity: 0.18;
+      pointer-events: none;
+    }
+
+    cast-media-player {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: 100vh;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    #receiver-shell {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      padding: 3.2vh 3.2vw;
+      display: flex;
+      flex-direction: column;
+      gap: 2.8vh;
+      z-index: 2;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1.5vw;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 1vw;
+      min-width: 0;
+    }
+
+    .brand-mark {
+      width: 3.6vw;
+      height: 3.6vw;
+      min-width: 56px;
+      min-height: 56px;
+      max-width: 76px;
+      max-height: 76px;
+      border-radius: 1.3vw;
+      background:
+        linear-gradient(145deg, rgba(34, 201, 131, 0.22), rgba(14, 165, 233, 0.12)),
+        rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(34, 201, 131, 0.22);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 0 32px rgba(34, 201, 131, 0.16);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .brand-mark::before,
+    .brand-mark::after {
+      content: '';
+      position: absolute;
+      border-radius: 999px;
+      filter: blur(3px);
+    }
+
+    .brand-mark::before {
+      width: 120%;
+      height: 34%;
+      background: linear-gradient(90deg, transparent, rgba(34, 201, 131, 0.9), transparent);
+      transform: rotate(-18deg) translateY(-10%);
+    }
+
+    .brand-mark::after {
+      width: 100%;
+      height: 26%;
+      background: linear-gradient(90deg, transparent, rgba(14, 165, 233, 0.75), transparent);
+      transform: rotate(13deg) translateY(55%);
+    }
+
+    .brand-copy {
+      min-width: 0;
+    }
+
+    .brand-kicker {
+      text-transform: uppercase;
+      letter-spacing: 0.28em;
+      font-size: 1.2vh;
+      color: var(--color-text-muted);
+      margin-bottom: 0.4vh;
+    }
+
+    .brand-title {
+      font-family: var(--font-display);
+      font-size: 3.2vh;
+      line-height: 1;
+      letter-spacing: -0.03em;
+      color: #eefaf5;
+    }
+
+    .status-strip {
+      display: flex;
+      align-items: center;
+      gap: 0.8vw;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.55vw;
+      padding: 0.95vh 1.1vw;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.05);
+      border: 1px solid var(--color-border);
+      color: var(--color-text-secondary);
+      font-size: 1.55vh;
+      letter-spacing: 0.01em;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+      backdrop-filter: blur(18px);
+      white-space: nowrap;
+    }
+
+    .chip--accent {
+      color: #eefaf5;
+      border-color: rgba(34, 201, 131, 0.26);
+      background: linear-gradient(145deg, rgba(34, 201, 131, 0.12), rgba(14, 165, 233, 0.08));
+    }
+
+    .chip-dot {
+      width: 0.62vw;
+      height: 0.62vw;
+      min-width: 10px;
+      min-height: 10px;
+      border-radius: 999px;
+      background: var(--color-primary);
+      box-shadow: 0 0 16px rgba(34, 201, 131, 0.55);
+    }
+
+    .main-layout {
+      display: grid;
+      grid-template-columns: minmax(340px, 25vw) minmax(440px, 1fr) minmax(300px, 24vw);
+      gap: 2vw;
+      align-items: stretch;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .art-card,
+    .meta-card,
+    .queue-card,
+    .debug-panel {
+      position: relative;
+      background: linear-gradient(145deg, rgba(8, 6, 22, 0.76), rgba(10, 8, 28, 0.54));
+      border: 1px solid var(--color-border);
+      box-shadow: var(--glass-shadow), inset 0 1px 0 rgba(255,255,255,0.04);
+      backdrop-filter: blur(26px);
+    }
+
+    .art-card {
+      border-radius: calc(var(--radius-lg) + 10px);
+      overflow: hidden;
+      min-height: 0;
+      display: flex;
+      align-items: stretch;
+      justify-content: stretch;
+    }
+
+    .art-card::after {
+      content: '';
+      position: absolute;
+      inset: auto 0 0 0;
+      height: 34%;
+      background: linear-gradient(to top, rgba(3, 2, 8, 0.8), transparent);
+      pointer-events: none;
+    }
+
+    #cover-art,
+    #cover-fallback {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    #cover-art {
+      object-fit: cover;
+      background: rgba(255,255,255,0.02);
+    }
+
+    #cover-fallback {
+      display: none;
+      align-items: center;
+      justify-content: center;
+      font-family: var(--font-display);
+      font-size: 14vh;
+      letter-spacing: -0.08em;
+      color: rgba(238, 250, 245, 0.9);
+      background:
+        radial-gradient(circle at 30% 25%, rgba(34, 201, 131, 0.28), transparent 30%),
+        radial-gradient(circle at 70% 30%, rgba(14, 165, 233, 0.22), transparent 28%),
+        radial-gradient(circle at 50% 72%, rgba(244, 63, 94, 0.18), transparent 26%),
+        rgba(255, 255, 255, 0.03);
+    }
+
+    .art-overlay {
+      position: absolute;
+      inset: auto 1.6vw 1.6vw 1.6vw;
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      gap: 1vw;
+      z-index: 2;
+    }
+
+    .art-caption {
+      min-width: 0;
+    }
+
+    .art-caption-label {
+      font-size: 1.25vh;
+      text-transform: uppercase;
+      letter-spacing: 0.22em;
+      color: var(--color-text-muted);
+      margin-bottom: 0.5vh;
+    }
+
+    .art-caption-value {
+      font-size: 1.85vh;
+      color: var(--color-text-secondary);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 15vw;
+    }
+
+    .meta-card {
+      border-radius: var(--radius-lg);
+      padding: 3.4vh 2.3vw;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .meta-card::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at top right, rgba(34, 201, 131, 0.12), transparent 28%),
+        radial-gradient(circle at bottom left, rgba(14, 165, 233, 0.12), transparent 32%);
+      pointer-events: none;
+    }
+
+    .meta-main {
+      position: relative;
+      z-index: 1;
+      min-height: 0;
+    }
+
+    .meta-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.7vw;
+      margin-bottom: 2vh;
+      color: var(--color-text-secondary);
+      font-size: 1.55vh;
+      letter-spacing: 0.02em;
+    }
+
+    .signal {
+      width: 1.4vw;
+      height: 1.4vw;
+      min-width: 18px;
+      min-height: 18px;
+      border-radius: 999px;
+      border: 1px solid rgba(34, 201, 131, 0.24);
+      background:
+        radial-gradient(circle at center, rgba(34, 201, 131, 0.9) 0 24%, transparent 28%),
+        rgba(34, 201, 131, 0.08);
+      box-shadow: 0 0 20px rgba(34, 201, 131, 0.22);
+    }
+
+    #track-title {
+      font-family: var(--font-display);
+      font-size: clamp(42px, 7vh, 86px);
+      line-height: 0.92;
+      letter-spacing: -0.05em;
+      margin: 0 0 1.5vh 0;
+      max-width: 100%;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+      color: #f6fffb;
+      text-wrap: balance;
+    }
+
+    #track-artist {
+      margin: 0 0 0.8vh 0;
+      font-size: clamp(24px, 3vh, 34px);
+      color: var(--color-text-primary);
+      line-height: 1.2;
+    }
+
+    #track-album {
+      margin: 0;
+      font-size: 1.9vh;
+      color: var(--color-text-secondary);
+      line-height: 1.35;
+      max-width: 90%;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .progress-panel {
+      position: relative;
+      z-index: 1;
+      margin-top: 3vh;
+    }
+
+    .progress-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1vw;
+      margin-bottom: 1.2vh;
+      color: var(--color-text-secondary);
+      font-size: 1.55vh;
+    }
+
+    .progress-bar {
+      position: relative;
+      width: 100%;
+      height: 1.1vh;
+      min-height: 10px;
+      border-radius: 999px;
+      overflow: hidden;
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .progress-bar::before {
+      content: '';
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: var(--progress);
+      background: linear-gradient(90deg, var(--color-primary), var(--color-secondary));
+      box-shadow: 0 0 22px rgba(34, 201, 131, 0.28);
+      border-radius: inherit;
+    }
+
+    .progress-grid {
+      margin-top: 2.5vh;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 1vw;
+    }
+
+    .stat-card {
+      padding: 1.6vh 1.1vw;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .stat-label {
+      font-size: 1.2vh;
+      text-transform: uppercase;
+      letter-spacing: 0.2em;
+      color: var(--color-text-muted);
+      margin-bottom: 0.8vh;
+    }
+
+    .stat-value {
+      font-size: 2.2vh;
+      color: #f2fbf7;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .queue-card {
+      border-radius: var(--radius-lg);
+      padding: 2.8vh 1.4vw;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .queue-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 1vw;
+      margin-bottom: 2.2vh;
+    }
+
+    .queue-title {
+      font-family: var(--font-display);
+      font-size: 3.4vh;
+      letter-spacing: -0.04em;
+      color: #eefaf5;
+      margin: 0;
+    }
+
+    .queue-subtitle {
+      color: var(--color-text-secondary);
+      font-size: 1.45vh;
+    }
+
+    #up-next-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1vh;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .queue-item {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 0.95vw;
+      padding: 1.3vh 0.9vw;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      min-height: 0;
+    }
+
+    .queue-index {
+      font-family: var(--font-display);
+      font-size: 2.1vh;
+      color: var(--color-primary);
+      min-width: 2.4vw;
+      text-align: center;
+    }
+
+    .queue-copy {
+      min-width: 0;
+    }
+
+    .queue-name,
+    .queue-artist {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .queue-name {
+      font-size: 1.75vh;
+      color: #f2fbf7;
+      margin-bottom: 0.3vh;
+    }
+
+    .queue-artist {
+      font-size: 1.4vh;
+      color: var(--color-text-secondary);
+    }
+
+    .queue-empty {
+      padding: 1.6vh 1vw;
+      border-radius: var(--radius-sm);
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px dashed rgba(255, 255, 255, 0.08);
+      color: var(--color-text-secondary);
+      font-size: 1.5vh;
+    }
+
+    #debug-toggle {
+      position: fixed;
+      right: 2vw;
+      bottom: 2vh;
+      z-index: 50;
+      border: 0;
+      border-radius: 999px;
+      padding: 1.1vh 1vw;
+      background: rgba(5, 4, 18, 0.72);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      color: var(--color-text-secondary);
+      font-family: var(--font-body);
+      font-size: 1.35vh;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      backdrop-filter: blur(18px);
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
+    }
+
+    .debug-panel {
+      position: fixed;
+      left: 2vw;
+      right: 2vw;
+      bottom: 6.5vh;
+      max-height: 29vh;
+      padding: 1.4vh 1.2vw;
+      border-radius: 22px;
+      overflow-y: auto;
+      z-index: 49;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 1.25vh;
+      line-height: 1.45;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .debug-panel.is-hidden {
+      display: none;
+    }
+
+    .debug-panel .err { color: #ff8f8f; }
+    .debug-panel .warn { color: #f9dc7b; }
+    .debug-panel .ok { color: #9ce5bd; }
+
+    @media (max-aspect-ratio: 16/10) {
+      #receiver-shell {
+        padding: 2.6vh 2.2vw;
+      }
+
+      .main-layout {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto auto auto;
+      }
+
+      .art-card {
+        min-height: 32vh;
+      }
+
+      .queue-card {
+        min-height: 24vh;
+      }
+    }
   </style>
   <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 </head>
 <body>
   <cast-media-player></cast-media-player>
-  <div id="debug-panel"></div>
+
+  <div id="receiver-shell">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true"></div>
+        <div class="brand-copy">
+          <div class="brand-kicker">Custom Receiver</div>
+          <div class="brand-title">Aurora</div>
+        </div>
+      </div>
+      <div class="status-strip">
+        <div class="chip chip--accent">
+          <span class="chip-dot"></span>
+          <span id="status-chip">Idle</span>
+        </div>
+        <div class="chip"><span id="codec-chip">AAC HLS</span></div>
+        <div class="chip"><span id="queue-chip">Queue 0</span></div>
+      </div>
+    </header>
+
+    <main class="main-layout">
+      <section class="art-card">
+        <img id="cover-art" alt="" />
+        <div id="cover-fallback">A</div>
+        <div class="art-overlay">
+          <div class="art-caption">
+            <div class="art-caption-label">Album</div>
+            <div class="art-caption-value" id="cover-album">Nothing loaded</div>
+          </div>
+          <div class="chip">Aurora Cast</div>
+        </div>
+      </section>
+
+      <section class="meta-card">
+        <div class="meta-main">
+          <div class="meta-kicker">
+            <span class="signal" aria-hidden="true"></span>
+            <span id="meta-kicker">Ready for playback</span>
+          </div>
+          <h1 id="track-title">Aurora Receiver</h1>
+          <p id="track-artist">Waiting for media</p>
+          <p id="track-album">Start casting from Aurora to see the active queue here.</p>
+        </div>
+
+        <div class="progress-panel">
+          <div class="progress-head">
+            <span id="current-time">0:00</span>
+            <span id="duration-time">0:00</span>
+          </div>
+          <div class="progress-bar" id="progress-bar"></div>
+
+          <div class="progress-grid">
+            <div class="stat-card">
+              <div class="stat-label">State</div>
+              <div class="stat-value" id="state-value">Idle</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Position</div>
+              <div class="stat-value" id="position-value">0:00 / 0:00</div>
+            </div>
+            <div class="stat-card">
+              <div class="stat-label">Queue</div>
+              <div class="stat-value" id="queue-value">No items</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="queue-card">
+        <div class="queue-head">
+          <div>
+            <h2 class="queue-title">Up Next</h2>
+            <div class="queue-subtitle" id="queue-subtitle">Queue is empty</div>
+          </div>
+        </div>
+        <div id="up-next-list">
+          <div class="queue-empty">Start a cast session to preview the next tracks.</div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <button id="debug-toggle" type="button">Logs</button>
+  <div id="debug-panel" class="debug-panel is-hidden"></div>
+
   <script>
-    // ─── Global error capture (runs before anything else) ──────────
     var _rawPanel = document.getElementById('debug-panel');
     function _rawLog(msg) {
+      if (!_rawPanel) return;
+      _rawPanel.classList.remove('is-hidden');
       var el = document.createElement('div');
       el.className = 'err';
       el.textContent = msg;
-      if (_rawPanel) { _rawPanel.appendChild(el); _rawPanel.scrollTop = _rawPanel.scrollHeight; }
+      _rawPanel.appendChild(el);
+      _rawPanel.scrollTop = _rawPanel.scrollHeight;
     }
     window.onerror = function(msg, src, line, col, err) {
       _rawLog('[FATAL] ' + msg + ' (' + src + ':' + line + ':' + col + ')');
@@ -49,18 +715,40 @@
       return false;
     };
 
-    // ─── Main init wrapped in try-catch ────────────────────────────
     try {
       var LOG_TAG = 'NorthernLights';
       var FORCED_CAST_CODEC = 'aac';
 
       var context = cast.framework.CastReceiverContext.getInstance();
       var playerManager = context.getPlayerManager();
+      var queueManager = playerManager.getQueueManager();
 
-      // ─── Custom Debug Panel ────────────────────────────────────────
-      var panel = document.getElementById('debug-panel');
+      var ui = {
+        title: document.getElementById('track-title'),
+        artist: document.getElementById('track-artist'),
+        album: document.getElementById('track-album'),
+        coverAlbum: document.getElementById('cover-album'),
+        coverArt: document.getElementById('cover-art'),
+        coverFallback: document.getElementById('cover-fallback'),
+        currentTime: document.getElementById('current-time'),
+        durationTime: document.getElementById('duration-time'),
+        progressBar: document.getElementById('progress-bar'),
+        statusChip: document.getElementById('status-chip'),
+        codecChip: document.getElementById('codec-chip'),
+        queueChip: document.getElementById('queue-chip'),
+        metaKicker: document.getElementById('meta-kicker'),
+        stateValue: document.getElementById('state-value'),
+        positionValue: document.getElementById('position-value'),
+        queueValue: document.getElementById('queue-value'),
+        queueSubtitle: document.getElementById('queue-subtitle'),
+        upNextList: document.getElementById('up-next-list'),
+        debugPanel: document.getElementById('debug-panel'),
+        debugToggle: document.getElementById('debug-toggle')
+      };
+
       var MAX_LINES = 80;
       var currentAuthToken = '';
+      var currentPlayerState = 'IDLE';
 
       function log(level, tag, msg) {
         var ts = ((performance.now() / 1000).toFixed(1));
@@ -68,12 +756,21 @@
         var line = document.createElement('div');
         line.className = cls;
         line.textContent = '[' + ts + 's] [' + tag + '] ' + msg;
-        panel.appendChild(line);
-        while (panel.children.length > MAX_LINES) {
-          panel.removeChild(panel.firstChild);
+        ui.debugPanel.appendChild(line);
+        while (ui.debugPanel.children.length > MAX_LINES) {
+          ui.debugPanel.removeChild(ui.debugPanel.firstChild);
         }
-        panel.scrollTop = panel.scrollHeight;
+        ui.debugPanel.scrollTop = ui.debugPanel.scrollHeight;
       }
+
+      function setDebugVisible(visible) {
+        if (!ui.debugPanel) return;
+        ui.debugPanel.classList.toggle('is-hidden', !visible);
+      }
+
+      ui.debugToggle.addEventListener('click', function() {
+        setDebugVisible(ui.debugPanel.classList.contains('is-hidden'));
+      });
 
       function postServerLog(level, message, detail) {
         if (!currentAuthToken) return;
@@ -89,9 +786,7 @@
               detail: detail || ''
             })
           }).catch(function() {});
-        } catch (e) {
-          // Ignore receiver-side logging failures to avoid affecting playback
-        }
+        } catch (e) {}
       }
 
       function logAndPost(level, tag, msg) {
@@ -122,6 +817,143 @@
         logAndPost('ok', LOG_TAG, resourceType + ' request: ' + requestInfo.url);
       }
 
+      function formatTime(value) {
+        if (!isFinite(value) || value < 0) return '0:00';
+        var totalSeconds = Math.floor(value);
+        var minutes = Math.floor(totalSeconds / 60);
+        var seconds = totalSeconds % 60;
+        return minutes + ':' + String(seconds).padStart(2, '0');
+      }
+
+      function clamp(value, min, max) {
+        return Math.min(Math.max(value, min), max);
+      }
+
+      function getMetadata(mediaInfo) {
+        return (mediaInfo && mediaInfo.metadata) || {};
+      }
+
+      function getImageUrl(mediaInfo) {
+        var metadata = getMetadata(mediaInfo);
+        if (metadata && metadata.images && metadata.images.length && metadata.images[0] && metadata.images[0].url) {
+          return metadata.images[0].url;
+        }
+        return '';
+      }
+
+      function getDisplayTitle(mediaInfo) {
+        var metadata = getMetadata(mediaInfo);
+        return metadata.title || 'Unknown Title';
+      }
+
+      function getDisplayArtist(mediaInfo) {
+        var metadata = getMetadata(mediaInfo);
+        return metadata.artist || 'Unknown Artist';
+      }
+
+      function getDisplayAlbum(mediaInfo) {
+        var metadata = getMetadata(mediaInfo);
+        return metadata.albumName || '';
+      }
+
+      function setArtwork(imageUrl, title) {
+        if (imageUrl) {
+          ui.coverArt.src = imageUrl;
+          ui.coverArt.style.display = 'block';
+          ui.coverFallback.style.display = 'none';
+          document.documentElement.style.setProperty('--art-url', 'url("' + imageUrl.replace(/"/g, '\\"') + '")');
+        } else {
+          ui.coverArt.removeAttribute('src');
+          ui.coverArt.style.display = 'none';
+          ui.coverFallback.textContent = (title || 'A').trim().charAt(0).toUpperCase() || 'A';
+          ui.coverFallback.style.display = 'flex';
+          document.documentElement.style.setProperty('--art-url', 'none');
+        }
+      }
+
+      function getStatusCopy() {
+        if (currentPlayerState === 'BUFFERING') return 'Buffering';
+        if (currentPlayerState === 'PLAYING') return 'Now Playing';
+        if (currentPlayerState === 'PAUSED') return 'Paused';
+        if (currentPlayerState === 'LOADING') return 'Loading';
+        return 'Idle';
+      }
+
+      function renderQueue() {
+        var items = queueManager ? queueManager.getItems() : [];
+        var currentIndex = queueManager ? queueManager.getCurrentItemIndex() : -1;
+        var nextItems = [];
+        var i;
+
+        for (i = currentIndex + 1; i < items.length && nextItems.length < 4; i += 1) {
+          nextItems.push(items[i]);
+        }
+
+        ui.queueChip.textContent = 'Queue ' + items.length;
+        ui.queueValue.textContent = items.length ? (currentIndex + 1) + ' / ' + items.length : 'No items';
+        ui.queueSubtitle.textContent = nextItems.length
+          ? nextItems.length + ' track' + (nextItems.length === 1 ? '' : 's') + ' queued next'
+          : (items.length ? 'End of queue' : 'Queue is empty');
+
+        ui.upNextList.innerHTML = '';
+
+        if (!nextItems.length) {
+          var empty = document.createElement('div');
+          empty.className = 'queue-empty';
+          empty.textContent = items.length ? 'No further tracks queued after this one.' : 'Start a cast session to preview the next tracks.';
+          ui.upNextList.appendChild(empty);
+          return;
+        }
+
+        nextItems.forEach(function(item, offset) {
+          var mediaInfo = item.media || {};
+          var row = document.createElement('div');
+          row.className = 'queue-item';
+          row.innerHTML =
+            '<div class="queue-index">' + String(currentIndex + offset + 2).padStart(2, '0') + '</div>' +
+            '<div class="queue-copy">' +
+              '<div class="queue-name"></div>' +
+              '<div class="queue-artist"></div>' +
+            '</div>';
+          row.querySelector('.queue-name').textContent = getDisplayTitle(mediaInfo);
+          row.querySelector('.queue-artist').textContent = getDisplayArtist(mediaInfo);
+          ui.upNextList.appendChild(row);
+        });
+      }
+
+      function syncUi() {
+        var mediaInfo = playerManager.getMediaInformation();
+        var title = getDisplayTitle(mediaInfo);
+        var artist = getDisplayArtist(mediaInfo);
+        var album = getDisplayAlbum(mediaInfo);
+        var imageUrl = getImageUrl(mediaInfo);
+        var currentTime = playerManager.getCurrentTimeSec ? playerManager.getCurrentTimeSec() : 0;
+        var duration = playerManager.getDurationSec ? playerManager.getDurationSec() : NaN;
+        var progress = (!isFinite(duration) || duration <= 0) ? 0 : clamp((currentTime / duration) * 100, 0, 100);
+        var statusCopy = getStatusCopy();
+
+        ui.title.textContent = title || 'Aurora Receiver';
+        ui.artist.textContent = artist || 'Waiting for media';
+        ui.album.textContent = album || 'Start casting from Aurora to see the active queue here.';
+        ui.coverAlbum.textContent = album || 'No album metadata';
+        ui.currentTime.textContent = formatTime(currentTime);
+        ui.durationTime.textContent = formatTime(duration);
+        ui.positionValue.textContent = formatTime(currentTime) + ' / ' + formatTime(duration);
+        ui.progressBar.style.setProperty('--progress', progress.toFixed(2) + '%');
+        ui.statusChip.textContent = statusCopy;
+        ui.stateValue.textContent = statusCopy;
+        ui.metaKicker.textContent = statusCopy === 'Now Playing'
+          ? 'Streaming from Aurora with custom receiver visuals'
+          : statusCopy === 'Buffering'
+            ? 'Refreshing stream data and filling the receiver buffer'
+            : statusCopy === 'Paused'
+              ? 'Playback paused on the receiver'
+              : 'Ready for playback';
+
+        setArtwork(imageUrl, title);
+        renderQueue();
+      }
+
       var playbackConfig = new cast.framework.PlaybackConfig();
       playbackConfig.manifestRequestHandler = function(requestInfo) {
         applyAuth(requestInfo, 'Manifest');
@@ -130,54 +962,66 @@
         applyAuth(requestInfo, 'Segment');
       };
       playbackConfig.manifestHandler = function(manifest, responseInfo) {
-        var status = responseInfo && responseInfo.statusCode ? responseInfo.statusCode : 'unknown';
-        logAndPost('ok', LOG_TAG, 'Manifest response: ' + status);
+        var detail = responseInfo && responseInfo.headers ? ' headers received' : ' response received';
+        logAndPost('ok', LOG_TAG, 'Manifest' + detail);
         return manifest;
       };
       playbackConfig.segmentHandler = function(segment, responseInfo) {
-        var status = responseInfo && responseInfo.statusCode ? responseInfo.statusCode : 'unknown';
-        logAndPost('ok', LOG_TAG, 'Segment response: ' + status);
+        var detail = responseInfo && responseInfo.headers ? ' headers received' : ' response received';
+        logAndPost('ok', LOG_TAG, 'Segment' + detail);
         return segment;
       };
 
-      // ─── Receiver Init ─────────────────────────────────────────────
       context.addEventListener(cast.framework.system.EventType.READY, function() {
+        ui.codecChip.textContent = 'AAC HLS';
         logAndPost('ok', LOG_TAG, 'Receiver started — forced codec: ' + FORCED_CAST_CODEC);
+        syncUi();
       });
 
       context.addEventListener(cast.framework.system.EventType.ERROR, function(e) {
+        setDebugVisible(true);
         logAndPost('error', LOG_TAG, 'Receiver error: ' + JSON.stringify(e));
       });
 
-      // ─── LOAD Interceptor ──────────────────────────────────────────
       playerManager.setMessageInterceptor(
         cast.framework.messages.MessageType.LOAD,
         function(loadRequestData) {
-          if (loadRequestData.media) {
-            var m = loadRequestData.media;
-            currentAuthToken = (m.customData && m.customData.token) || '';
+          function normalizeMedia(media) {
+            if (!media) return;
+            currentAuthToken = (media.customData && media.customData.token) || currentAuthToken || '';
 
-            // The backend emits HLS in MPEG-TS; keep the cast path pinned to AAC-LC.
-            if (m.contentId) {
+            if (media.contentId) {
               try {
-                var urlObj = new URL(m.contentId, window.location.href);
+                var urlObj = new URL(media.contentId, window.location.href);
                 urlObj.searchParams.set('codec', FORCED_CAST_CODEC);
                 if (currentAuthToken && !urlObj.searchParams.has('token')) {
                   urlObj.searchParams.set('token', currentAuthToken);
                 }
-                m.contentId = urlObj.toString();
-                logAndPost('ok', LOG_TAG, 'Prepared HLS URL for forced AAC playback');
+                media.contentId = urlObj.toString();
               } catch (e) {
                 logAndPost('error', LOG_TAG, 'Failed to parse contentId URL');
               }
             }
 
-            logAndPost('ok', LOG_TAG, 'LOAD contentId: ' + m.contentId);
-            logAndPost('ok', LOG_TAG, 'LOAD contentType: ' + m.contentType);
-            logAndPost('ok', LOG_TAG, 'LOAD customData: ' + JSON.stringify(m.customData));
-
-            m.contentType = m.contentType || 'application/vnd.apple.mpegurl';
+            media.contentType = media.contentType || 'application/vnd.apple.mpegurl';
           }
+
+          if (loadRequestData.media) {
+            normalizeMedia(loadRequestData.media);
+            logAndPost('ok', LOG_TAG, 'Prepared HLS URL for forced AAC playback');
+            logAndPost('ok', LOG_TAG, 'LOAD contentId: ' + loadRequestData.media.contentId);
+            logAndPost('ok', LOG_TAG, 'LOAD contentType: ' + loadRequestData.media.contentType);
+          }
+
+          if (loadRequestData.queueData && loadRequestData.queueData.items) {
+            loadRequestData.queueData.items.forEach(function(item) {
+              if (item && item.media) normalizeMedia(item.media);
+            });
+            logAndPost('ok', LOG_TAG, 'LOAD queue items: ' + loadRequestData.queueData.items.length);
+          }
+
+          currentPlayerState = 'LOADING';
+          syncUi();
           return loadRequestData;
         }
       );
@@ -199,14 +1043,19 @@
       playerManager.addEventListener(
         cast.framework.events.EventType.ERROR,
         function(e) {
+          currentPlayerState = 'IDLE';
+          setDebugVisible(true);
           logAndPost('error', LOG_TAG, 'Player error: ' + decodeError(e));
+          syncUi();
         }
       );
 
       playerManager.addEventListener(
         cast.framework.events.EventType.BUFFERING,
         function(e) {
+          currentPlayerState = e.isBuffering ? 'BUFFERING' : currentPlayerState;
           logAndPost('ok', LOG_TAG, 'Buffering: ' + e.isBuffering);
+          syncUi();
         }
       );
 
@@ -214,17 +1063,19 @@
         cast.framework.events.EventType.MEDIA_STATUS,
         function(e) {
           if (e.mediaStatus) {
+            currentPlayerState = e.mediaStatus.playerState || currentPlayerState;
             logAndPost('ok', LOG_TAG, 'State: ' + e.mediaStatus.playerState +
               (e.mediaStatus.idleReason ? ' (' + e.mediaStatus.idleReason + ')' : ''));
+            syncUi();
           }
         }
       );
 
-      // ─── Start receiver ────────────────────────────────────────────
+      setInterval(syncUi, 500);
+
       logAndPost('ok', LOG_TAG, 'Starting receiver...');
       context.start({ playbackConfig: playbackConfig });
       logAndPost('ok', LOG_TAG, 'context.start() returned OK');
-
     } catch (initError) {
       _rawLog('[INIT ERROR] ' + initError.message);
       if (initError.stack) _rawLog('[INIT STACK] ' + initError.stack);
