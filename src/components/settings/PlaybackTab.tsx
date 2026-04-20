@@ -81,10 +81,10 @@ export const PlaybackTab: React.FC = () => {
                         </select>
                         <p className="text-xs text-[var(--color-text-muted)] mt-1.5">
                             {streamingQuality === 'source' 
-                                ? 'Streams the original file exactly as it is stored on the server without conversion. Uses zero CPU on the server but may use more bandwidth.'
+                                ? 'Streams the original file exactly as it is stored on the server without conversion when the playback path supports it. Chromecast currently stays on Cast-safe HLS, so true lossless casting remains future fMP4 work.'
                                 : streamingQuality === 'auto'
                                 ? 'Automatically uses Normal quality (128 kbps AAC). This provides a good balance between quality and bandwidth.'
-                                : `Audio will be transcoded to AAC at ${streamingQuality}bps. Higher bitrates sound better but use more bandwidth and storage.`
+                                : `Audio will be transcoded to AAC at ${streamingQuality}bps. Both browser playback and Chromecast now honor this bitrate when a track starts. Higher bitrates sound better but use more bandwidth and storage.`
                             }
                         </p>
                     </div>

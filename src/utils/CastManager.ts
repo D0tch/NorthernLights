@@ -1,5 +1,6 @@
 import { playbackManager } from './PlaybackManager';
 import { usePlayerStore } from '../store';
+import { applyStreamingQualityToHlsUrl } from './streaming';
 declare const chrome: any;
 declare const cast: any;
 
@@ -409,9 +410,14 @@ export class CastManager {
         const castSession = this.castContext.getCurrentSession();
         if (!castSession) return;
 
+        const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
+            hlsUrl,
+            usePlayerStore.getState().streamingQuality
+        );
+
         // Select URL based on mode: custom receiver → HLS, default → raw file
-        const useHls = !!(this.customAppId && hlsUrl);
-        let mediaUrl = useHls ? hlsUrl : (rawUrl || hlsUrl);
+        const useHls = !!(this.customAppId && effectiveHlsUrl);
+        let mediaUrl = useHls ? effectiveHlsUrl : (rawUrl || effectiveHlsUrl);
         const authToken = token || this.extractTokenFromUrl(mediaUrl);
 
         if (useHls) {
@@ -523,7 +529,11 @@ export class CastManager {
         // Build QueueItems from playlist
         const useHls = !!this.customAppId;
         const queueItems: any[] = tracks.map((t, i) => {
-            let mediaUrl = useHls ? (t.url || t.rawUrl || '') : (t.rawUrl || t.url || '');
+            const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
+                t.url || '',
+                usePlayerStore.getState().streamingQuality
+            );
+            let mediaUrl = useHls ? (effectiveHlsUrl || t.rawUrl || '') : (t.rawUrl || effectiveHlsUrl || '');
             if (useHls) {
                 try {
                     const url = new URL(mediaUrl);
@@ -619,7 +629,11 @@ export class CastManager {
         if (!mediaSession) return;
 
         const useHls = !!this.customAppId;
-        let mediaUrl = useHls ? (track.url || track.rawUrl || '') : (track.rawUrl || track.url || '');
+        const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
+            track.url || '',
+            usePlayerStore.getState().streamingQuality
+        );
+        let mediaUrl = useHls ? (effectiveHlsUrl || track.rawUrl || '') : (track.rawUrl || effectiveHlsUrl || '');
         if (useHls) {
             try {
                 const url = new URL(mediaUrl);

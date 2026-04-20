@@ -1,5 +1,7 @@
 import Hls from 'hls.js';
 import { castManager } from './CastManager';
+import { usePlayerStore } from '../store';
+import { applyStreamingQualityToHlsUrl } from './streaming';
 
 export type PlaybackState = 'playing' | 'paused' | 'stopped';
 
@@ -145,7 +147,12 @@ class PlaybackManager {
     // --- Core Playback Controls ---
 
     public async playUrl(hlsUrl: string, rawUrl: string, title?: string, artist?: string, artUrl?: string, album?: string, format?: string): Promise<void> {
-        this.currentUrl = hlsUrl || rawUrl;
+        const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
+            hlsUrl,
+            usePlayerStore.getState().streamingQuality
+        );
+
+        this.currentUrl = effectiveHlsUrl || rawUrl;
         this.currentTitle = title || 'Unknown Title';
         this.currentArtist = artist || 'Unknown Artist';
         this.currentArtUrl = artUrl || null;
@@ -156,13 +163,13 @@ class PlaybackManager {
             if (castManager.isConnected()) {
                 this.audio.pause();
                 // Pass both URLs — CastManager picks based on receiver mode
-                await castManager.castMedia(hlsUrl, rawUrl, this.currentTitle, this.currentArtist, this.currentArtUrl || undefined, album, format);
+                await castManager.castMedia(effectiveHlsUrl, rawUrl, this.currentTitle, this.currentArtist, this.currentArtUrl || undefined, album, format);
                 return;
             }
 
             // Route HLS URLs through hls.js
-            if (hlsUrl.includes('.m3u8')) {
-                await this.playHls(hlsUrl);
+            if (effectiveHlsUrl.includes('.m3u8')) {
+                await this.playHls(effectiveHlsUrl);
                 return;
             }
 
@@ -174,7 +181,7 @@ class PlaybackManager {
                 URL.revokeObjectURL(this.audio.src);
             }
 
-            this.audio.src = hlsUrl || rawUrl;
+            this.audio.src = effectiveHlsUrl || rawUrl;
             this.audio.load();
             await this.audio.play();
 
