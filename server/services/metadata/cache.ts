@@ -127,9 +127,9 @@ export async function upsertGenreCache(
 
 export async function clearExternalCache(): Promise<void> {
   const db = await initDB();
-  await db.query('UPDATE artists SET last_updated = 0 WHERE last_updated > 0');
-  await db.query('UPDATE albums SET last_updated = 0 WHERE last_updated > 0');
-  await db.query('UPDATE genres SET last_updated = 0 WHERE last_updated > 0');
+  await db.query('UPDATE artists SET last_updated = 0, image_url = NULL, bio = NULL WHERE last_updated > 0 OR image_url IS NOT NULL OR bio IS NOT NULL');
+  await db.query('UPDATE albums SET last_updated = 0, image_url = NULL WHERE last_updated > 0 OR image_url IS NOT NULL');
+  await db.query('UPDATE genres SET last_updated = 0, image_url = NULL, description = NULL WHERE last_updated > 0 OR image_url IS NOT NULL OR description IS NOT NULL');
 }
 
 export { isCacheFresh, CACHE_TTL };
