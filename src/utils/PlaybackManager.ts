@@ -1,8 +1,13 @@
 import Hls from 'hls.js';
 import { castManager } from './CastManager';
-import { usePlayerStore } from '../store';
+import { usePlayerStore, type PlaybackTelemetry } from '../store';
 import { applyStreamingQualityToHlsUrl } from './streaming';
 import { logPlaybackInfo } from './playbackDebug';
+import {
+    isRecentContinuitySnapshot,
+    readPlaybackContinuitySnapshot,
+    savePlaybackContinuitySnapshot,
+} from './playbackContinuity';
 
 export type PlaybackState = 'playing' | 'paused' | 'stopped';
 
@@ -15,6 +20,9 @@ class PlaybackManager {
     private nextHls: Hls | null = null;
     private nextUrlKey: string | null = null;
     private transitionStartedAt: number | null = null;
+    private localVolume = 1;
+    private localMuted = false;
+    private lastPrepareFailureReason: string | null = null;
     
     // Internal state to track what's playing in case we switch to Cast mid-stream
     private currentUrl: string | null = null;
@@ -23,6 +31,17 @@ class PlaybackManager {
     private currentArtUrl: string | null = null;
     private currentAlbum: string | null = null;
     private currentFormat: string | null = null;
+    private currentPlaylistUrl: string | null = null;
+    private currentHlsAuthToken = '';
+    private hlsRecoveryTimer: ReturnType<typeof setTimeout> | null = null;
+    private hlsNetworkRetryCount = 0;
+    private hlsMediaRetryCount = 0;
+    private hlsRebuildRetryCount = 0;
+    private readonly maxHlsNetworkRetries = 5;
+    private readonly maxHlsMediaRetries = 2;
+    private readonly maxHlsRebuildRetries = 2;
+    private readonly mediaSessionPositionIntervalMs = 5000;
+    private lastMediaSessionPositionUpdate = 0;
 
     // Store callbacks for Zustand to update its state
     private onTimeUpdateCallback?: (time: number) => void;
@@ -40,19 +59,27 @@ class PlaybackManager {
 
         // Set up CastManager listeners
         castManager.onTimeUpdate = (time) => {
-            if (castManager.isConnected()) this.onTimeUpdateCallback?.(time);
+            if (castManager.isConnected()) {
+                this.onTimeUpdateCallback?.(time);
+                this.updateMediaSessionPosition();
+            }
         };
         castManager.onDuration = (duration) => {
-            if (castManager.isConnected()) this.onDurationCallback?.(duration);
+            if (castManager.isConnected()) {
+                this.onDurationCallback?.(duration);
+                this.updateMediaSessionPosition(true);
+            }
         };
         castManager.onPlayStateChange = (isPlaying) => {
             if (castManager.isConnected()) {
                 this.onPlayStateChangeCallback?.(isPlaying ? 'playing' : 'paused');
+                this.updateMediaSessionPlaybackState(isPlaying ? 'playing' : 'paused');
             }
         };
         castManager.onEnded = () => {
             if (castManager.isConnected()) {
                 this.onPlayStateChangeCallback?.('stopped');
+                this.updateMediaSessionPlaybackState('none');
                 this.onEndedCallback?.();
             }
         };
@@ -65,13 +92,31 @@ class PlaybackManager {
         castManager.onTrackChange = (index) => {
             if (castManager.isConnected()) this.onTrackChangeCallback?.(index);
         };
+
+        this.configureMediaSessionActionHandlers();
+        this.attachLifecycleHandlers();
     }
 
     private createAudioElement(): HTMLAudioElement {
         const audio = new Audio();
         audio.crossOrigin = 'anonymous';
         audio.preload = 'auto';
+        audio.volume = this.localVolume;
+        audio.muted = this.localMuted;
         return audio;
+    }
+
+    private syncLocalAudioOutputState(audio: HTMLAudioElement | null): void {
+        if (!audio) return;
+        audio.volume = this.localVolume;
+        audio.muted = this.localMuted;
+    }
+
+    private getErrorMessage(error: unknown): string {
+        if (error instanceof Error) return error.message;
+        if (error instanceof DOMException) return error.message || error.name;
+        if (typeof error === 'string') return error;
+        return 'unknown playback error';
     }
 
     private attachAudioEvents(audio: HTMLAudioElement): void {
@@ -79,6 +124,7 @@ class PlaybackManager {
         audio.addEventListener('timeupdate', () => {
             if (!castManager.isConnected() && audio === this.audio) {
                 this.onTimeUpdateCallback?.(audio.currentTime);
+                this.updateMediaSessionPosition();
             }
         });
 
@@ -93,6 +139,7 @@ class PlaybackManager {
         audio.addEventListener('durationchange', () => {
             if (!castManager.isConnected() && audio === this.audio && isFinite(audio.duration) && audio.duration > 0) {
                 this.onDurationCallback?.(audio.duration);
+                this.updateMediaSessionPosition(true);
             }
         });
 
@@ -100,6 +147,7 @@ class PlaybackManager {
             if (!castManager.isConnected() && audio === this.audio) {
                 this.transitionStartedAt = performance.now();
                 this.onPlayStateChangeCallback?.('stopped');
+                this.updateMediaSessionPlaybackState('none');
                 this.onEndedCallback?.();
             }
         });
@@ -115,9 +163,15 @@ class PlaybackManager {
                 if (this.transitionStartedAt !== null) {
                     const elapsed = performance.now() - this.transitionStartedAt;
                     logPlaybackInfo(`[Playback] Track transition audible after ${Math.round(elapsed)}ms`);
+                    this.recordTelemetry({
+                        lastTransitionLatencyMs: Math.round(elapsed),
+                        lastAudibleAt: Date.now(),
+                    });
                     this.transitionStartedAt = null;
                 }
                 this.onBufferingChangeCallback?.(false);
+                this.updateMediaSessionPlaybackState('playing');
+                this.updateMediaSessionPosition(true);
             }
         });
 
@@ -128,10 +182,17 @@ class PlaybackManager {
         });
 
         audio.addEventListener('play', () => {
-             if (!castManager.isConnected() && audio === this.audio) this.onPlayStateChangeCallback?.('playing');
+             if (!castManager.isConnected() && audio === this.audio) {
+                this.onPlayStateChangeCallback?.('playing');
+                this.updateMediaSessionPlaybackState('playing');
+             }
         });
         audio.addEventListener('pause', () => {
-             if (!castManager.isConnected() && audio === this.audio) this.onPlayStateChangeCallback?.('paused');
+             if (!castManager.isConnected() && audio === this.audio) {
+                this.onPlayStateChangeCallback?.('paused');
+                this.updateMediaSessionPlaybackState('paused');
+                this.updateMediaSessionPosition(true);
+             }
         });
     }
 
@@ -163,6 +224,156 @@ class PlaybackManager {
         this.onBufferingChangeCallback = callbacks.onBufferingChange;
     }
 
+    private configureMediaSessionActionHandlers(): void {
+        if (!('mediaSession' in navigator)) return;
+
+        const handlers: Partial<Record<MediaSessionAction, MediaSessionActionHandler | null>> = {
+            play: () => { void usePlayerStore.getState().resume(); },
+            pause: () => usePlayerStore.getState().pause(),
+            previoustrack: () => { void usePlayerStore.getState().prevTrack(); },
+            nexttrack: () => { void usePlayerStore.getState().nextTrack(); },
+            seekbackward: (details) => {
+                const offset = details.seekOffset || 10;
+                this.seek(Math.max(0, this.getCurrentTime() - offset));
+            },
+            seekforward: (details) => {
+                const offset = details.seekOffset || 10;
+                const duration = this.getDuration();
+                this.seek(duration > 0 ? Math.min(duration, this.getCurrentTime() + offset) : this.getCurrentTime() + offset);
+            },
+            seekto: (details) => {
+                if (typeof details.seekTime === 'number') {
+                    this.seek(details.seekTime);
+                }
+            },
+        };
+
+        for (const [action, handler] of Object.entries(handlers) as [MediaSessionAction, MediaSessionActionHandler][]) {
+            try {
+                navigator.mediaSession.setActionHandler(action, handler);
+            } catch {
+                // Older browsers may expose Media Session but not every action.
+            }
+        }
+    }
+
+    private updateMediaSessionMetadata(): void {
+        if (!('mediaSession' in navigator)) return;
+
+        const artwork = this.currentArtUrl
+            ? [
+                { src: this.currentArtUrl, sizes: '96x96', type: 'image/png' },
+                { src: this.currentArtUrl, sizes: '128x128', type: 'image/png' },
+                { src: this.currentArtUrl, sizes: '192x192', type: 'image/png' },
+                { src: this.currentArtUrl, sizes: '512x512', type: 'image/png' },
+            ]
+            : [
+                { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+                { src: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+            ];
+
+        try {
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: this.currentTitle || 'Unknown Title',
+                artist: this.currentArtist || 'Unknown Artist',
+                album: this.currentAlbum || 'Aurora',
+                artwork,
+            });
+            this.updateMediaSessionPosition(true);
+        } catch (error) {
+            console.warn('[Playback] Failed to update Media Session metadata:', error);
+        }
+    }
+
+    private updateMediaSessionPlaybackState(state: MediaSessionPlaybackState): void {
+        if (!('mediaSession' in navigator)) return;
+        navigator.mediaSession.playbackState = state;
+    }
+
+    private updateMediaSessionPosition(force = false): void {
+        if (!('mediaSession' in navigator) || typeof navigator.mediaSession.setPositionState !== 'function') return;
+        const now = Date.now();
+        if (!force && now - this.lastMediaSessionPositionUpdate < this.mediaSessionPositionIntervalMs) return;
+        this.lastMediaSessionPositionUpdate = now;
+
+        const state = castManager.isConnected() ? usePlayerStore.getState() : null;
+        const duration = state?.duration || this.getDuration();
+        const position = state?.currentTime || this.getCurrentTime();
+        if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(position)) return;
+
+        try {
+            navigator.mediaSession.setPositionState({
+                duration,
+                playbackRate: this.audio.playbackRate || 1,
+                position: Math.min(position, duration),
+            });
+        } catch {
+            // Ignore invalid transient duration/position combinations.
+        }
+    }
+
+    private attachLifecycleHandlers(): void {
+        const saveSnapshot = () => this.persistContinuitySnapshot();
+        const reconcile = () => {
+            this.updateMediaSessionMetadata();
+            this.updateMediaSessionPlaybackState(this.audio.paused ? 'paused' : 'playing');
+            this.updateMediaSessionPosition(true);
+        };
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') {
+                saveSnapshot();
+            } else {
+                reconcile();
+            }
+        });
+        window.addEventListener('pagehide', saveSnapshot);
+        window.addEventListener('beforeunload', saveSnapshot);
+        window.addEventListener('pageshow', reconcile);
+        document.addEventListener('freeze', saveSnapshot);
+        document.addEventListener('resume', reconcile);
+    }
+
+    public persistContinuitySnapshot(): void {
+        const state = usePlayerStore.getState();
+        savePlaybackContinuitySnapshot({
+            playlist: state.playlist,
+            currentIndex: state.currentIndex,
+            currentTime: castManager.isConnected() ? state.currentTime : this.getCurrentTime(),
+            duration: state.duration || this.getDuration(),
+            playbackState: state.playbackState,
+            wasPlaying: state.playbackState === 'playing',
+            repeat: state.repeat,
+            shuffle: state.shuffle,
+            streamingQuality: state.streamingQuality,
+        });
+    }
+
+    public async restoreFromContinuitySnapshot(): Promise<void> {
+        const snapshot = readPlaybackContinuitySnapshot();
+        if (!isRecentContinuitySnapshot(snapshot) || !snapshot.wasPlaying) return;
+
+        const state = usePlayerStore.getState();
+        if (!state.authToken || state.playbackState === 'playing') return;
+
+        const playlist = state.playlist.length > 0 ? state.playlist : snapshot.playlist;
+        const index = snapshot.currentIndex;
+        if (index === null || index < 0 || index >= playlist.length) return;
+
+        try {
+            if (state.playlist.length === 0) {
+                await state.setPlaylist(playlist, index);
+            } else {
+                await state.playAtIndex(index);
+            }
+            if (snapshot.currentTime > 2) {
+                this.seek(snapshot.currentTime);
+            }
+        } catch (error) {
+            console.warn('[Playback] Could not restore previous playback session:', error);
+        }
+    }
+
     // --- Core Playback Controls ---
 
     public async playUrl(hlsUrl: string, rawUrl: string, title?: string, artist?: string, artUrl?: string, album?: string, format?: string): Promise<void> {
@@ -177,10 +388,23 @@ class PlaybackManager {
         this.currentArtUrl = artUrl || null;
         this.currentAlbum = album || null;
         this.currentFormat = format || null;
+        this.currentPlaylistUrl = effectiveHlsUrl.includes('.m3u8') ? effectiveHlsUrl : null;
+        this.updateMediaSessionMetadata();
 
         try {
             if (castManager.isConnected()) {
                 this.audio.pause();
+                this.recordTelemetry({
+                    loadPath: 'cast',
+                    currentTrackTitle: this.currentTitle,
+                    currentTrackArtist: this.currentArtist,
+                    preparedAudioUsed: false,
+                    fallbackHlsLoadUsed: false,
+                    lastFallbackReason: null,
+                    recoveredFromPrepareFailure: false,
+                    recoveryPath: 'none',
+                    recoveryError: null,
+                });
                 // Pass both URLs — CastManager picks based on receiver mode
                 await castManager.castMedia(effectiveHlsUrl, rawUrl, this.currentTitle, this.currentArtist, this.currentArtUrl || undefined, album, format);
                 return;
@@ -189,10 +413,42 @@ class PlaybackManager {
             // Route HLS URLs through hls.js
             if (effectiveHlsUrl.includes('.m3u8')) {
                 if (this.isPreparedUrl(effectiveHlsUrl)) {
-                    await this.promotePreparedAudio();
+                    try {
+                        await this.promotePreparedAudio();
+                    } catch (error) {
+                        const recoveryError = this.getErrorMessage(error);
+                        console.warn('[Playback] Prepared promotion failed, falling back to normal HLS load:', error);
+                        this.recordTelemetry({
+                            loadPath: 'fallback-hls',
+                            currentTrackTitle: this.currentTitle,
+                            currentTrackArtist: this.currentArtist,
+                            preparedAudioUsed: false,
+                            fallbackHlsLoadUsed: true,
+                            lastFallbackReason: 'promotion-failed',
+                            recoveredFromPrepareFailure: true,
+                            recoveryPath: 'normal-hls-after-promotion-failure',
+                            recoveryError,
+                        });
+                        await this.playHls(effectiveHlsUrl);
+                    }
                     return;
                 }
+                const prepareFailureReason = this.lastPrepareFailureReason;
+                this.recordTelemetry({
+                    loadPath: 'fallback-hls',
+                    currentTrackTitle: this.currentTitle,
+                    currentTrackArtist: this.currentArtist,
+                    preparedAudioUsed: false,
+                    fallbackHlsLoadUsed: true,
+                    lastFallbackReason: prepareFailureReason ? 'prepare-failed' : this.nextUrlKey ? 'prepared-url-mismatch' : 'no-prepared-audio',
+                    recoveredFromPrepareFailure: !!prepareFailureReason,
+                    recoveryPath: prepareFailureReason ? 'normal-hls-after-prepare-failure' : 'none',
+                    recoveryError: prepareFailureReason,
+                });
                 await this.playHls(effectiveHlsUrl);
+                if (prepareFailureReason) {
+                    this.lastPrepareFailureReason = null;
+                }
                 return;
             }
 
@@ -208,6 +464,17 @@ class PlaybackManager {
             this.audio.load();
             await this.audio.play();
 
+            this.recordTelemetry({
+                loadPath: 'direct',
+                currentTrackTitle: this.currentTitle,
+                currentTrackArtist: this.currentArtist,
+                preparedAudioUsed: false,
+                fallbackHlsLoadUsed: false,
+                lastFallbackReason: null,
+                recoveredFromPrepareFailure: false,
+                recoveryPath: 'none',
+                recoveryError: null,
+            });
             this.ensureAudioContext();
         } catch (error) {
             // AbortError: play() was interrupted by a new source loading — not a real error
@@ -230,13 +497,24 @@ class PlaybackManager {
         if (this.nextUrlKey === key) return;
 
         this.destroyPreparedAudio();
+        this.lastPrepareFailureReason = null;
 
         try {
             logPlaybackInfo(`[Playback] Preparing next HLS track: ${title || 'Unknown Title'}${artist ? ` by ${artist}` : ''}`);
+            this.recordTelemetry({
+                preparedTrackTitle: title || 'Unknown Title',
+                preparedTrackArtist: artist || null,
+                prepareStatus: 'preparing',
+                prepareStartedAt: Date.now(),
+                prepareReadyAt: null,
+                prepareError: null,
+                recoveredFromPrepareFailure: false,
+                recoveryPath: 'none',
+                recoveryError: null,
+            });
 
             const nextAudio = this.createAudioElement();
-            nextAudio.volume = this.audio.volume;
-            nextAudio.muted = this.audio.muted;
+            this.syncLocalAudioOutputState(nextAudio);
             this.attachAudioEvents(nextAudio);
             this.nextAudio = nextAudio;
             this.nextUrlKey = key;
@@ -248,10 +526,23 @@ class PlaybackManager {
                 this.nextHls = nextHls;
                 nextHls.on(Hls.Events.MANIFEST_PARSED, () => {
                     logPlaybackInfo(`[Playback] Prepared next HLS track: ${title || 'Unknown Title'}${artist ? ` by ${artist}` : ''}`);
+                    this.recordTelemetry({
+                        preparedTrackTitle: title || 'Unknown Title',
+                        preparedTrackArtist: artist || null,
+                        prepareStatus: 'ready',
+                        prepareReadyAt: Date.now(),
+                        prepareError: null,
+                    });
                 });
                 nextHls.on(Hls.Events.ERROR, (_event: string, data: any) => {
                     if (data.fatal) {
                         console.warn('[Playback] Prepared next HLS track failed:', data);
+                        const prepareError = data?.details || data?.type || 'fatal HLS prepare error';
+                        this.lastPrepareFailureReason = prepareError;
+                        this.recordTelemetry({
+                            prepareStatus: 'failed',
+                            prepareError,
+                        });
                         this.destroyPreparedAudio();
                     }
                 });
@@ -263,22 +554,36 @@ class PlaybackManager {
             }
         } catch (error) {
             console.warn('[Playback] Failed to prepare next track:', error);
+            const prepareError = this.getErrorMessage(error);
+            this.lastPrepareFailureReason = prepareError;
+            this.recordTelemetry({
+                prepareStatus: 'failed',
+                prepareError,
+            });
             this.destroyPreparedAudio();
         }
+    }
+
+    private recordTelemetry(telemetry: Partial<PlaybackTelemetry>): void {
+        usePlayerStore.getState().recordPlaybackTelemetry(telemetry);
     }
 
     private async playHls(playlistUrl: string): Promise<void> {
         // Clean up previous HLS instance
         this.destroyHls();
+        this.currentPlaylistUrl = playlistUrl;
+        this.hlsNetworkRetryCount = 0;
+        this.hlsMediaRetryCount = 0;
+        this.hlsRebuildRetryCount = 0;
 
         // Extract auth token from the playlist URL so we can pass it to segment requests.
         // hls.js constructs segment URLs relative to the playlist but drops query params.
         const urlObj = new URL(playlistUrl, window.location.origin);
         const authToken = urlObj.searchParams.get('token') || '';
+        this.currentHlsAuthToken = authToken;
 
         if (Hls.isSupported()) {
             this.hls = this.createHlsInstance(authToken, 60, 120);
-
             this.hls.loadSource(playlistUrl);
             this.hls.attachMedia(this.audio);
 
@@ -287,6 +592,9 @@ class PlaybackManager {
                 const onParsed = () => {
                     this.hls?.off(Hls.Events.MANIFEST_PARSED, onParsed);
                     this.hls?.off(Hls.Events.ERROR, onError);
+                    if (this.hls) {
+                        this.attachActiveHlsRecovery(this.hls, playlistUrl, authToken);
+                    }
                     resolve();
                 };
 
@@ -294,16 +602,7 @@ class PlaybackManager {
                     if (data.fatal) {
                         this.hls?.off(Hls.Events.MANIFEST_PARSED, onParsed);
                         this.hls?.off(Hls.Events.ERROR, onError);
-
-                        if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
-                            console.error('[HLS] Fatal network error:', data);
-                            // Try to recover once
-                            this.hls?.startLoad();
-                        } else {
-                            console.error('[HLS] Fatal error:', data);
-                            this.destroyHls();
-                            reject(new Error(`HLS fatal error: ${data.details}`));
-                        }
+                        reject(new Error(`HLS fatal error before manifest: ${data.details || data.type}`));
                     }
                 };
 
@@ -330,6 +629,13 @@ class PlaybackManager {
         return new Hls({
             maxBufferLength,
             maxMaxBufferLength,
+            backBufferLength: 90,
+            fragLoadingMaxRetry: 6,
+            manifestLoadingMaxRetry: 4,
+            levelLoadingMaxRetry: 4,
+            fragLoadingRetryDelay: 1000,
+            manifestLoadingRetryDelay: 1000,
+            levelLoadingRetryDelay: 1000,
             startFragPrefetch: true,
             xhrSetup: (xhr: XMLHttpRequest, _url: string) => {
                 // DO NOT call xhr.open() here — hls.js has already opened the request.
@@ -339,6 +645,105 @@ class PlaybackManager {
                 }
             },
         });
+    }
+
+    private attachActiveHlsRecovery(hls: Hls, playlistUrl: string, authToken: string): void {
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            if (hls === this.hls) {
+                this.hlsNetworkRetryCount = 0;
+                this.hlsMediaRetryCount = 0;
+                this.onBufferingChangeCallback?.(false);
+            }
+        });
+
+        hls.on(Hls.Events.ERROR, (_event: string, data: any) => {
+            if (hls !== this.hls || !data?.fatal) return;
+
+            this.onBufferingChangeCallback?.(true);
+            if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                this.recoverHlsNetworkError(hls, data);
+                return;
+            }
+
+            if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                this.recoverHlsMediaError(hls, data);
+                return;
+            }
+
+            this.rebuildActiveHls(playlistUrl, authToken, data);
+        });
+    }
+
+    private recoverHlsNetworkError(hls: Hls, data: any): void {
+        if (this.hlsNetworkRetryCount >= this.maxHlsNetworkRetries) {
+            this.rebuildActiveHls(this.currentPlaylistUrl || '', this.currentHlsAuthToken, data);
+            return;
+        }
+
+        const retryNumber = ++this.hlsNetworkRetryCount;
+        const delay = Math.min(15000, 1000 * Math.pow(2, retryNumber - 1));
+        console.warn(`[HLS] Fatal network error; retrying load in ${delay}ms`, data);
+        this.clearHlsRecoveryTimer();
+        this.hlsRecoveryTimer = setTimeout(() => {
+            if (hls === this.hls) {
+                try {
+                    hls.startLoad();
+                } catch (error) {
+                    console.warn('[HLS] startLoad recovery failed:', error);
+                }
+            }
+        }, delay);
+    }
+
+    private recoverHlsMediaError(hls: Hls, data: any): void {
+        if (this.hlsMediaRetryCount >= this.maxHlsMediaRetries) {
+            this.rebuildActiveHls(this.currentPlaylistUrl || '', this.currentHlsAuthToken, data);
+            return;
+        }
+
+        this.hlsMediaRetryCount += 1;
+        console.warn('[HLS] Fatal media error; attempting recoverMediaError()', data);
+        try {
+            hls.recoverMediaError();
+        } catch (error) {
+            console.warn('[HLS] recoverMediaError failed:', error);
+            this.rebuildActiveHls(this.currentPlaylistUrl || '', this.currentHlsAuthToken, data);
+        }
+    }
+
+    private rebuildActiveHls(playlistUrl: string, authToken: string, data: any): void {
+        if (!playlistUrl || this.hlsRebuildRetryCount >= this.maxHlsRebuildRetries) {
+            console.error('[HLS] Unrecoverable fatal error:', data);
+            this.destroyHls();
+            this.onBufferingChangeCallback?.(false);
+            this.onPlayStateChangeCallback?.('paused');
+            return;
+        }
+
+        const position = this.getCurrentTime();
+        this.hlsRebuildRetryCount += 1;
+        console.warn('[HLS] Rebuilding active HLS pipeline after fatal error:', data);
+        this.destroyHls();
+
+        const nextHls = this.createHlsInstance(authToken, 60, 120);
+        this.hls = nextHls;
+        this.currentHlsAuthToken = authToken;
+        this.attachActiveHlsRecovery(nextHls, playlistUrl, authToken);
+        nextHls.once(Hls.Events.MANIFEST_PARSED, () => {
+            if (position > 0) {
+                this.seek(position);
+            }
+            void this.safePlay();
+        });
+        nextHls.loadSource(playlistUrl);
+        nextHls.attachMedia(this.audio);
+    }
+
+    private clearHlsRecoveryTimer(): void {
+        if (this.hlsRecoveryTimer) {
+            clearTimeout(this.hlsRecoveryTimer);
+            this.hlsRecoveryTimer = null;
+        }
     }
 
     private isPreparedUrl(url: string): boolean {
@@ -351,6 +756,7 @@ class PlaybackManager {
         const oldAudio = this.audio;
         oldAudio.pause();
         this.destroyHls();
+        this.syncLocalAudioOutputState(this.nextAudio);
 
         this.audio = this.nextAudio;
         this.hls = this.nextHls;
@@ -365,6 +771,17 @@ class PlaybackManager {
         oldAudio.load();
 
         logPlaybackInfo('[Playback] Promoting prepared next track');
+        this.recordTelemetry({
+            loadPath: 'prepared-hls',
+            currentTrackTitle: this.currentTitle,
+            currentTrackArtist: this.currentArtist,
+            preparedAudioUsed: true,
+            fallbackHlsLoadUsed: false,
+            lastFallbackReason: null,
+            recoveredFromPrepareFailure: false,
+            recoveryPath: 'none',
+            recoveryError: null,
+        });
         await this.safePlay();
     }
 
@@ -379,6 +796,9 @@ class PlaybackManager {
         } catch (error) {
             if (error instanceof DOMException && error.name === 'NotAllowedError') {
                 console.warn('Autoplay blocked. User interaction required.');
+                this.onBufferingChangeCallback?.(false);
+                this.onPlayStateChangeCallback?.('paused');
+                this.updateMediaSessionPlaybackState('paused');
             } else if (error instanceof DOMException && error.name === 'AbortError') {
                 // Play was interrupted by a new load — not an error
                 return;
@@ -389,6 +809,7 @@ class PlaybackManager {
     }
 
     private destroyHls(): void {
+        this.clearHlsRecoveryTimer();
         if (this.hls) {
             this.hls.destroy();
             this.hls = null;
@@ -481,15 +902,20 @@ class PlaybackManager {
                 this.audio.currentTime = time;
             }
         }
+        this.onTimeUpdateCallback?.(time);
+        this.updateMediaSessionPosition(true);
+        this.persistContinuitySnapshot();
     }
 
     public setVolume(volume: number): void {
         // Clamp between 0 and 1
         const v = Math.max(0, Math.min(1, volume));
+        this.localVolume = v;
+        this.syncLocalAudioOutputState(this.audio);
+        this.syncLocalAudioOutputState(this.nextAudio);
+
         if (castManager.isConnected()) {
             castManager.setVolume(v);
-        } else {
-            this.audio.volume = v;
         }
     }
 

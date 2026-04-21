@@ -91,11 +91,20 @@ export async function getOrCreateHlsSession(
   // Reuse existing session if available
   const existing = activeSessions.get(key);
   if (existing) {
-    existing.lastAccessedAt = Date.now();
-    if (!existing.ready) {
-      await existing.readyPromise;
+    const failedWithoutPlaylist = existing.ready
+      && existing.finished
+      && (!fs.existsSync(existing.playlistPath) || existing.segmentCount === 0);
+
+    if (failedWithoutPlaylist) {
+      logHlsSession(trackId, quality, targetCodec, 'Discarding failed zero-segment session before retry');
+      cleanupSession(trackId, quality, targetCodec);
+    } else {
+      existing.lastAccessedAt = Date.now();
+      if (!existing.ready) {
+        await existing.readyPromise;
+      }
+      return existing;
     }
-    return existing;
   }
 
   // Create output directory — hash the key to guarantee a short, fixed-length name
@@ -117,7 +126,7 @@ export async function getOrCreateHlsSession(
   logHlsSession(trackId, quality, targetCodec, `Remux decision: ${shouldRemux ? 'copy' : 'transcode'}`);
 
   // Build FFmpeg args
-  const ffmpegArgs = buildFfmpegArgs(inputPath, playlistFilename, segmentFilename, quality, shouldRemux, targetCodec);
+  const ffmpegArgs = buildFfmpegArgs(inputPath, playlistFilename, segmentFilename, quality, shouldRemux, targetCodec, sourceBitrate);
   logHlsSession(trackId, quality, targetCodec, `FFmpeg args: ${ffmpegArgs.join(' ')}`);
 
   // Create the readiness promise — resolves when segment000.ts appears
@@ -392,20 +401,31 @@ function getRemuxDecision(
   inputPath: string
 ): boolean {
   const fmt = (sourceFormat || '').toLowerCase();
+  const actualCodec = detectActualCodec(inputPath)?.toLowerCase() || null;
 
   // Known incompatible formats — always transcode regardless of quality
-  if (NOT_TS_COMPATIBLE.has(fmt)) return false;
+  if (NOT_TS_COMPATIBLE.has(fmt) || (actualCodec && NOT_TS_COMPATIBLE.has(actualCodec))) return false;
 
   // MPEG-4 container: could be AAC or ALAC — must detect actual codec
   if (fmt === 'mpeg-4' || fmt === 'm4a' || fmt === 'mp4') {
-    const actualCodec = detectActualCodec(inputPath);
     if (actualCodec === 'alac') return false; // ALAC can't go in MPEG-TS
     // For AAC in M4A, fall through to the normal bitrate check below
   }
 
-  // Quality = 'source': remux if the codec is TS-compatible
+  const codecMap: Record<string, string[]> = {
+    mp3: ['mp3', 'mpeg'],
+    aac: ['aac', 'm4a', 'mp4', 'mpeg-4', 'mp4/m4a'],
+    ac3: ['ac3'],
+    eac3: ['eac3'],
+  };
+  const matchingFormats = codecMap[targetCodec] || [];
+  const matchesTargetCodec = matchingFormats.includes(fmt) || (!!actualCodec && matchingFormats.includes(actualCodec));
+
+  // Quality = 'source': only remux if the stream already matches the advertised codec.
+  // Otherwise the master playlist CODECS tag lies (e.g. AAC advertised but MP3 copied),
+  // and some HLS clients fail even though FFmpeg can mux the segment.
   if (quality === 'source') {
-    return true; // FLAC/OGG/ALAC already filtered out above
+    return matchesTargetCodec;
   }
 
   if (!sourceBitrate) return false;
@@ -415,18 +435,26 @@ function getRemuxDecision(
 
   // Remux if: source codec matches target AND bitrate is sufficient
   // This means the source is already in the right format — no transcoding needed
-  const codecMap: Record<string, string[]> = {
-    mp3: ['mp3', 'mpeg'],
-    aac: ['aac', 'm4a', 'mp4', 'mpeg-4', 'mp4/m4a'],
-    ac3: ['ac3'],
-    eac3: ['eac3'],
-  };
-  const matchingFormats = codecMap[targetCodec] || [];
-  if (matchingFormats.includes(fmt) && requestedBitrateNum >= sourceBitrate) {
+  if (matchesTargetCodec && requestedBitrateNum >= sourceBitrate) {
     return true;
   }
 
   return false; // transcode
+}
+
+function resolveTranscodeBitrate(quality: string, sourceBitrate: number | null, codec: string): string {
+  if (quality !== 'source') return quality;
+
+  const sourceKbps = sourceBitrate && Number.isFinite(sourceBitrate)
+    ? Math.max(1, Math.round(sourceBitrate / 1000))
+    : 320;
+
+  // "source" cannot be literal when the source codec/container is not HLS/TS-compatible
+  // or does not match the advertised target codec. Use a real bitrate that preserves
+  // lossy-source intent without creating huge AAC streams for lossless inputs.
+  const maxKbps = codec === 'aac' || codec === 'aac_he' ? 320 : sourceKbps;
+  const minKbps = codec === 'ac3' || codec === 'eac3' ? 256 : 64;
+  return `${Math.max(minKbps, Math.min(sourceKbps, maxKbps))}k`;
 }
 
 function buildFfmpegArgs(
@@ -435,7 +463,8 @@ function buildFfmpegArgs(
   segmentPattern: string,
   quality: string,
   shouldRemux: boolean,
-  codec: string
+  codec: string,
+  sourceBitrate: number | null
 ): string[] {
   const args = [
     '-i', inputPath,
@@ -446,18 +475,19 @@ function buildFfmpegArgs(
   if (shouldRemux) {
     args.push('-c:a', 'copy');      // Zero CPU — container change only
   } else {
+    const bitrate = resolveTranscodeBitrate(quality, sourceBitrate, codec);
     switch (codec) {
       case 'mp3':
-        args.push('-c:a', 'libmp3lame', '-b:a', quality);
+        args.push('-c:a', 'libmp3lame', '-b:a', bitrate);
         break;
       case 'ac3':
-        args.push('-c:a', 'ac3', '-b:a', quality);
+        args.push('-c:a', 'ac3', '-b:a', bitrate);
         break;
       case 'eac3':
-        args.push('-c:a', 'eac3', '-b:a', quality);
+        args.push('-c:a', 'eac3', '-b:a', bitrate);
         break;
       default: // 'aac', 'aac_he', any unknown → AAC (universal)
-        args.push('-c:a', 'aac', '-b:a', quality, '-profile:a', 'aac_low');
+        args.push('-c:a', 'aac', '-b:a', bitrate, '-profile:a', 'aac_low');
         break;
     }
   }

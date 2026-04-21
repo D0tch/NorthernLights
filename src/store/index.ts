@@ -7,6 +7,7 @@ import { castManager } from '../utils/CastManager';
 import { cloneTrackForQueue, ensureQueueEntryIds } from '../utils/queue';
 import { preloadManager } from '../utils/PreloadManager';
 import { setPlaybackDebugLogging } from '../utils/playbackDebug';
+import { savePlaybackContinuitySnapshot } from '../utils/playbackContinuity';
 
 import { clearExternalCache } from '../utils/externalImagery';
 import type { ToastType } from '../components/Toast';
@@ -48,6 +49,31 @@ export interface EntityInfo {
   artist_name?: string;
 }
 
+export type PlaybackLoadPath = 'none' | 'cast' | 'direct' | 'prepared-hls' | 'fallback-hls';
+export type PlaybackPrepareStatus = 'idle' | 'preparing' | 'ready' | 'failed';
+export type PlaybackRecoveryPath = 'none' | 'normal-hls-after-prepare-failure' | 'normal-hls-after-promotion-failure';
+
+export interface PlaybackTelemetry {
+  lastUpdatedAt: number | null;
+  loadPath: PlaybackLoadPath;
+  preparedAudioUsed: boolean;
+  fallbackHlsLoadUsed: boolean;
+  lastTransitionLatencyMs: number | null;
+  lastAudibleAt: number | null;
+  currentTrackTitle: string | null;
+  currentTrackArtist: string | null;
+  preparedTrackTitle: string | null;
+  preparedTrackArtist: string | null;
+  prepareStatus: PlaybackPrepareStatus;
+  prepareStartedAt: number | null;
+  prepareReadyAt: number | null;
+  prepareError: string | null;
+  lastFallbackReason: string | null;
+  recoveredFromPrepareFailure: boolean;
+  recoveryPath: PlaybackRecoveryPath;
+  recoveryError: string | null;
+}
+
 export interface PlayerState {
   // Library State
   library: TrackInfo[];
@@ -83,6 +109,7 @@ export interface PlayerState {
   duration: number;
   isBuffering: boolean;
   castConnected: boolean;
+  playbackTelemetry: PlaybackTelemetry;
 
   // Settings State (Persisted)
   volume: number;
@@ -222,6 +249,7 @@ export interface PlayerState {
   syncTimeUpdate: (time: number) => void;
   syncDuration: (duration: number) => void;
   syncPlaybackState: (state: PlaybackState) => void;
+  recordPlaybackTelemetry: (telemetry: Partial<PlaybackTelemetry>) => void;
 
   // Engine session state
   sessionHistoryTrackIds: string[];
@@ -247,6 +275,7 @@ export const usePlayerStore = create<PlayerState>()(
       playbackManager.setCallbacks({
         onTimeUpdate: (time) => {
           set({ currentTime: time });
+          persistContinuitySnapshot(false);
           // Check scrobble eligibility (>50% duration or 4 minutes, whichever is earlier, and track >30s)
           const state = get();
           if (!state._scrobbleEligible && state._scrobbleStartAt && state.duration > 30) {
@@ -267,10 +296,14 @@ export const usePlayerStore = create<PlayerState>()(
             const current = get().duration;
             if (duration >= current || current === 0) {
               set({ duration });
+              persistContinuitySnapshot(true);
             }
           }
         },
-        onPlayStateChange: (state) => set({ playbackState: state }),
+        onPlayStateChange: (state) => {
+          set({ playbackState: state });
+          persistContinuitySnapshot(true);
+        },
         onEnded: () => {
           // Scrobble the completed track if eligible
           const state = get();
@@ -341,6 +374,7 @@ export const usePlayerStore = create<PlayerState>()(
               _scrobbleStartAt: Date.now(),
               _scrobbleEligible: false,
             });
+            persistContinuitySnapshot(true);
           }
         },
         onBufferingChange: (isBuffering) => {
@@ -379,6 +413,25 @@ export const usePlayerStore = create<PlayerState>()(
         }
       };
 
+      let lastContinuitySnapshotAt = 0;
+      const persistContinuitySnapshot = (force = false) => {
+        const now = Date.now();
+        if (!force && now - lastContinuitySnapshotAt < 5000) return;
+        lastContinuitySnapshotAt = now;
+        const state = get();
+        savePlaybackContinuitySnapshot({
+          playlist: state.playlist,
+          currentIndex: state.currentIndex,
+          currentTime: state.currentTime,
+          duration: state.duration,
+          playbackState: state.playbackState,
+          wasPlaying: state.playbackState === 'playing',
+          repeat: state.repeat,
+          shuffle: state.shuffle,
+          streamingQuality: state.streamingQuality,
+        });
+      };
+
       return {
         // Initial State
         library: [] as TrackInfo[],
@@ -406,6 +459,26 @@ export const usePlayerStore = create<PlayerState>()(
         duration: 0,
         isBuffering: false as boolean,
         castConnected: false as boolean,
+        playbackTelemetry: {
+          lastUpdatedAt: null,
+          loadPath: 'none',
+          preparedAudioUsed: false,
+          fallbackHlsLoadUsed: false,
+          lastTransitionLatencyMs: null,
+          lastAudibleAt: null,
+          currentTrackTitle: null,
+          currentTrackArtist: null,
+          preparedTrackTitle: null,
+          preparedTrackArtist: null,
+          prepareStatus: 'idle',
+          prepareStartedAt: null,
+          prepareReadyAt: null,
+          prepareError: null,
+          lastFallbackReason: null,
+          recoveredFromPrepareFailure: false,
+          recoveryPath: 'none',
+          recoveryError: null,
+        } as PlaybackTelemetry,
         volume: 1,
         shuffle: false as boolean,
         repeat: "none" as "none" | "one" | "all",
@@ -1037,6 +1110,7 @@ export const usePlayerStore = create<PlayerState>()(
         setPlaylist: async (playlist: TrackInfo[], startIndex: number = 0) => {
           const queuePlaylist = playlist.map((track) => cloneTrackForQueue(track));
           set({ playlist: queuePlaylist, currentIndex: startIndex });
+          persistContinuitySnapshot(true);
           if (queuePlaylist.length > 0 && startIndex < queuePlaylist.length) {
             await get().playAtIndex(startIndex);
           } else {
@@ -1051,6 +1125,7 @@ export const usePlayerStore = create<PlayerState>()(
             void castManager.appendToQueue(queueTrack);
           }
           prewarmNextFromState({ ...state, playlist: nextPlaylist });
+          queueMicrotask(() => persistContinuitySnapshot(true));
           return { playlist: nextPlaylist };
         }),
 
@@ -1063,6 +1138,7 @@ export const usePlayerStore = create<PlayerState>()(
             void castManager.insertNextInQueue(queueTrack);
           }
           prewarmNextFromState({ ...state, playlist: newPlaylist });
+          queueMicrotask(() => persistContinuitySnapshot(true));
           return { playlist: newPlaylist };
         }),
 
@@ -1090,6 +1166,7 @@ export const usePlayerStore = create<PlayerState>()(
             void castManager.removeFromQueue(removed.queueEntryId);
           }
           prewarmNextFromState({ ...state, playlist: newPlaylist, currentIndex: newIndex }, newIndex);
+          queueMicrotask(() => persistContinuitySnapshot(true));
           return { playlist: newPlaylist, currentIndex: newIndex };
         }),
 
@@ -1113,6 +1190,7 @@ export const usePlayerStore = create<PlayerState>()(
           }
 
           prewarmNextFromState({ ...state, playlist: newPlaylist, currentIndex: newIndex }, newIndex);
+          queueMicrotask(() => persistContinuitySnapshot(true));
           return { playlist: newPlaylist, currentIndex: newIndex };
         }),
 
@@ -1163,6 +1241,7 @@ export const usePlayerStore = create<PlayerState>()(
             // A newer playAtIndex call has taken over — discard this result
             if (generation !== playGeneration) return;
             set({ currentIndex: index, isBuffering: false, _scrobbleStartAt: Date.now(), _scrobbleEligible: false });
+            persistContinuitySnapshot(true);
 
             // Telemetry: record successful playback and push to session history
             get().recordPlay(track.id);
@@ -1199,15 +1278,18 @@ export const usePlayerStore = create<PlayerState>()(
 
         pause: () => {
           playbackManager.pause();
+          persistContinuitySnapshot(true);
         },
 
         resume: async () => {
           await playbackManager.resume();
+          persistContinuitySnapshot(true);
         },
 
         stop: () => {
           playbackManager.stop();
           set({ currentIndex: null, currentTime: 0, playbackState: 'stopped' });
+          persistContinuitySnapshot(true);
         },
 
         nextTrack: async () => {
@@ -1236,6 +1318,8 @@ export const usePlayerStore = create<PlayerState>()(
           // If we are more than 3 seconds in, just restart the track
           if (currentTime > 3 && currentIndex !== null) {
             playbackManager.seek(0);
+            set({ currentTime: 0 });
+            persistContinuitySnapshot(true);
             return;
           }
 
@@ -1267,6 +1351,13 @@ export const usePlayerStore = create<PlayerState>()(
         syncTimeUpdate: (time: number) => set({ currentTime: time }),
         syncDuration: (duration: number) => set({ duration }),
         syncPlaybackState: (state: PlaybackState) => set({ playbackState: state }),
+        recordPlaybackTelemetry: (telemetry: Partial<PlaybackTelemetry>) => set((state: PlayerState) => ({
+          playbackTelemetry: {
+            ...state.playbackTelemetry,
+            ...telemetry,
+            lastUpdatedAt: Date.now(),
+          },
+        })),
         
         setLastFmApiKey: (key: string) => set({ lastFmApiKey: key }),
         setLastFmSharedSecret: (secret: string) => set({ lastFmSharedSecret: secret }),
@@ -1356,13 +1447,14 @@ export const usePlayerStore = create<PlayerState>()(
         currentUser: state.currentUser,
         streamingQuality: state.streamingQuality,
         playbackDebugLogging: state.playbackDebugLogging,
-        // Persist playlist + position for cast session recovery
+        // Persist playlist and stable playback state; resume position is handled by the throttled continuity snapshot.
         playlist: state.playlist ? state.playlist.map((t: TrackInfo) => {
           const { fileHandle, ...rest } = t;
           return rest;
         }) : [],
         currentIndex: state.currentIndex,
-        currentTime: state.currentTime,
+        duration: state.duration,
+        playbackState: state.playbackState,
       }),
       onRehydrateStorage: () => (state) => {
         setPlaybackDebugLogging(state?.playbackDebugLogging === true);

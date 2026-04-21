@@ -104,7 +104,13 @@ function inferCodecString(codec: string): string {
   }
 }
 
-function inferBandwidth(quality: string): number {
+function inferBandwidth(quality: string, sourceBitrate?: number | null): number {
+  if (quality === 'source') {
+    return sourceBitrate && Number.isFinite(sourceBitrate) && sourceBitrate > 0
+      ? sourceBitrate
+      : 320000;
+  }
+
   const parsed = parseInt(quality, 10);
   if (Number.isFinite(parsed) && parsed > 0) {
     return parsed * 1000;
@@ -112,7 +118,7 @@ function inferBandwidth(quality: string): number {
   return 192000;
 }
 
-function buildMasterPlaylist(trackId: string, quality: string, codec: string, token?: string): string {
+function buildMasterPlaylist(trackId: string, quality: string, codec: string, token?: string, sourceBitrate?: number | null): string {
   const params = new URLSearchParams({
     quality,
     codec,
@@ -120,7 +126,7 @@ function buildMasterPlaylist(trackId: string, quality: string, codec: string, to
   if (token) params.set('token', token);
 
   const codecString = inferCodecString(codec);
-  const averageBandwidth = inferBandwidth(quality);
+  const averageBandwidth = inferBandwidth(quality, sourceBitrate);
   const bandwidth = Math.round(averageBandwidth * 1.15);
 
   return [
@@ -219,7 +225,8 @@ router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
 
   try {
     const token = req.query.token as string | undefined;
-    const output = buildMasterPlaylist(trackId, quality, targetCodec, token);
+    const { bitrate } = await resolveTrackForHls(trackId);
+    const output = buildMasterPlaylist(trackId, quality, targetCodec, token, bitrate);
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
     writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Served master playlist`);

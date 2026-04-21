@@ -84,6 +84,15 @@ const App: React.FC = () => {
     };
   }, []);
 
+  const continuityRestoreAttemptedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (continuityRestoreAttemptedRef.current || needsSetup !== false || !authToken || dbConnected !== true) return;
+    continuityRestoreAttemptedRef.current = true;
+    window.setTimeout(() => {
+      void playbackManager.restoreFromContinuitySnapshot();
+    }, 500);
+  }, [authToken, dbConnected, needsSetup]);
+
   const location = useLocation();
 
   // Health check function accessible from render
@@ -187,6 +196,7 @@ const App: React.FC = () => {
   const { addToast } = useToast();
   const prevOnlineRef = React.useRef(isOnline);
   const pendingUpdate = usePlayerStore(state => state.pendingUpdate);
+  const playbackState = usePlayerStore(state => state.playbackState);
 
   React.useEffect(() => {
     if (prevOnlineRef.current !== isOnline) {
@@ -198,6 +208,17 @@ const App: React.FC = () => {
       prevOnlineRef.current = isOnline;
     }
   }, [isOnline, addToast]);
+
+  const handleApplyPwaUpdate = React.useCallback(() => {
+    if (playbackState === 'playing') {
+      playbackManager.persistContinuitySnapshot();
+      addToast('Update ready. Pause playback before reloading.', 'info');
+      return;
+    }
+
+    playbackManager.persistContinuitySnapshot();
+    void applyPendingPwaUpdate();
+  }, [addToast, playbackState]);
 
   const [folderPathInput, setFolderPathInput] = React.useState('');
 
@@ -544,7 +565,7 @@ const App: React.FC = () => {
               <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">Reload to get the latest version.</p>
             </div>
             <button
-              onClick={() => applyPendingPwaUpdate()}
+              onClick={handleApplyPwaUpdate}
               className="btn btn-primary btn-sm flex items-center gap-1.5"
             >
               <RefreshCw size={14} />

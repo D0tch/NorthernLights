@@ -2,6 +2,29 @@ import React, { useState, useMemo } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useNetworkInfo } from '../../hooks/useNetworkInfo';
 
+const formatTelemetryTime = (timestamp: number | null): string => {
+    if (!timestamp) return 'No data yet';
+    return new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+};
+
+const formatLoadPath = (path: string): string => {
+    switch (path) {
+        case 'prepared-hls': return 'Prepared HLS';
+        case 'fallback-hls': return 'Fallback HLS';
+        case 'cast': return 'Cast';
+        case 'direct': return 'Direct file';
+        default: return 'None';
+    }
+};
+
+const formatRecoveryPath = (path: string): string => {
+    switch (path) {
+        case 'normal-hls-after-prepare-failure': return 'Normal HLS after prepare failure';
+        case 'normal-hls-after-promotion-failure': return 'Normal HLS after promotion failure';
+        default: return 'None';
+    }
+};
+
 export const PlaybackTab: React.FC = () => {
     const discoveryLevel = usePlayerStore(state => state.discoveryLevel);
     const genreStrictness = usePlayerStore(state => state.genreStrictness);
@@ -15,6 +38,7 @@ export const PlaybackTab: React.FC = () => {
     const setSettings = usePlayerStore(state => state.setSettings);
     const streamingQuality = usePlayerStore(state => state.streamingQuality);
     const playbackDebugLogging = usePlayerStore(state => state.playbackDebugLogging);
+    const playbackTelemetry = usePlayerStore(state => state.playbackTelemetry);
     const networkInfo = useNetworkInfo();
     
     const [playbackTab, setPlaybackTab] = useState<'streaming' | 'infinity' | 'llm'>('streaming');
@@ -90,22 +114,66 @@ export const PlaybackTab: React.FC = () => {
                         </p>
                     </div>
 
-                    <div className="mb-6 p-3 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)]">
-                        <label className="flex items-start gap-3 cursor-pointer">
-                            <input
-                                type="checkbox"
-                                checked={playbackDebugLogging}
-                                onChange={e => setSettings({ playbackDebugLogging: e.target.checked })}
-                                className="mt-1 accent-[var(--color-primary)]"
-                            />
-                            <span>
-                                <span className="block text-sm font-medium text-[var(--color-text-primary)]">Playback debug logging</span>
-                                <span className="block text-xs text-[var(--color-text-muted)] mt-1">
-                                    Shows HLS prewarm, local prebuffer, promotion, and transition-latency entries in the browser console. Warnings and errors are always shown.
-                                </span>
-                            </span>
-                        </label>
+                    <div className="mb-6 flex items-center justify-between p-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)]">
+                        <div>
+                            <p className="text-sm font-medium text-[var(--color-text-primary)]">Playback Debug Logging</p>
+                            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+                                Show HLS prewarm, local prebuffer, promotion, and transition-latency entries in the browser console.
+                            </p>
+                        </div>
+                        <button
+                            onClick={() => setSettings({ playbackDebugLogging: !playbackDebugLogging })}
+                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ml-4 ${playbackDebugLogging ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}
+                            aria-pressed={playbackDebugLogging}
+                            aria-label="Toggle playback debug logging"
+                        >
+                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${playbackDebugLogging ? 'translate-x-6' : 'translate-x-1'}`} />
+                        </button>
                     </div>
+
+                    {playbackDebugLogging && (
+                        <div className="mb-6 p-3 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)]">
+                            <p className="text-xs font-medium text-[var(--color-text-muted)] mb-2">Playback Telemetry</p>
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Last path</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">{formatLoadPath(playbackTelemetry.loadPath)}</span>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Transition</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.lastTransitionLatencyMs !== null ? `${playbackTelemetry.lastTransitionLatencyMs}ms` : 'N/A'}</span>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Prepared</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.prepareStatus}</span>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Updated</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">{formatTelemetryTime(playbackTelemetry.lastUpdatedAt)}</span>
+                                </div>
+                            </div>
+                            {playbackTelemetry.lastFallbackReason && (
+                                <p className="text-xs text-[var(--color-text-muted)] mt-2">
+                                    Fallback reason: <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.lastFallbackReason}</span>
+                                </p>
+                            )}
+                            {playbackTelemetry.recoveredFromPrepareFailure && (
+                                <p className="text-xs text-[var(--color-text-muted)] mt-2">
+                                    Recovery path: <span className="font-mono text-[var(--color-text-primary)]">{formatRecoveryPath(playbackTelemetry.recoveryPath)}</span>
+                                </p>
+                            )}
+                            {playbackTelemetry.recoveryError && (
+                                <p className="text-xs text-amber-500 mt-2">
+                                    Recovery note: <span className="font-mono">{playbackTelemetry.recoveryError}</span>
+                                </p>
+                            )}
+                            {playbackTelemetry.prepareError && (
+                                <p className="text-xs text-amber-500 mt-2">
+                                    Prepare warning: <span className="font-mono">{playbackTelemetry.prepareError}</span>
+                                </p>
+                            )}
+                        </div>
+                    )}
 
                     {/* Network info indicator */}
                     <div className="p-3 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)]">
