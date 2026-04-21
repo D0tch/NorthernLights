@@ -37,6 +37,7 @@ export const PlaybackTab: React.FC = () => {
     
     const setSettings = usePlayerStore(state => state.setSettings);
     const streamingQuality = usePlayerStore(state => state.streamingQuality);
+    const prebufferPolicy = usePlayerStore(state => state.prebufferPolicy);
     const playbackDebugLogging = usePlayerStore(state => state.playbackDebugLogging);
     const playbackTelemetry = usePlayerStore(state => state.playbackTelemetry);
     const networkInfo = useNetworkInfo();
@@ -114,6 +115,27 @@ export const PlaybackTab: React.FC = () => {
                         </p>
                     </div>
 
+                    <div className="mb-6">
+                        <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Prebuffer Policy</label>
+                        <select
+                            value={prebufferPolicy}
+                            onChange={e => setSettings({ prebufferPolicy: e.target.value as any })}
+                            className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
+                        >
+                            <option value="off">Off — No background preparation</option>
+                            <option value="conservative">Conservative — Prepare next track</option>
+                            <option value="aggressive">Aggressive — Prepare next track early</option>
+                        </select>
+                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5">
+                            {prebufferPolicy === 'off'
+                                ? 'Disables HLS prewarm and local prepared audio. Use this if a browser or device behaves badly with background preparation.'
+                                : prebufferPolicy === 'aggressive'
+                                ? 'Currently prepares the immediate next track like Conservative, reserved for deeper prebuffering once proven safe.'
+                                : 'Keeps the current stable behavior: server prewarm plus local prepared audio for the immediate next queued track.'
+                            }
+                        </p>
+                    </div>
+
                     <div className="mb-6 flex items-center justify-between p-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)]">
                         <div>
                             <p className="text-sm font-medium text-[var(--color-text-primary)]">Playback Debug Logging</p>
@@ -151,7 +173,16 @@ export const PlaybackTab: React.FC = () => {
                                     <span className="text-[var(--color-text-muted)]">Updated</span>
                                     <span className="font-mono text-[var(--color-text-primary)]">{formatTelemetryTime(playbackTelemetry.lastUpdatedAt)}</span>
                                 </div>
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Prebuffer</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.prebufferPolicy}</span>
+                                </div>
                             </div>
+                            {playbackTelemetry.prebufferSkippedReason && (
+                                <p className="text-xs text-[var(--color-text-muted)] mt-2">
+                                    Prebuffer skipped: <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.prebufferSkippedReason}</span>
+                                </p>
+                            )}
                             {playbackTelemetry.lastFallbackReason && (
                                 <p className="text-xs text-[var(--color-text-muted)] mt-2">
                                     Fallback reason: <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.lastFallbackReason}</span>

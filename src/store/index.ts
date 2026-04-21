@@ -52,6 +52,7 @@ export interface EntityInfo {
 export type PlaybackLoadPath = 'none' | 'cast' | 'direct' | 'prepared-hls' | 'fallback-hls';
 export type PlaybackPrepareStatus = 'idle' | 'preparing' | 'ready' | 'failed';
 export type PlaybackRecoveryPath = 'none' | 'normal-hls-after-prepare-failure' | 'normal-hls-after-promotion-failure';
+export type PrebufferPolicy = 'off' | 'conservative' | 'aggressive';
 
 export interface PlaybackTelemetry {
   lastUpdatedAt: number | null;
@@ -72,6 +73,8 @@ export interface PlaybackTelemetry {
   recoveredFromPrepareFailure: boolean;
   recoveryPath: PlaybackRecoveryPath;
   recoveryError: string | null;
+  prebufferPolicy: PrebufferPolicy;
+  prebufferSkippedReason: string | null;
 }
 
 export interface PlayerState {
@@ -132,6 +135,7 @@ export interface PlayerState {
   authToken: string | null; // JWT token
   streamingQuality: 'auto' | '64k' | '128k' | '160k' | '320k' | 'source';
   playbackDebugLogging: boolean;
+  prebufferPolicy: PrebufferPolicy;
 
   // Current User State
   currentUser: { id: string; username: string; role: string } | null;
@@ -387,9 +391,11 @@ export const usePlayerStore = create<PlayerState>()(
         castManager.addStateChangeListener((castState) => {
           set({ castConnected: castState === 'CONNECTED' });
           const state = get();
-          preloadManager.prewarmNext(state.playlist, state.currentIndex, state.streamingQuality, {
-            castConnected: castState === 'CONNECTED',
-          });
+          if (state.prebufferPolicy !== 'off') {
+            preloadManager.prewarmNext(state.playlist, state.currentIndex, state.streamingQuality, {
+              castConnected: castState === 'CONNECTED',
+            });
+          }
         });
       }, 0);
 
@@ -397,6 +403,17 @@ export const usePlayerStore = create<PlayerState>()(
         const nextIndex = currentIndex !== null ? currentIndex + 1 : null;
         const nextTrack = nextIndex !== null ? state.playlist[nextIndex] : null;
         const isActuallyCasting = castManager.isConnected();
+        if (state.prebufferPolicy === 'off') {
+          playbackManager.clearPreparedAudio();
+          get().recordPlaybackTelemetry({
+            prepareStatus: 'idle',
+            preparedTrackTitle: null,
+            preparedTrackArtist: null,
+            prebufferPolicy: state.prebufferPolicy,
+            prebufferSkippedReason: 'policy-off',
+          });
+          return;
+        }
         preloadManager.prewarmNext(state.playlist, currentIndex, state.streamingQuality, {
           castConnected: isActuallyCasting,
         });
@@ -478,6 +495,8 @@ export const usePlayerStore = create<PlayerState>()(
           recoveredFromPrepareFailure: false,
           recoveryPath: 'none',
           recoveryError: null,
+          prebufferPolicy: 'conservative',
+          prebufferSkippedReason: null,
         } as PlaybackTelemetry,
         volume: 1,
         shuffle: false as boolean,
@@ -499,6 +518,7 @@ export const usePlayerStore = create<PlayerState>()(
         authToken: null as string | null,
         streamingQuality: 'auto' as 'auto' | '64k' | '128k' | '160k' | '320k' | 'source',
         playbackDebugLogging: false as boolean,
+        prebufferPolicy: 'conservative' as PrebufferPolicy,
         currentUser: null as { id: string; username: string; role: string } | null,
 
         // Last.fm scrobble state
@@ -625,9 +645,23 @@ export const usePlayerStore = create<PlayerState>()(
 
         setSettings: (settings: Partial<PlayerState>) => {
           const previousStreamingQuality = get().streamingQuality;
+          const previousPrebufferPolicy = get().prebufferPolicy;
           set((state: PlayerState) => ({ ...state, ...settings }));
           if (settings.playbackDebugLogging !== undefined) {
             setPlaybackDebugLogging(settings.playbackDebugLogging);
+          }
+          if (settings.prebufferPolicy && settings.prebufferPolicy !== previousPrebufferPolicy) {
+            playbackManager.clearPreparedAudio();
+            get().recordPlaybackTelemetry({
+              prepareStatus: 'idle',
+              preparedTrackTitle: null,
+              preparedTrackArtist: null,
+              prebufferPolicy: settings.prebufferPolicy,
+              prebufferSkippedReason: settings.prebufferPolicy === 'off' ? 'policy-off' : null,
+            });
+            if (settings.prebufferPolicy !== 'off') {
+              prewarmNextFromState(get());
+            }
           }
           if (settings.streamingQuality && settings.streamingQuality !== previousStreamingQuality) {
             playbackManager.clearPreparedAudio();
@@ -1449,6 +1483,7 @@ export const usePlayerStore = create<PlayerState>()(
         currentUser: state.currentUser,
         streamingQuality: state.streamingQuality,
         playbackDebugLogging: state.playbackDebugLogging,
+        prebufferPolicy: state.prebufferPolicy,
         // Persist playlist and stable playback state; resume position is handled by the throttled continuity snapshot.
         playlist: state.playlist ? state.playlist.map((t: TrackInfo) => {
           const { fileHandle, ...rest } = t;

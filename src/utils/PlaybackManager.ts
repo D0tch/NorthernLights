@@ -404,6 +404,8 @@ class PlaybackManager {
                     recoveredFromPrepareFailure: false,
                     recoveryPath: 'none',
                     recoveryError: null,
+                    prebufferPolicy: usePlayerStore.getState().prebufferPolicy,
+                    prebufferSkippedReason: null,
                 });
                 // Pass both URLs — CastManager picks based on receiver mode
                 await castManager.castMedia(effectiveHlsUrl, rawUrl, this.currentTitle, this.currentArtist, this.currentArtUrl || undefined, album, format);
@@ -428,6 +430,8 @@ class PlaybackManager {
                             recoveredFromPrepareFailure: true,
                             recoveryPath: 'normal-hls-after-promotion-failure',
                             recoveryError,
+                            prebufferPolicy: usePlayerStore.getState().prebufferPolicy,
+                            prebufferSkippedReason: null,
                         });
                         await this.playHls(effectiveHlsUrl);
                     }
@@ -444,6 +448,8 @@ class PlaybackManager {
                     recoveredFromPrepareFailure: !!prepareFailureReason,
                     recoveryPath: prepareFailureReason ? 'normal-hls-after-prepare-failure' : 'none',
                     recoveryError: prepareFailureReason,
+                    prebufferPolicy: usePlayerStore.getState().prebufferPolicy,
+                    prebufferSkippedReason: null,
                 });
                 await this.playHls(effectiveHlsUrl);
                 if (prepareFailureReason) {
@@ -474,6 +480,8 @@ class PlaybackManager {
                 recoveredFromPrepareFailure: false,
                 recoveryPath: 'none',
                 recoveryError: null,
+                prebufferPolicy: usePlayerStore.getState().prebufferPolicy,
+                prebufferSkippedReason: null,
             });
             this.ensureAudioContext();
         } catch (error) {
@@ -511,6 +519,8 @@ class PlaybackManager {
                 recoveredFromPrepareFailure: false,
                 recoveryPath: 'none',
                 recoveryError: null,
+                prebufferPolicy: usePlayerStore.getState().prebufferPolicy,
+                prebufferSkippedReason: null,
             });
 
             const nextAudio = this.createAudioElement();
@@ -795,6 +805,8 @@ class PlaybackManager {
             recoveredFromPrepareFailure: false,
             recoveryPath: 'none',
             recoveryError: null,
+            prebufferPolicy: usePlayerStore.getState().prebufferPolicy,
+            prebufferSkippedReason: null,
         });
         await this.safePlay();
     }
