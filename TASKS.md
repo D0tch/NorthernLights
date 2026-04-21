@@ -3,6 +3,7 @@
 ## Current Status
 The core music player architecture has transitioned to a client-server model using Node.js and PostgreSQL. The UI has been polished with a premium "Matte Glass" aesthetic and responsive library views.
 Chromecast HLS hardening is in progress as of 2026-04-20, focused on deterministic AAC casting, CAF request instrumentation, and stricter HLS playlist/session behavior for custom receivers.
+PWA low-risk hardening completed on 2026-04-21: Workbox runtime caching now prioritizes HLS/audio/art routes before the generic API route, authenticated API requests are network-only by default, service worker updates use the existing prompt banner instead of forced auto-update reloads, and the Google Cast SDK no longer blocks initial HTML parsing.
 
 ## Milestone Completion History
 - [x] **v0.0.2: Core Player**: Basic playback, volume, and progress bar with persistence.
@@ -82,6 +83,11 @@ Chromecast HLS hardening is in progress as of 2026-04-20, focused on determinist
   - **Runtime Quality Honor**: Browser HLS and Chromecast now rewrite HLS URLs at playback time to use the latest `streamingQuality` setting, avoiding stale queue URLs after settings changes. `source` remains browser-first; true lossless casting is still pending a dedicated fMP4-capable Cast path.
   - **Dynamic Cast Queue Mutations**: Added stable per-queue entry IDs and sender-side Cast queue sync so `Play Next`, appends, removals, reorders, repeat-mode changes, and in-queue track jumps operate against the active Cast media session instead of reloading playback from scratch.
   - **Premium Receiver UI Refresh**: Replaced the generic visible CAF player chrome in `public/receiver.html` with a minimal Aurora-branded TV overlay that keeps the existing dark aurora palette, Syne/DM Sans typography, matte-glass surfaces, soft glass borders, blurred artwork backdrop, live progress, and a compact `Up Next` strip driven by CAF `PlayerManager` and `QueueManager`.
+- [x] **V18.3: PWA Low-Risk Hardening** (2026-04-21):
+  - **Workbox Route Ordering**: Moved HLS segment, HLS playlist, and album-art runtime caching ahead of the generic `/api/` route so media requests reach their intended cache policies.
+  - **Authenticated API Safety**: Replaced the broad `NetworkFirst` API cache with `NetworkOnly` for remaining `/api/` requests to avoid replaying stale or wrong-user auth/library/admin data from Cache Storage.
+  - **Prompt-Controlled Updates**: Switched vite-plugin-pwa registration from `autoUpdate` to `prompt` and wired the existing update banner to apply the waiting service worker instead of blindly reloading.
+  - **Non-Blocking Cast SDK**: Added async loading for the Google Cast sender SDK so slow or offline `gstatic.com` access does not block initial app shell parsing.
 
 
 ---
@@ -91,6 +97,7 @@ Chromecast HLS hardening is in progress as of 2026-04-20, focused on determinist
 ### Architecture & Refactoring
 - [ ] Refactor `LibraryTab.tsx` and other monolithic UI components to isolate API layers into a `features/api` structure and adopt `React.Suspense` driven fetching according to the frontend-dev-guidelines.
 - [ ] **fMP4 Container Support for Lossless HLS**: Use `-f hls -hls_segment_type fmp4` for FLAC/ALAC sources to enable lossless streaming over HLS. Requires browser + Shaka fMP4 support detection. Not needed for Chromecast (AAC-in-MPEG-TS is sufficient). Also update `scanTrack.ts` to store `metadata.format.codec` over `metadata.format.container` (prefer codec) to accurately distinguish ALAC from AAC in M4A containers.
+- [ ] **Explicit Offline-Save Audio Flow**: Add intentional "available offline" support for tracks/playlists instead of relying on incidental HLS playback caching. Fetch and cache all HLS playlist/segment URLs, persist offline availability metadata in IndexedDB, show offline badges/status in the UI, estimate quota via `navigator.storage.estimate()`, and provide cleanup controls for downloaded audio.
 
 ### Core Features
 - [x] Create App entrypoint - wire up store initialization from IndexedDB on load

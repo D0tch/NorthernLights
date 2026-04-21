@@ -7,7 +7,7 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      registerType: 'prompt',
       injectRegister: 'auto',
       manifest: {
         name: 'NorthernLights',
@@ -66,14 +66,39 @@ export default defineConfig({
       workbox: {
         runtimeCaching: [
           {
-            // API calls — relative /api/ paths (works in both dev proxy and prod Express)
-            urlPattern: /\/api\//,
+            // HLS transport stream segments — immutable chunks used by browser playback.
+            urlPattern: /\/api\/stream\/.*\.ts(\?.*)?$/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'nl-audio-chunks-v1',
+              expiration: { maxEntries: 2000, maxAgeSeconds: 604800 }, // 7 days
+              cacheableResponse: { statuses: [0, 200] }
+            }
+          },
+          {
+            // HLS playlists stay fresh when online, with cache fallback for previously played tracks.
+            urlPattern: /\/api\/stream\/.*\.m3u8(\?.*)?$/i,
             handler: 'NetworkFirst',
             options: {
-              cacheName: 'api-cache',
+              cacheName: 'nl-audio-playlists-v1',
               expiration: { maxEntries: 200, maxAgeSeconds: 86400 },
               cacheableResponse: { statuses: [0, 200] }
             }
+          },
+          {
+            // Album art cache (kept from legacy media-cache)
+            urlPattern: /\/api\/art(\?.*)?$/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'media-cache',
+              expiration: { maxEntries: 500, maxAgeSeconds: 2592000 }, // 30 days
+              cacheableResponse: { statuses: [0, 200] }
+            }
+          },
+          {
+            // Keep authenticated/user-specific API data out of Cache Storage.
+            urlPattern: /\/api\//,
+            handler: 'NetworkOnly'
           },
           {
             urlPattern: /\.(?:png|jpg|jpeg|gif|webp|avif)$/,
@@ -97,36 +122,6 @@ export default defineConfig({
             options: {
               cacheName: 'google-fonts-webfonts',
               expiration: { maxEntries: 30, maxAgeSeconds: 31536000 },
-              cacheableResponse: { statuses: [0, 200] }
-            }
-          },
-          {
-            // HLS transport stream segments — immutable, cache-first for offline playback
-            urlPattern: /\/api\/stream\/.*\.ts(\?.*)?$/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'nl-audio-chunks-v1',
-              expiration: { maxEntries: 2000, maxAgeSeconds: 604800 }, // 7 days
-              cacheableResponse: { statuses: [0, 200] }
-            }
-          },
-          {
-            // HLS playlists — NetworkFirst so they're always fresh, with cache fallback for offline
-            urlPattern: /\/api\/stream\/.*\.m3u8(\?.*)?$/i,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'nl-audio-playlists-v1',
-              expiration: { maxEntries: 200, maxAgeSeconds: 86400 },
-              cacheableResponse: { statuses: [0, 200] }
-            }
-          },
-          {
-            // Album art cache (kept from legacy media-cache)
-            urlPattern: /\/api\/art(\?.*)?$/i,
-            handler: 'CacheFirst',
-            options: {
-              cacheName: 'media-cache',
-              expiration: { maxEntries: 500, maxAgeSeconds: 2592000 }, // 30 days
               cacheableResponse: { statuses: [0, 200] }
             }
           }

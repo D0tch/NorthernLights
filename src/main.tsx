@@ -7,17 +7,19 @@ import './index.css';
 import { createBuffer } from './polyfills/buffer';
 import { registerSW } from 'virtual:pwa-register';
 import { usePlayerStore } from './store';
+import { setPwaUpdateHandler } from './utils/pwaUpdate';
 
 // Initialize Buffer polyfill for music-metadata-browser
 createBuffer();
 
 // Register the PWA service worker
-registerSW({
+const updateServiceWorker = registerSW({
   immediate: true,
   onNeedRefresh() {
     usePlayerStore.getState().setPendingUpdate(true);
   },
 });
+setPwaUpdateHandler(() => updateServiceWorker(true));
 
 interface ErrorBoundaryState {
   hasError: boolean;

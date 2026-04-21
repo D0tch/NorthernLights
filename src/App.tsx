@@ -29,6 +29,7 @@ import { useSSE } from './hooks/useSSE';
 import { useToast } from './hooks/useToast';
 import { playbackManager } from './utils/PlaybackManager';
 import { GlobalScanningIndicator } from './components/GlobalScanningIndicator';
+import { applyPendingPwaUpdate } from './utils/pwaUpdate';
 
 const TAB_CONFIG = [
   { path: '/library', label: 'Hub', end: true },
@@ -543,7 +544,7 @@ const App: React.FC = () => {
               <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">Reload to get the latest version.</p>
             </div>
             <button
-              onClick={() => window.location.reload()}
+              onClick={() => applyPendingPwaUpdate()}
               className="btn btn-primary btn-sm flex items-center gap-1.5"
             >
               <RefreshCw size={14} />
