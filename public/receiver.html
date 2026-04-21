@@ -607,10 +607,27 @@
       var MAX_LINES = 80;
       var currentAuthToken = '';
       var currentPlayerState = 'IDLE';
+      var lastRender = {
+        title: '',
+        artist: '',
+        album: '',
+        imageUrl: '',
+        currentSecond: -1,
+        durationSecond: -1,
+        progressBucket: -1,
+        statusCopy: '',
+        queueKey: ''
+      };
 
       function log(level, tag, msg) {
         var ts = ((performance.now() / 1000).toFixed(1));
         var cls = level === 'error' ? 'err' : level === 'warn' ? 'warn' : 'ok';
+        var panelHidden = !ui.debugPanel || ui.debugPanel.classList.contains('is-hidden');
+
+        // Keep OK-level request chatter out of the DOM unless the panel is open.
+        // DOM logging on Cast devices is surprisingly expensive and can stall the receiver UI.
+        if (panelHidden && level === 'ok') return;
+
         var line = document.createElement('div');
         line.className = cls;
         line.textContent = '[' + ts + 's] [' + tag + '] ' + msg;
@@ -715,6 +732,9 @@
       }
 
       function setArtwork(imageUrl, title) {
+        if (lastRender.imageUrl === imageUrl) return;
+        lastRender.imageUrl = imageUrl;
+
         if (imageUrl) {
           ui.coverArt.src = imageUrl;
           ui.coverArt.style.display = 'block';
@@ -737,11 +757,27 @@
         return 'Idle';
       }
 
+      function buildQueueKey(items, currentIndex) {
+        var parts = [String(currentIndex), String(items.length)];
+        for (var i = currentIndex + 1; i < items.length && parts.length < 8; i += 1) {
+          var mediaInfo = items[i].media || {};
+          var metadata = getMetadata(mediaInfo);
+          parts.push(String(items[i].itemId || i));
+          parts.push(metadata.title || '');
+          parts.push(metadata.artist || '');
+        }
+        return parts.join('|');
+      }
+
       function renderQueue() {
         var items = queueManager ? queueManager.getItems() : [];
         var currentIndex = queueManager ? queueManager.getCurrentItemIndex() : -1;
+        var queueKey = buildQueueKey(items, currentIndex);
         var nextItems = [];
         var i;
+
+        if (lastRender.queueKey === queueKey) return;
+        lastRender.queueKey = queueKey;
 
         for (i = currentIndex + 1; i < items.length && nextItems.length < 3; i += 1) {
           nextItems.push(items[i]);
@@ -773,7 +809,7 @@
         });
       }
 
-      function syncUi() {
+      function syncUi(force) {
         var mediaInfo = playerManager.getMediaInformation();
         var title = getDisplayTitle(mediaInfo);
         var artist = getDisplayArtist(mediaInfo);
@@ -783,21 +819,46 @@
         var duration = playerManager.getDurationSec ? playerManager.getDurationSec() : NaN;
         var progress = (!isFinite(duration) || duration <= 0) ? 0 : clamp((currentTime / duration) * 100, 0, 100);
         var statusCopy = getStatusCopy();
+        var currentSecond = Math.floor(currentTime || 0);
+        var durationSecond = Math.floor(duration || 0);
+        var progressBucket = Math.floor(progress * 4); // quarter-percent buckets
 
-        ui.title.textContent = title || 'Aurora Receiver';
-        ui.artist.textContent = artist || 'Waiting for media';
-        ui.album.textContent = album || 'Start casting from Aurora.';
-        ui.currentTime.textContent = formatTime(currentTime);
-        ui.durationTime.textContent = formatTime(duration);
-        ui.progressBar.style.setProperty('--progress', progress.toFixed(2) + '%');
-        ui.statusChip.textContent = statusCopy;
-        ui.metaKicker.textContent = statusCopy === 'Playing'
-          ? 'Now streaming'
-          : statusCopy === 'Buffering'
-            ? 'Buffering'
-            : statusCopy === 'Paused'
-              ? 'Paused'
-              : 'Ready';
+        if (force || lastRender.title !== title) {
+          ui.title.textContent = title || 'Aurora Receiver';
+          lastRender.title = title;
+        }
+        if (force || lastRender.artist !== artist) {
+          ui.artist.textContent = artist || 'Waiting for media';
+          lastRender.artist = artist;
+        }
+        if (force || lastRender.album !== album) {
+          ui.album.textContent = album || 'Start casting from Aurora.';
+          lastRender.album = album;
+        }
+
+        if (force || lastRender.currentSecond !== currentSecond) {
+          ui.currentTime.textContent = formatTime(currentTime);
+          lastRender.currentSecond = currentSecond;
+        }
+        if (force || lastRender.durationSecond !== durationSecond) {
+          ui.durationTime.textContent = formatTime(duration);
+          lastRender.durationSecond = durationSecond;
+        }
+        if (force || lastRender.progressBucket !== progressBucket) {
+          ui.progressBar.style.setProperty('--progress', progress.toFixed(2) + '%');
+          lastRender.progressBucket = progressBucket;
+        }
+        if (force || lastRender.statusCopy !== statusCopy) {
+          ui.statusChip.textContent = statusCopy;
+          ui.metaKicker.textContent = statusCopy === 'Playing'
+            ? 'Now streaming'
+            : statusCopy === 'Buffering'
+              ? 'Buffering'
+              : statusCopy === 'Paused'
+                ? 'Paused'
+                : 'Ready';
+          lastRender.statusCopy = statusCopy;
+        }
 
         setArtwork(imageUrl, title);
         renderQueue();
@@ -823,7 +884,7 @@
 
       context.addEventListener(cast.framework.system.EventType.READY, function() {
         logAndPost('ok', LOG_TAG, 'Receiver started — forced codec: ' + FORCED_CAST_CODEC);
-        syncUi();
+        syncUi(true);
       });
 
       context.addEventListener(cast.framework.system.EventType.ERROR, function(e) {
@@ -869,7 +930,8 @@
           }
 
           currentPlayerState = 'LOADING';
-          syncUi();
+          lastRender.queueKey = '';
+          syncUi(true);
           return loadRequestData;
         }
       );
@@ -894,7 +956,7 @@
           currentPlayerState = 'IDLE';
           setDebugVisible(true);
           logAndPost('error', LOG_TAG, 'Player error: ' + decodeError(e));
-          syncUi();
+          syncUi(true);
         }
       );
 
@@ -903,7 +965,7 @@
         function(e) {
           currentPlayerState = e.isBuffering ? 'BUFFERING' : currentPlayerState;
           logAndPost('ok', LOG_TAG, 'Buffering: ' + e.isBuffering);
-          syncUi();
+          syncUi(true);
         }
       );
 
@@ -914,12 +976,15 @@
             currentPlayerState = e.mediaStatus.playerState || currentPlayerState;
             logAndPost('ok', LOG_TAG, 'State: ' + e.mediaStatus.playerState +
               (e.mediaStatus.idleReason ? ' (' + e.mediaStatus.idleReason + ')' : ''));
-            syncUi();
+            lastRender.queueKey = '';
+            syncUi(true);
           }
         }
       );
 
-      setInterval(syncUi, 500);
+      setInterval(function() {
+        syncUi(false);
+      }, 1000);
 
       logAndPost('ok', LOG_TAG, 'Starting receiver...');
       context.start({ playbackConfig: playbackConfig });
