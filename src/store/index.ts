@@ -5,6 +5,7 @@ import { extractMetadata } from '../utils/fileSystem';
 import { playbackManager, PlaybackState } from '../utils/PlaybackManager';
 import { castManager } from '../utils/CastManager';
 import { cloneTrackForQueue, ensureQueueEntryIds } from '../utils/queue';
+import { preloadManager } from '../utils/PreloadManager';
 
 import { clearExternalCache } from '../utils/externalImagery';
 import type { ToastType } from '../components/Toast';
@@ -349,8 +350,18 @@ export const usePlayerStore = create<PlayerState>()(
       setTimeout(() => {
         castManager.addStateChangeListener((castState) => {
           set({ castConnected: castState === 'CONNECTED' });
+          const state = get();
+          preloadManager.prewarmNext(state.playlist, state.currentIndex, state.streamingQuality, {
+            castConnected: castState === 'CONNECTED',
+          });
         });
       }, 0);
+
+      const prewarmNextFromState = (state: PlayerState, currentIndex: number | null = state.currentIndex) => {
+        preloadManager.prewarmNext(state.playlist, currentIndex, state.streamingQuality, {
+          castConnected: state.castConnected || castManager.isConnected(),
+        });
+      };
 
       return {
         // Initial State
@@ -524,6 +535,9 @@ export const usePlayerStore = create<PlayerState>()(
 
         setSettings: (settings: Partial<PlayerState>) => {
           set((state: PlayerState) => ({ ...state, ...settings }));
+          if (settings.streamingQuality) {
+            prewarmNextFromState(get());
+          }
         },
 
         loadSettings: async () => {
@@ -1012,10 +1026,12 @@ export const usePlayerStore = create<PlayerState>()(
 
         addTrackToPlaylist: (track: TrackInfo) => set((state: PlayerState) => {
           const queueTrack = cloneTrackForQueue(track);
+          const nextPlaylist = [...state.playlist, queueTrack];
           if (castManager.isConnected()) {
             void castManager.appendToQueue(queueTrack);
           }
-          return { playlist: [...state.playlist, queueTrack] };
+          prewarmNextFromState({ ...state, playlist: nextPlaylist });
+          return { playlist: nextPlaylist };
         }),
 
         playNext: (track: TrackInfo) => set((state: PlayerState) => {
@@ -1026,6 +1042,7 @@ export const usePlayerStore = create<PlayerState>()(
           if (castManager.isConnected()) {
             void castManager.insertNextInQueue(queueTrack);
           }
+          prewarmNextFromState({ ...state, playlist: newPlaylist });
           return { playlist: newPlaylist };
         }),
 
@@ -1052,6 +1069,7 @@ export const usePlayerStore = create<PlayerState>()(
           if (castManager.isConnected() && removed?.queueEntryId) {
             void castManager.removeFromQueue(removed.queueEntryId);
           }
+          prewarmNextFromState({ ...state, playlist: newPlaylist, currentIndex: newIndex }, newIndex);
           return { playlist: newPlaylist, currentIndex: newIndex };
         }),
 
@@ -1074,6 +1092,7 @@ export const usePlayerStore = create<PlayerState>()(
             void castManager.moveQueueItem(moved.queueEntryId, toIndex);
           }
 
+          prewarmNextFromState({ ...state, playlist: newPlaylist, currentIndex: newIndex }, newIndex);
           return { playlist: newPlaylist, currentIndex: newIndex };
         }),
 
@@ -1148,6 +1167,7 @@ export const usePlayerStore = create<PlayerState>()(
 
             // Pre-fetch infinite track if bounds are reached
             get().ensureInfinityQueue();
+            prewarmNextFromState(get(), index);
           } catch (e) {
             // A newer playAtIndex call has taken over — don't chain into nextTrack
             if (generation !== playGeneration) return;

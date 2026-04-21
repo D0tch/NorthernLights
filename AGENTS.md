@@ -175,12 +175,13 @@ The scanner indicator in `App.tsx` must use reactive Zustand subscriptions for `
 - `fetchGenreImage(genre)`, `fetchArtistData(artist)`, `fetchAlbumImage(album, artist)` — External image lookup from `externalImagery.ts`.
 - `streaming.ts` — Runtime HLS URL rewriting based on `streamingQuality`; used at actual playback/cast time so browser and Chromecast honor current settings instead of stale queued URLs.
 - `queue.ts` — Sender-side queue identity helpers. Generates stable `queueEntryId` values for the active play queue so local queue actions can be mirrored onto an active Cast session without full reloads.
+- `PreloadManager.ts` — Lightweight next-track HLS prewarm manager. Watches store-driven queue changes and POSTs to the backend prewarm endpoint for the next queued item only; deduplicates in-flight/completed prewarms to avoid waste.
 - `CastManager` — Singleton Google Cast (Chromecast) manager. Handles cast context init, media loading, `LoadRequest + queueData` queue bootstrap, play/pause/seek/volume routing, runtime queue mutation (`Play Next`, append, remove, reorder, repeat sync), and custom receiver routing. Used by `PlaybackManager` to delegate controls when cast-connected.
 - `PlaybackManager` — Singleton audio playback manager. Routes play/pause/seek to local `HTMLAudioElement` or `CastManager` depending on connection state.
 
 ## Chromecast / HLS Architecture
 - `public/receiver.html` — Custom CAF receiver. Uses `PlaybackConfig` request handlers for manifest/segment auth, persistent receiver debug logging, Aurora-branded TV overlay UI, queue-aware `Up Next` rendering, and forced AAC HLS playback for deterministic Chromecast compatibility.
-- `server/routes/media.routes.ts` — HLS entrypoints. Serves a master playlist at `/api/stream/:trackId/playlist.m3u8`, a media playlist at `/api/stream/:trackId/media.m3u8`, exact-session MPEG-TS segments, and the `/api/cast/log` receiver log ingestion endpoint.
+- `server/routes/media.routes.ts` — HLS entrypoints. Serves a master playlist at `/api/stream/:trackId/playlist.m3u8`, a media playlist at `/api/stream/:trackId/media.m3u8`, exact-session MPEG-TS segments, `POST /api/stream/:trackId/prewarm` for next-track session preparation, and the `/api/cast/log` receiver log ingestion endpoint.
 - `server/services/hlsStream.service.ts` — FFmpeg-backed HLS session generation with per-session temp dirs, playlist readiness thresholds, playlist validation, first-segment probing, and session logging.
 - `server/services/debugLogger.service.ts` — File-backed diagnostics writer for `logs/hls-server.log`, `logs/cast-receiver.log`, and `logs/hls-sessions/*.log`.
 - Current Cast constraint: Chromecast custom receiver path is intentionally pinned to AAC-in-HLS for reliability. Browser HLS may use higher/source qualities; true lossless Cast remains future fMP4 work and should not replace the stable AAC Cast path casually.

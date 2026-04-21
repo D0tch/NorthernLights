@@ -17,6 +17,7 @@ import { writeCastReceiverLog, writeHlsServerLog, writeHlsSessionLog } from '../
 const router = Router();
 const HLS_SEGMENT_LINE = /^(segment\d+\.ts)$/gm;
 const HLS_MEDIA_PLAYLIST_NAME = 'media.m3u8';
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 // Mime type map
 const MIME_TYPES: Record<string, string> = {
@@ -35,7 +36,7 @@ const setCorsHeaders = (req: any, res: any) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
   res.setHeader('Access-Control-Allow-Credentials', 'true');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS, HEAD');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, HEAD');
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
   res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range');
 };
@@ -141,6 +142,61 @@ function rewriteMediaPlaylistSegments(playlist: string, quality: string, codec: 
   );
 }
 
+async function resolveTrackForHls(trackId: string): Promise<{
+  fileBuf: Buffer;
+  bitrate: number | null;
+  sourceFormat: string | null;
+}> {
+  let fileBuf: Buffer;
+  let bitrate: number | null = null;
+  let sourceFormat: string | null = null;
+
+  if (UUID_REGEX.test(trackId)) {
+    const db = await initDB();
+    const result = await db.query('SELECT path, bitrate, format FROM tracks WHERE id = $1', [trackId]);
+    if (result.rows.length === 0) {
+      const err = new Error('Track not found') as Error & { status?: number };
+      err.status = 404;
+      throw err;
+    }
+    fileBuf = pathToBuffer(result.rows[0].path);
+    bitrate = result.rows[0].bitrate;
+    sourceFormat = result.rows[0].format;
+  } else {
+    const dbPath = Buffer.from(decodeURIComponent(trackId), 'base64').toString();
+    fileBuf = pathToBuffer(dbPath);
+
+    try {
+      const db = await initDB();
+      const result = await db.query('SELECT bitrate, format FROM tracks WHERE path = $1', [dbPath]);
+      if (result.rows.length > 0) {
+        bitrate = result.rows[0].bitrate;
+        sourceFormat = result.rows[0].format;
+      }
+    } catch { /* non-critical */ }
+  }
+
+  return { fileBuf, bitrate, sourceFormat };
+}
+
+function normalizeTargetCodec(codec: string, quality: string): string {
+  if ((codec === 'ac3' || codec === 'eac3') && quality !== 'source' && parseInt(quality, 10) < 256) {
+    console.log(`[HLS] Overriding ${codec} → AAC (${quality} too low for AC-3)`);
+    return 'aac';
+  }
+  return codec;
+}
+
+async function ensureHlsSessionForRequest(trackId: string, quality: string, targetCodec: string) {
+  const { fileBuf, bitrate, sourceFormat } = await resolveTrackForHls(trackId);
+  const codec = normalizeTargetCodec(targetCodec, quality);
+  await getOrCreateHlsSession(trackId, fileBuf, quality, bitrate, sourceFormat, codec);
+  return {
+    codec,
+    sessionInfo: getSessionInfo(trackId, quality, codec),
+  };
+}
+
 router.post('/cast/log', (req, res) => {
   const source = typeof req.body?.source === 'string' ? req.body.source : 'receiver';
   const level = typeof req.body?.level === 'string' ? req.body.level : 'info';
@@ -191,44 +247,9 @@ router.all('/stream/:trackId/media.m3u8', async (req, res) => {
   let targetCodec = (req.query.codec as string) || 'aac';
 
   try {
-    let fileBuf: Buffer;
-    let bitrate: number | null = null;
-    let sourceFormat: string | null = null;
-
-    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-    if (uuidRegex.test(trackId)) {
-      const db = await initDB();
-      const result = await db.query('SELECT path, bitrate, format FROM tracks WHERE id = $1', [trackId]);
-      if (result.rows.length === 0) {
-        return res.status(404).send('Track not found');
-      }
-      fileBuf = pathToBuffer(result.rows[0].path);
-      bitrate = result.rows[0].bitrate;
-      sourceFormat = result.rows[0].format;
-    } else {
-      const dbPath = Buffer.from(decodeURIComponent(trackId), 'base64').toString();
-      fileBuf = pathToBuffer(dbPath);
-
-      try {
-        const db = await initDB();
-        const result = await db.query('SELECT bitrate, format FROM tracks WHERE path = $1', [dbPath]);
-        if (result.rows.length > 0) {
-          bitrate = result.rows[0].bitrate;
-          sourceFormat = result.rows[0].format;
-        }
-      } catch { /* non-critical */ }
-    }
-
-    if (targetCodec === 'ac3' || targetCodec === 'eac3') {
-      if (quality !== 'source' && parseInt(quality) < 256) {
-        console.log(`[HLS] Overriding ${targetCodec} → AAC (${quality} too low for AC-3)`);
-        targetCodec = 'aac';
-      }
-    }
-
-    await getOrCreateHlsSession(trackId, fileBuf, quality, bitrate, sourceFormat, targetCodec);
-    const sessionInfo = getSessionInfo(trackId, quality, targetCodec);
+    const ensured = await ensureHlsSessionForRequest(trackId, quality, targetCodec);
+    targetCodec = ensured.codec;
+    const sessionInfo = ensured.sessionInfo;
 
     if (!sessionInfo || !fs.existsSync(sessionInfo.playlistPath)) {
       writeHlsServerLog(`[media-playlist ${trackId} ${quality} ${targetCodec}] Session ready but playlist path missing`);
@@ -258,10 +279,63 @@ router.all('/stream/:trackId/media.m3u8', async (req, res) => {
     if (!res.headersSent) {
       if (err?.code === 'ENOENT' || err?.message?.includes('ENOENT')) {
         res.status(501).send('FFmpeg not installed — HLS streaming unavailable');
+      } else if (err?.status === 404) {
+        res.status(404).send('Track not found');
       } else {
         res.status(500).send('HLS streaming error');
       }
     }
+  }
+});
+
+router.all('/stream/:trackId/prewarm', async (req, res) => {
+  setCorsHeaders(req, res);
+  if (req.method === 'OPTIONS') return res.sendStatus(204);
+  if (req.method !== 'POST' && req.method !== 'HEAD') {
+    res.setHeader('Allow', 'POST, HEAD, OPTIONS');
+    return res.status(405).send('Method not allowed');
+  }
+
+  const { trackId } = req.params;
+  const quality = (req.query.quality as string) || '128k';
+  let targetCodec = (req.query.codec as string) || 'aac';
+
+  try {
+    const ensured = await ensureHlsSessionForRequest(trackId, quality, targetCodec);
+    targetCodec = ensured.codec;
+    const sessionInfo = ensured.sessionInfo;
+
+    if (!sessionInfo || !fs.existsSync(sessionInfo.playlistPath)) {
+      writeHlsServerLog(`[prewarm ${trackId} ${quality} ${targetCodec}] Session ready but playlist path missing`);
+      return res.status(500).json({ ok: false, error: 'HLS prewarm failed' });
+    }
+
+    touchSession(trackId, quality, targetCodec);
+    writeHlsServerLog(`[prewarm ${trackId} ${quality} ${targetCodec}] Ready with ${sessionInfo.segmentCount} segments; finished=${sessionInfo.finished}`);
+    writeHlsSessionLog(trackId, quality, targetCodec, `Prewarm ready: segments=${sessionInfo.segmentCount}; finished=${sessionInfo.finished}`);
+
+    if (req.method === 'HEAD') {
+      return res.sendStatus(204);
+    }
+
+    res.json({
+      ok: true,
+      trackId,
+      quality,
+      codec: targetCodec,
+      segmentCount: sessionInfo.segmentCount,
+      finished: sessionInfo.finished,
+    });
+  } catch (err: any) {
+    console.error('[HLS] Prewarm error:', err?.message || err);
+    writeHlsServerLog(`[prewarm ${trackId} ${quality} ${targetCodec}] Error: ${err?.message || String(err)}`);
+    if (err?.code === 'ENOENT' || err?.message?.includes('ENOENT')) {
+      return res.status(501).json({ ok: false, error: 'FFmpeg not installed — HLS streaming unavailable' });
+    }
+    if (err?.status === 404) {
+      return res.status(404).json({ ok: false, error: 'Track not found' });
+    }
+    res.status(500).json({ ok: false, error: 'HLS prewarm error' });
   }
 });
 
