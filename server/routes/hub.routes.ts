@@ -43,12 +43,14 @@ async function runLlmHubRegeneration(userId: string, opts: { force?: boolean } =
   const penaltyCurveRaw = await getUserSetting(userId, 'genrePenaltyCurve');
   const tracksPerRaw = await getUserSetting(userId, 'llmTracksPerPlaylist');
   const diversityRaw = await getUserSetting(userId, 'llmPlaylistDiversity');
+  const vetoModeRaw = await getUserSetting(userId, 'llmVetoMode');
 
   const hubSettings = {
     genreBlendWeight: genreBlendRaw !== null ? Number(genreBlendRaw) : 50,
     genrePenaltyCurve: penaltyCurveRaw !== null ? Number(penaltyCurveRaw) : 50,
     llmTracksPerPlaylist: tracksPerRaw !== null ? Number(tracksPerRaw) : 10,
     llmPlaylistDiversity: diversityRaw !== null ? Number(diversityRaw) : 50,
+    llmVetoMode: vetoModeRaw === 'adaptive' ? 'adaptive' as const : 'hard' as const,
   };
 
   let validConcepts: HubCollection[] = [];
@@ -119,11 +121,13 @@ router.post('/generate-custom', async (req, res) => {
     const penaltyCurveRaw = userId ? await getUserSetting(userId, 'genrePenaltyCurve') : null;
     const tracksPerRaw = userId ? await getUserSetting(userId, 'llmTracksPerPlaylist') : null;
     const diversityRaw = userId ? await getUserSetting(userId, 'llmPlaylistDiversity') : null;
+    const vetoModeRaw = userId ? await getUserSetting(userId, 'llmVetoMode') : null;
     const hubSettings = {
       genreBlendWeight: genreBlendRaw !== null ? Number(genreBlendRaw) : 50,
       genrePenaltyCurve: penaltyCurveRaw !== null ? Number(penaltyCurveRaw) : 50,
       llmTracksPerPlaylist: tracksPerRaw !== null ? Number(tracksPerRaw) : 10,
       llmPlaylistDiversity: diversityRaw !== null ? Number(diversityRaw) : 50,
+      llmVetoMode: vetoModeRaw === 'adaptive' ? 'adaptive' as const : 'hard' as const,
     };
 
     let playlist = null;

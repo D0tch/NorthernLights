@@ -30,6 +30,7 @@ export const PlaybackTab: React.FC = () => {
     const genreStrictness = usePlayerStore(state => state.genreStrictness);
     const artistAmnesiaLimit = usePlayerStore(state => state.artistAmnesiaLimit);
     const llmPlaylistDiversity = usePlayerStore(state => state.llmPlaylistDiversity);
+    const llmVetoMode = usePlayerStore(state => state.llmVetoMode);
     const genreBlendWeight = usePlayerStore(state => state.genreBlendWeight);
     const genrePenaltyCurve = usePlayerStore(state => state.genrePenaltyCurve);
     const llmTracksPerPlaylist = usePlayerStore(state => state.llmTracksPerPlaylist);
@@ -358,12 +359,25 @@ export const PlaybackTab: React.FC = () => {
                     </div>
 
                     <div className="mb-6">
+                        <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Banned Genre Handling</label>
+                        <select
+                            value={llmVetoMode}
+                            onChange={e => setSettings({ llmVetoMode: e.target.value as 'hard' | 'adaptive' })}
+                            className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
+                        >
+                            <option value="hard">Hard Veto — never include banned genres</option>
+                            <option value="adaptive">Adaptive Penalty — relax only if the local pool fails</option>
+                        </select>
+                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5"><strong>Step 5:</strong> Controls how LLM banned genres are enforced. Hard veto keeps excluded styles out entirely; adaptive penalty can recover sparse libraries by treating banned genres as heavily penalized fallback candidates.</p>
+                    </div>
+
+                    <div className="mb-6">
                         <label className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mb-2">
                             <span>Playlist Diversity</span>
                             <span>{llmPlaylistDiversity}%</span>
                         </label>
                         <input type="range" min="0" max="100" value={llmPlaylistDiversity} onChange={e => setSettings({ llmPlaylistDiversity: Number(e.target.value) })} className="w-full accent-[var(--color-primary)]" />
-                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5"><strong>Step 5:</strong> Adds randomness to the final pick. Low values always choose the best-matching track; high values sometimes pick lower-ranked tracks for surprise and variety.</p>
+                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5"><strong>Step 6:</strong> Adds randomness to the final pick. Low values always choose the best-matching track; high values sometimes pick lower-ranked tracks for surprise and variety.</p>
                     </div>
                 </div>
             )}

@@ -53,6 +53,7 @@ export type PlaybackLoadPath = 'none' | 'cast' | 'direct' | 'prepared-hls' | 'fa
 export type PlaybackPrepareStatus = 'idle' | 'preparing' | 'ready' | 'failed';
 export type PlaybackRecoveryPath = 'none' | 'normal-hls-after-prepare-failure' | 'normal-hls-after-promotion-failure';
 export type PrebufferPolicy = 'off' | 'conservative' | 'aggressive';
+export type LlmVetoMode = 'hard' | 'adaptive';
 
 export interface PlaybackTelemetry {
   lastUpdatedAt: number | null;
@@ -149,6 +150,7 @@ export interface PlayerState {
   genreStrictness: number;
   artistAmnesiaLimit: number;
   llmPlaylistDiversity: number;
+  llmVetoMode: LlmVetoMode;
   genreBlendWeight: number;
   genrePenaltyCurve: number;
   llmTracksPerPlaylist: number;
@@ -533,6 +535,7 @@ export const usePlayerStore = create<PlayerState>()(
         genreStrictness: 50,
         artistAmnesiaLimit: 50,
         llmPlaylistDiversity: 50,
+        llmVetoMode: 'hard' as LlmVetoMode,
         genreBlendWeight: 50,
         genrePenaltyCurve: 50,
         llmTracksPerPlaylist: 10,
@@ -680,6 +683,7 @@ export const usePlayerStore = create<PlayerState>()(
                 genreStrictness: data.genreStrictness !== undefined ? data.genreStrictness : 50,
                 artistAmnesiaLimit: data.artistAmnesiaLimit !== undefined ? data.artistAmnesiaLimit : 50,
                 llmPlaylistDiversity: data.llmPlaylistDiversity !== undefined ? data.llmPlaylistDiversity : 50,
+                llmVetoMode: data.llmVetoMode === 'adaptive' ? 'adaptive' : 'hard',
                 genreBlendWeight: data.genreBlendWeight !== undefined ? data.genreBlendWeight : 50,
                 genrePenaltyCurve: data.genrePenaltyCurve !== undefined ? data.genrePenaltyCurve : 50,
                 llmTracksPerPlaylist: data.llmTracksPerPlaylist !== undefined ? data.llmTracksPerPlaylist : 10,
@@ -739,6 +743,7 @@ export const usePlayerStore = create<PlayerState>()(
                 genreStrictness: state.genreStrictness,
                 artistAmnesiaLimit: state.artistAmnesiaLimit,
                 llmPlaylistDiversity: state.llmPlaylistDiversity,
+                llmVetoMode: state.llmVetoMode,
                 genreBlendWeight: state.genreBlendWeight,
                 genrePenaltyCurve: state.genrePenaltyCurve,
                 llmTracksPerPlaylist: state.llmTracksPerPlaylist,

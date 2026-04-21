@@ -1,5 +1,6 @@
 import { initDB, createPlaylist, addTracksToPlaylist, getPlaylists, getPlaylistTracks, getUserRecentTracks, getUserTopTracks } from '../database';
 import { genreMatrixService } from './genreMatrix.service';
+import { adaptGenreBlendForHealth, adaptVectorToLibrary, getGenreHealthForPrefix, getLibraryProfile, GenreHealth } from './libraryProfile.service';
 import { queryWithRetry } from '../utils/db';
 
 // 1. Z-Score normalization is handled by scaling 0-1 mapped values in JS, but 
@@ -8,7 +9,7 @@ import { queryWithRetry } from '../utils/db';
 
 function normalizeTitle(title: string): string {
   if (!title) return '';
-  let t = title.toLowerCase();
+  let t = title.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '');
 
   // 1. Strip known "noise" tags in parentheses or brackets
   // Matches things like (Remastered), [2012 Remaster], (Deluxe Edition), etc.
@@ -37,10 +38,43 @@ function isSameSong(a: { title: string, artist: string, mb_recording_id?: string
   return titleA === titleB;
 }
 
+function normalizeArtistName(artist: string): string {
+  return (artist || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ');
+}
+
+function normalizeLooseKey(value: string): string {
+  return (value || '').toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ');
+}
+
+function getSongDedupKey(track: { title?: string, artist?: string, mb_recording_id?: string }): string {
+  if (track.mb_recording_id && track.mb_recording_id.trim() !== '') {
+    return `mb:${track.mb_recording_id.trim().toLowerCase()}`;
+  }
+  return `meta:${normalizeArtistName(track.artist || '')}:${normalizeTitle(track.title || '')}`;
+}
+
+function getGenreRoot(row: any): string {
+  const path = row.genre_path || row.genre || '';
+  return normalizeLooseKey(String(path).split('.')[0] || path || 'unknown-genre');
+}
+
+function normalizeTargetVector(vector: unknown): number[] | null {
+  if (!Array.isArray(vector) || vector.length !== 8) {
+    return null;
+  }
+
+  const normalized = vector.map((value) => Number(value));
+  if (normalized.some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+
+  return normalized.map((value) => Math.min(1, Math.max(0, value)));
+}
+
 export async function getHubCollections(
   llmConcepts: { section: string, title?: string, description: string, target_vector: number[] }[],
   userId: string | null = null,
-  settings: { genreBlendWeight?: number, genrePenaltyCurve?: number, llmTracksPerPlaylist?: number, llmPlaylistDiversity?: number } = {}
+  settings: { genreBlendWeight?: number, genrePenaltyCurve?: number, llmTracksPerPlaylist?: number, llmPlaylistDiversity?: number, llmVetoMode?: 'hard' | 'adaptive' } = {}
 ) {
   const hubs: any[] = [];
 
@@ -48,23 +82,55 @@ export async function getHubCollections(
   const penaltyCurve = 0.5 + ((settings.genrePenaltyCurve ?? 50) / 100) * 1.5; // 0.5 to 2.0
   const tracksPerPlaylist = settings.llmTracksPerPlaylist ?? 10;
   const diversity = (settings.llmPlaylistDiversity ?? 50) / 100; // 0.0 to 1.0
+  const allowSoftVetoRecovery = settings.llmVetoMode === 'adaptive';
+  const genreKeySql = `regexp_replace(lower(trim(t.genre)), '[^[:alnum:]_[:space:]-]', '', 'g')`;
+  const genrePathJoinSql = `
+    LEFT JOIN subgenre_mappings sm ON ${genreKeySql} = sm.sub_genre
+    LEFT JOIN LATERAL (
+      (SELECT path FROM genre_tree_paths WHERE LOWER(genre_name) = ${genreKeySql} LIMIT 1)
+      UNION ALL
+      (SELECT gtp.path FROM genre_tree_paths gtp
+       JOIN genre_alias ga ON gtp.genre_id = ga.genre
+       WHERE LOWER(ga.name) = ${genreKeySql} LIMIT 1)
+      LIMIT 1
+    ) gm ON true
+  `;
+  const normalizedTitleSql = `regexp_replace(trim(regexp_replace(lower(coalesce(t.title, '')), '[^[:alnum:]]+', ' ', 'g')), '[[:space:]]+', ' ', 'g')`;
+  const structuralTitleCue = `(intro|outro|interlude|skit|prelude|prologue|epilogue|segue|transition)`;
+  const llmPlayableTrackSql = `
+    t.duration > 90
+    AND NOT (
+      ${normalizedTitleSql} ~ '^(the )?${structuralTitleCue}( [0-9ivx]+)?( .*)?$'
+      OR (
+        t.duration < 240
+        AND ${normalizedTitleSql} ~ '(^| )${structuralTitleCue}( |$)'
+      )
+    )
+  `;
 
   // Helper: re-rank a pool of tracks by blending vector distance with genre hop cost.
   // Exponential model: genre penalty scales distance via Math.pow(1 + hopCost, weight * curve).
-  // bannedGenres: absolute veto — matching tracks get sent to Infinity.
+  // bannedGenres: normally an absolute veto; optionally become a strong penalty in adaptive recovery mode.
   // Root node enforcement: at high weight, blocks tracks from different genre families.
-  const reRankByHopCost = (rows: any[], referenceGenre: string, limit: number, blendWeight?: number, bannedGenres?: string[]) => {
+  const reRankByHopCost = (
+    rows: any[],
+    referenceGenre: string,
+    limit: number,
+    blendWeight?: number,
+    bannedGenres?: string[],
+    softVeto = false
+  ) => {
     const weight = blendWeight ?? genreBlend;
-    if (!referenceGenre) return rows.slice(0, limit);
     const anchorRoot = referenceGenre ? referenceGenre.split('.')[0].toLowerCase() : null;
 
     const scored = rows.map(row => {
       const leafGenre = (row.genre || '').toLowerCase();
-      const fullPath = genreMatrixService.getGenrePath(leafGenre) || leafGenre;
+      const fullPath = row.genre_path || genreMatrixService.getGenrePath(leafGenre) || leafGenre;
       const trackRoot = fullPath.split('.')[0].toLowerCase();
+      const isBanned = !!(bannedGenres && bannedGenres.some(b => fullPath.includes(b.toLowerCase())));
 
       // 1. Explicit LLM vetoes (full path check)
-      if (bannedGenres && bannedGenres.some(b => fullPath.includes(b.toLowerCase()))) {
+      if (isBanned && !softVeto) {
         return { ...row, combined: Infinity };
       }
 
@@ -74,44 +140,125 @@ export async function getHubCollections(
       }
 
       // 3. Multiplicative penalty
-      const hopCost = genreMatrixService.getHopCost(referenceGenre, leafGenre);
-      const combined = (row.distance ?? 0) * Math.pow(1 + hopCost, weight * penaltyCurve);
+      const distance = Number(row.distance ?? 0);
+      const hopCost = referenceGenre ? genreMatrixService.getHopCost(referenceGenre, leafGenre) : 0;
+      const vetoPenalty = isBanned ? (1.75 + weight) : 1;
+      const combined = (distance * Math.pow(1 + hopCost, weight * penaltyCurve) * vetoPenalty) + (isBanned ? 0.15 : 0);
       return { ...row, combined };
-    });
+    }).filter(row => Number.isFinite(row.combined));
     scored.sort((a, b) => a.combined - b.combined);
     return scored.slice(0, limit);
   };
 
-  // Helper: pick tracks using a weighted wander factor instead of deterministic top-N
-  const wanderSelect = (scoredRows: any[], count: number, wanderStrength: number): any[] => {
-    if (scoredRows.length <= count || wanderStrength < 0.05) {
-      return scoredRows.slice(0, count);
-    }
+  const selectDiverseTracks = (
+    scoredRows: any[],
+    count: number,
+    wanderStrength: number,
+    maxTracksPerArtist: number
+  ): any[] => {
     const selected: any[] = [];
-    const available = [...scoredRows];
-    for (let i = 0; i < count && available.length > 0; i++) {
-      // Weight: better scores (lower combined) get higher probability
-      // wanderStrength controls how much randomness vs deterministic picking
-      const weights = available.map((row, idx) => {
-        const rankBias = 1 / (1 + idx); // natural decay by rank
-        const randomFactor = Math.random() * wanderStrength;
-        return rankBias * (1 - wanderStrength + randomFactor * 2);
+    const selectedSongKeys = new Set<string>();
+    const artistCounts = new Map<string, number>();
+    const albumCounts = new Map<string, number>();
+    const rootCounts = new Map<string, number>();
+    const rankBySong = new Map<string, number>();
+
+    scoredRows.forEach((row, index) => {
+      const key = getSongDedupKey(row);
+      if (!rankBySong.has(key)) rankBySong.set(key, index);
+    });
+
+    const pickOne = (enforceArtistCap: boolean): boolean => {
+      const candidates = scoredRows.filter((row) => {
+        const songKey = getSongDedupKey(row);
+        if (selectedSongKeys.has(songKey)) return false;
+
+        const artistKey = normalizeArtistName(row.artist || 'unknown-artist');
+        if (enforceArtistCap && (artistCounts.get(artistKey) ?? 0) >= maxTracksPerArtist) {
+          return false;
+        }
+
+        return true;
       });
-      const totalWeight = weights.reduce((s, w) => s + w, 0);
-      let r = Math.random() * totalWeight;
-      let chosenIdx = 0;
-      for (let j = 0; j < weights.length; j++) {
-        r -= weights[j];
-        if (r <= 0) { chosenIdx = j; break; }
+
+      if (candidates.length === 0) return false;
+
+      const windowSize = Math.min(candidates.length, Math.max(60, count * 8));
+      const window = candidates.slice(0, windowSize);
+      let best = window[0];
+      let bestScore = Infinity;
+
+      for (const candidate of window) {
+        const songKey = getSongDedupKey(candidate);
+        const artistKey = normalizeArtistName(candidate.artist || 'unknown-artist');
+        const albumKey = normalizeLooseKey(candidate.album || candidate.album_title || '');
+        const rootKey = getGenreRoot(candidate);
+        const rank = rankBySong.get(songKey) ?? scoredRows.length;
+        const fitScore = rank / Math.max(1, scoredRows.length - 1);
+        const artistPenalty = (artistCounts.get(artistKey) ?? 0) * 0.90;
+        const albumPenalty = albumKey ? (albumCounts.get(albumKey) ?? 0) * 0.30 : 0;
+        const rootPenalty = (rootCounts.get(rootKey) ?? 0) * 0.06;
+        const randomBonus = Math.random() * wanderStrength * 0.18;
+        const score = fitScore + artistPenalty + albumPenalty + rootPenalty - randomBonus;
+
+        if (score < bestScore) {
+          bestScore = score;
+          best = candidate;
+        }
       }
-      selected.push(available[chosenIdx]);
-      available.splice(chosenIdx, 1);
-    }
+
+      const songKey = getSongDedupKey(best);
+      const artistKey = normalizeArtistName(best.artist || 'unknown-artist');
+      const albumKey = normalizeLooseKey(best.album || best.album_title || '');
+      const rootKey = getGenreRoot(best);
+
+      selected.push(best);
+      selectedSongKeys.add(songKey);
+      artistCounts.set(artistKey, (artistCounts.get(artistKey) ?? 0) + 1);
+      if (albumKey) albumCounts.set(albumKey, (albumCounts.get(albumKey) ?? 0) + 1);
+      rootCounts.set(rootKey, (rootCounts.get(rootKey) ?? 0) + 1);
+      return true;
+    };
+
+    while (selected.length < count && pickOne(true)) {}
+    while (selected.length < count && pickOne(false)) {}
+
     return selected;
   };
 
+  const libraryProfile = await getLibraryProfile();
+
   // Track already-assigned track IDs across LLM concepts to prevent duplicate playlists
   const assignedTrackIds = new Set<string>();
+  const assignedSongKeys = new Set<string>();
+
+  const isGenrePoolWeak = (rows: any[], playlistTitle: string | undefined, health: GenreHealth | null): boolean => {
+    const poolA = rows.filter((row) => row.pool_source === 'A');
+    const uniqueArtists = new Set(poolA.map((row) => normalizeArtistName(row.artist || 'unknown-artist')));
+    const uniqueSongs = new Set(poolA.map(getSongDedupKey));
+    const minArtists = Math.min(5, Math.max(3, Math.ceil(tracksPerPlaylist / 2)));
+
+    if (health && health.health < 0.30) {
+      console.log(
+        `[LLM Hub] Library profile marks "${playlistTitle}" genre weak (${health.trackCount} tracks, ${health.artistCount} artists, health=${health.health.toFixed(2)}). Leaning on musical similarity.`
+      );
+      return true;
+    }
+
+    if (poolA.length < 5) {
+      console.log(`[LLM Hub] Pool A starved (${poolA.length} tracks). Expanding Pool B.`);
+      return true;
+    }
+
+    if (uniqueArtists.size < minArtists || uniqueSongs.size < tracksPerPlaylist) {
+      console.log(
+        `[LLM Hub] Pool A weak for "${playlistTitle}" (${poolA.length} tracks, ${uniqueArtists.size} artists, ${uniqueSongs.size} songs). Leaning on musical similarity.`
+      );
+      return true;
+    }
+
+    return false;
+  };
 
   // Helper: synthesize a 1280D EffNet embedding centroid from the 8D acoustic seed results.
   // The LLM generates an 8D target vector — we don't have a 1280D embedding from the LLM.
@@ -175,6 +322,13 @@ export async function getHubCollections(
   for (const concept of llmConcepts) {
     // Case B: LLM High-Concept generated concept (e.g. "Evening Acoustic Drift")
     if (concept.target_vector) {
+      const targetVector = normalizeTargetVector(concept.target_vector);
+      if (!targetVector) {
+        console.warn(`[LLM Hub] Dropping playlist "${concept.title}" - invalid target_vector. Expected 8 finite numbers.`);
+        (concept as any).dropped = true;
+        continue;
+      }
+
       const targetGenres = (concept as any).target_genres || [];
       const bannedGenres: string[] = (concept as any).banned_genres || [];
       let matchedGenrePath = '';
@@ -205,12 +359,20 @@ export async function getHubCollections(
          continue;
       }
 
-      const vectorStr = `[${concept.target_vector.join(',')}]`;
+      const adaptedTargetVector = adaptVectorToLibrary(targetVector, libraryProfile);
+      const vectorStr = `[${adaptedTargetVector.join(',')}]`;
 
       // Dynamic MFCC weight: for highly electronic/synthetic playlists (low acousticness),
       // timbre matters 3× more because MFCC differentiates synthetic vs natural instruments
-      const targetAcousticness = concept.target_vector[5]; // index 5 = acousticness
+      const targetAcousticness = adaptedTargetVector[5]; // index 5 = acousticness
       const effnetWeight = targetAcousticness < 0.3 ? 3.0 : 1.0;
+      const genreHealth = matchedGenrePath ? getGenreHealthForPrefix(libraryProfile, matchedGenrePath) : null;
+      const effectiveGenreBlend = adaptGenreBlendForHealth(genreBlend, genreHealth);
+      if (matchedGenrePath && genreHealth && effectiveGenreBlend < genreBlend) {
+        console.log(
+          `[LLM Hub] "${concept.title}" → adapting genre blend ${genreBlend.toFixed(2)} → ${effectiveGenreBlend.toFixed(2)} for local genre health ${genreHealth.health.toFixed(2)} (${genreHealth.trackCount} tracks, ${genreHealth.artistCount} artists).`
+        );
+      }
 
       // Synthesize EffNet embedding centroid from the 8D acoustic neighbourhood
       const embeddingCentroidStr = await imputeEffNetCentroid(vectorStr);
@@ -220,8 +382,12 @@ export async function getHubCollections(
       // Pool B (serendipity) expands when Pool A starves
       const ABSOLUTE_MAX_FETCH = 200;
       const dynamicFetchSize = Math.min((tracksPerPlaylist * 3) + 50, ABSOLUTE_MAX_FETCH);
-      let limitA = Math.max(10, Math.floor(dynamicFetchSize * genreBlend));
-      let limitB = dynamicFetchSize - limitA;
+      const minSimilarityFetch = Math.min(ABSOLUTE_MAX_FETCH, Math.max(tracksPerPlaylist * 4, 30));
+      let limitA = Math.max(10, Math.floor(dynamicFetchSize * effectiveGenreBlend));
+      let limitB = matchedGenrePath
+        ? Math.max(dynamicFetchSize - limitA, minSimilarityFetch)
+        : dynamicFetchSize;
+      let genrePoolStarved = false;
 
       // Build exclusion set for cross-playlist deduplication
       const assignedIds = Array.from(assignedTrackIds);
@@ -236,12 +402,12 @@ export async function getHubCollections(
           : '';
         res = await queryWithRetry(`
           WITH pool_a AS (
-            SELECT t.*, (tf.acoustic_vector_8d <-> $1::vector) AS distance, 'A' as pool_source
+            SELECT t.*, COALESCE(sm.path, gm.path) AS genre_path, (tf.acoustic_vector_8d <-> $1::vector) AS distance, 'A' as pool_source
             FROM tracks t
             JOIN track_features tf ON t.id = tf.track_id
-            JOIN subgenre_mappings sm ON lower(trim(t.genre)) = sm.sub_genre
-            WHERE sm.path LIKE $2 || '%'
-              AND t.duration > 90
+            ${genrePathJoinSql}
+            WHERE COALESCE(sm.path, gm.path) LIKE $2 || '%'
+              AND ${llmPlayableTrackSql}
               AND tf.acoustic_vector_8d IS NOT NULL
               ${exclClause}
             ORDER BY distance ASC
@@ -249,12 +415,14 @@ export async function getHubCollections(
           ),
           pool_b AS (
             SELECT t.*,
+              COALESCE(sm.path, gm.path) AS genre_path,
               (tf.acoustic_vector_8d <-> $1::vector) + ((tf.embedding_vector <=> $4::vector) * ${effnetWeight}) AS distance,
               'B' as pool_source
             FROM tracks t
             JOIN track_features tf ON t.id = tf.track_id
+            ${genrePathJoinSql}
             WHERE t.id NOT IN (SELECT id FROM pool_a)
-              AND t.duration > 90
+              AND ${llmPlayableTrackSql}
               AND tf.acoustic_vector_8d IS NOT NULL
               AND tf.embedding_vector IS NOT NULL
               ${exclClause}
@@ -266,10 +434,9 @@ export async function getHubCollections(
           SELECT * FROM pool_b
         `, [vectorStr, matchedGenrePath, limitA, embeddingCentroidStr, limitB, ...assignedIds]);
 
-        // Pool A starvation fallback: if no genre matches, expand Pool B
-        const poolACount = res.rows.filter((r: any) => r.pool_source === 'A').length;
-        if (poolACount < 5) {
-          console.log(`[LLM Hub] Pool A starved (${poolACount} tracks). Expanding Pool B.`);
+        // Pool A fallback: if the local genre slice is too small or artist-poor, trust similarity more.
+        if (isGenrePoolWeak(res.rows, concept.title, genreHealth)) {
+          genrePoolStarved = true;
           limitB = dynamicFetchSize;
           
           // CRITICAL FIX: The fallback query only has $1 (vector), $2 (centroid), and $3 (limitB). 
@@ -280,13 +447,15 @@ export async function getHubCollections(
 
           res = await queryWithRetry(`
             SELECT t.*,
+              COALESCE(sm.path, gm.path) AS genre_path,
               (tf.acoustic_vector_8d <-> $1::vector) + ((tf.embedding_vector <=> $2::vector) * ${effnetWeight}) AS distance,
               'B' as pool_source
             FROM tracks t
             JOIN track_features tf ON t.id = tf.track_id
+            ${genrePathJoinSql}
             WHERE tf.acoustic_vector_8d IS NOT NULL
               AND tf.embedding_vector IS NOT NULL
-              AND t.duration > 90
+              AND ${llmPlayableTrackSql}
               ${exclClauseFallback}
             ORDER BY distance ASC
             LIMIT $3
@@ -299,13 +468,15 @@ export async function getHubCollections(
           : '';
         res = await queryWithRetry(`
           SELECT t.*,
+            COALESCE(sm.path, gm.path) AS genre_path,
             (tf.acoustic_vector_8d <-> $1::vector) + ((tf.embedding_vector <=> $2::vector) * ${effnetWeight}) AS distance,
             'B' as pool_source
           FROM tracks t
           JOIN track_features tf ON t.id = tf.track_id
+          ${genrePathJoinSql}
           WHERE tf.acoustic_vector_8d IS NOT NULL
             AND tf.embedding_vector IS NOT NULL
-            AND t.duration > 90
+            AND ${llmPlayableTrackSql}
             ${exclClauseFallbackBOnly}
           ORDER BY distance ASC
           LIMIT $3
@@ -317,12 +488,12 @@ export async function getHubCollections(
           : '';
         res = await queryWithRetry(`
           WITH pool_a AS (
-            SELECT t.*, (tf.acoustic_vector_8d <-> $1::vector) AS distance, 'A' as pool_source
+            SELECT t.*, COALESCE(sm.path, gm.path) AS genre_path, (tf.acoustic_vector_8d <-> $1::vector) AS distance, 'A' as pool_source
             FROM tracks t
             JOIN track_features tf ON t.id = tf.track_id
-            JOIN subgenre_mappings sm ON lower(trim(t.genre)) = sm.sub_genre
-            WHERE sm.path LIKE $2 || '%'
-              AND t.duration > 90
+            ${genrePathJoinSql}
+            WHERE COALESCE(sm.path, gm.path) LIKE $2 || '%'
+              AND ${llmPlayableTrackSql}
               AND tf.acoustic_vector_8d IS NOT NULL
               ${exclClauseFallbackAAndB}
             ORDER BY distance ASC
@@ -330,12 +501,14 @@ export async function getHubCollections(
           ),
           pool_b AS (
             SELECT t.*,
+              COALESCE(sm.path, gm.path) AS genre_path,
               tf.acoustic_vector_8d <-> $1::vector AS distance,
               'B' as pool_source
             FROM tracks t
             JOIN track_features tf ON t.id = tf.track_id
+            ${genrePathJoinSql}
             WHERE t.id NOT IN (SELECT id FROM pool_a)
-              AND t.duration > 90
+              AND ${llmPlayableTrackSql}
               AND tf.acoustic_vector_8d IS NOT NULL
               ${exclClauseFallbackAAndB}
             ORDER BY distance ASC
@@ -345,6 +518,10 @@ export async function getHubCollections(
           UNION ALL
           SELECT * FROM pool_b
         `, [vectorStr, matchedGenrePath, limitA, limitB, ...assignedIds]);
+
+        if (isGenrePoolWeak(res.rows, concept.title, genreHealth)) {
+          genrePoolStarved = true;
+        }
       } else {
         // Graceful degradation: no genre, no MFCC — 8D only (original behavior)
         const exclClauseFallbackGraceful = assignedIds.length > 0
@@ -352,12 +529,14 @@ export async function getHubCollections(
           : '';
         res = await queryWithRetry(`
           SELECT t.*,
+            COALESCE(sm.path, gm.path) AS genre_path,
             tf.acoustic_vector_8d <-> $1::vector AS distance,
             'B' as pool_source
           FROM tracks t
           JOIN track_features tf ON t.id = tf.track_id
+          ${genrePathJoinSql}
           WHERE tf.acoustic_vector_8d IS NOT NULL
-            AND t.duration > 90
+            AND ${llmPlayableTrackSql}
             ${exclClauseFallbackGraceful}
           ORDER BY distance ASC
           LIMIT $2
@@ -367,28 +546,66 @@ export async function getHubCollections(
       
       if (res.rows.length > 0) {
         // Use the mapped path as the reference genre
-        const referenceGenre = matchedGenrePath || res.rows[0].genre || '';
+        const referenceGenre = genrePoolStarved ? '' : matchedGenrePath || res.rows[0].genre_path || res.rows[0].genre || '';
 
         const llmGenreWeight = matchedGenrePath
-          ? Math.min(1.0, genreBlend * 2)
-          : genreBlend;
+          ? Math.min(1.0, effectiveGenreBlend * 2)
+          : effectiveGenreBlend;
 
         if (referenceGenre) {
           console.log(`[LLM Hub] "${concept.title}" → anchoring re-rank to genre path "${referenceGenre}" (weight=${llmGenreWeight.toFixed(2)})`);
         }
         if (bannedGenres.length > 0) {
-          console.log(`[LLM Hub] "${concept.title}" → vetoing: [${bannedGenres.join(', ')}]`);
+          const vetoModeLabel = allowSoftVetoRecovery ? 'hard veto with adaptive recovery' : 'hard veto';
+          console.log(`[LLM Hub] "${concept.title}" → ${vetoModeLabel}: [${bannedGenres.join(', ')}]`);
         }
 
-        const ranked = reRankByHopCost(res.rows, referenceGenre, Math.max(tracksPerPlaylist * 2, 20), llmGenreWeight, bannedGenres);
+        let ranked = reRankByHopCost(
+          res.rows,
+          referenceGenre,
+          Math.max(tracksPerPlaylist * 2, 20),
+          llmGenreWeight,
+          bannedGenres,
+          allowSoftVetoRecovery && genrePoolStarved
+        );
+        if (allowSoftVetoRecovery && ranked.length === 0 && bannedGenres.length > 0) {
+          console.warn(`[LLM Hub] "${concept.title}" → hard veto removed every candidate; retrying with soft veto penalties.`);
+          ranked = reRankByHopCost(
+            res.rows,
+            referenceGenre,
+            Math.max(tracksPerPlaylist * 2, 20),
+            llmGenreWeight,
+            bannedGenres,
+            true
+          );
+        }
+        const candidateSongKeys = new Set<string>();
+        const uniqueRanked = ranked.filter((row) => {
+          const songKey = getSongDedupKey(row);
+          if (assignedSongKeys.has(songKey) || candidateSongKeys.has(songKey)) return false;
+          candidateSongKeys.add(songKey);
+          return true;
+        });
+        if (uniqueRanked.length === 0) {
+          console.warn(`[LLM Hub] Dropping playlist "${concept.title}" - all candidate tracks were vetoed or invalid.`);
+          (concept as any).dropped = true;
+          continue;
+        }
 
         // Apply wander factor for diversity instead of deterministic top-N
-        const topTracks = wanderSelect(ranked, tracksPerPlaylist, diversity);
+        const maxTracksPerArtist = tracksPerPlaylist <= 5 ? 1 : tracksPerPlaylist <= 15 ? 2 : 3;
+        const topTracks = selectDiverseTracks(uniqueRanked, tracksPerPlaylist, diversity, maxTracksPerArtist);
+        if (topTracks.length === 0) {
+          console.warn(`[LLM Hub] Dropping playlist "${concept.title}" - no selectable tracks remained after ranking.`);
+          (concept as any).dropped = true;
+          continue;
+        }
 
 
         // Register these track IDs to prevent overlap in subsequent playlists
         for (const t of topTracks) {
           assignedTrackIds.add(t.id);
+          assignedSongKeys.add(getSongDedupKey(t));
         }
 
         // Create a formal Playlist record (user-scoped)

@@ -264,6 +264,7 @@ export const Hub: React.FC = () => {
   const [collections, setCollections] = useState<HubCollection[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [generationError, setGenerationError] = useState('');
 
   const fetchHubData = async () => {
     setIsLoading(true);
@@ -301,16 +302,28 @@ export const Hub: React.FC = () => {
 
   const handleGeneratePlaylists = async () => {
     setIsGenerating(true);
+    setGenerationError('');
     try {
       const authHeaders = getAuthHeader();
-      await fetch('/api/hub/regenerate', {
+      const res = await fetch('/api/hub/regenerate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeaders },
         body: JSON.stringify({ force: true }),
       });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to generate playlists.');
+      }
+      if (data.skipped) {
+        throw new Error(data.reason || 'Playlist generation was skipped.');
+      }
+      if (typeof data.generated === 'number' && data.generated < 1) {
+        throw new Error('No playlists were generated. Check your LLM configuration and genre mappings.');
+      }
       await fetchHubData();
-    } catch (e) {
+    } catch (e: any) {
       console.error('Failed to generate playlists', e);
+      setGenerationError(e.message || 'Failed to generate playlists.');
     } finally {
       setIsGenerating(false);
     }
@@ -389,6 +402,12 @@ export const Hub: React.FC = () => {
           </button>
         )}
       </header>
+
+      {generationError && aiPlaylists.length > 0 && (
+        <div className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-sm font-medium text-[var(--color-error)]">
+          {generationError}
+        </div>
+      )}
 
       {aiPlaylists.length > 0 && (
         <section>
@@ -477,6 +496,11 @@ export const Hub: React.FC = () => {
             )}
             <span>{isGenerating ? 'Generating...' : 'Generate Playlists'}</span>
           </button>
+          {generationError && (
+            <p className="text-xs text-[var(--color-error)] mt-4 font-medium max-w-sm">
+              {generationError}
+            </p>
+          )}
           {library.length === 0 && (
             <p className="text-xs text-[var(--color-error)] mt-4 font-medium">
               Scan music into your library first

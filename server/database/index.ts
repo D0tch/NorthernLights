@@ -266,8 +266,7 @@ export async function initDB(): Promise<Pool> {
         );
         CREATE INDEX IF NOT EXISTS playlist_tracks_track_id_idx ON playlist_tracks(track_id);
 
-        DROP TABLE IF EXISTS subgenre_mappings CASCADE;
-        CREATE TABLE subgenre_mappings (
+        CREATE TABLE IF NOT EXISTS subgenre_mappings (
           sub_genre TEXT PRIMARY KEY,
           path TEXT NOT NULL
         );
