@@ -156,9 +156,18 @@ export async function testLastFm(apiKey: string, sharedSecret: string): Promise<
 
   try {
     const res = await fetchWithRetry(
-      `${LASTFM_API}?method=artist.getinfo&artist=Radiohead&api_key=${apiKey}&format=json`
+      `${LASTFM_API}?method=artist.getinfo&artist=Radiohead&api_key=${encodeURIComponent(apiKey.trim())}&format=json`
     );
-    const json = await res.json();
+    
+    // Safely parse JSON to avoid crashing on HTML error pages
+    const rawText = await res.text();
+    let json;
+    try {
+        json = JSON.parse(rawText);
+    } catch (parseErr) {
+        return { status: 'error', error: `Invalid response format (HTTP ${res.status}): ${rawText.substring(0, 100)}` };
+    }
+
     if (json.error) {
       return { status: 'error', error: json.message || `API error ${json.error}` };
     }

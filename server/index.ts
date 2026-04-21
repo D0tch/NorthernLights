@@ -3,7 +3,11 @@ import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
+import dns from 'dns';
 import { spawn } from 'child_process';
+
+// Force IPv4 locally to prevent Last.fm IPv6 blackholing hangs
+dns.setDefaultResultOrder('ipv4first');
 import { requireAuth as jwtAuthMiddleware } from './middleware/auth';
 import { initDatabaseConnection, getSessionHistory } from './state';
 import { calculateNextInfinityTrack } from './services/recommendation.service';
