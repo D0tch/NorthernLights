@@ -10,6 +10,10 @@ class PlaybackManager {
     private audio: HTMLAudioElement;
     private audioContext: AudioContext | null = null;
     private hls: Hls | null = null;
+    private nextAudio: HTMLAudioElement | null = null;
+    private nextHls: Hls | null = null;
+    private nextUrlKey: string | null = null;
+    private transitionStartedAt: number | null = null;
     
     // Internal state to track what's playing in case we switch to Cast mid-stream
     private currentUrl: string | null = null;
@@ -30,62 +34,8 @@ class PlaybackManager {
     private onBufferingChangeCallback?: (isBuffering: boolean) => void;
 
     private constructor() {
-        this.audio = new Audio();
-        // Enable cross-origin for potential future network streaming
-        this.audio.crossOrigin = 'anonymous';
-
-        // Set up standard event listeners
-        this.audio.addEventListener('timeupdate', () => {
-            if (!castManager.isConnected()) {
-                this.onTimeUpdateCallback?.(this.audio.currentTime);
-            }
-        });
-
-        this.audio.addEventListener('loadedmetadata', () => {
-            if (!castManager.isConnected()) {
-                this.onDurationCallback?.(this.audio.duration || 0);
-            }
-        });
-
-        // hls.js updates the media element's duration asynchronously after manifest parsing.
-        // 'durationchange' fires when that happens, giving us the real VOD duration.
-        this.audio.addEventListener('durationchange', () => {
-            if (!castManager.isConnected() && isFinite(this.audio.duration) && this.audio.duration > 0) {
-                this.onDurationCallback?.(this.audio.duration);
-            }
-        });
-
-        this.audio.addEventListener('ended', () => {
-            if (!castManager.isConnected()) {
-                this.onPlayStateChangeCallback?.('stopped');
-                this.onEndedCallback?.();
-            }
-        });
-
-        this.audio.addEventListener('waiting', () => {
-            if (!castManager.isConnected()) {
-                this.onBufferingChangeCallback?.(true);
-            }
-        });
-
-        this.audio.addEventListener('playing', () => {
-            if (!castManager.isConnected()) {
-                this.onBufferingChangeCallback?.(false);
-            }
-        });
-
-        this.audio.addEventListener('canplay', () => {
-            if (!castManager.isConnected()) {
-                this.onBufferingChangeCallback?.(false);
-            }
-        });
-
-        this.audio.addEventListener('play', () => {
-             if (!castManager.isConnected()) this.onPlayStateChangeCallback?.('playing');
-        });
-        this.audio.addEventListener('pause', () => {
-             if (!castManager.isConnected()) this.onPlayStateChangeCallback?.('paused');
-        });
+        this.audio = this.createAudioElement();
+        this.attachAudioEvents(this.audio);
 
         // Set up CastManager listeners
         castManager.onTimeUpdate = (time) => {
@@ -114,6 +64,74 @@ class PlaybackManager {
         castManager.onTrackChange = (index) => {
             if (castManager.isConnected()) this.onTrackChangeCallback?.(index);
         };
+    }
+
+    private createAudioElement(): HTMLAudioElement {
+        const audio = new Audio();
+        audio.crossOrigin = 'anonymous';
+        audio.preload = 'auto';
+        return audio;
+    }
+
+    private attachAudioEvents(audio: HTMLAudioElement): void {
+        // Set up standard event listeners
+        audio.addEventListener('timeupdate', () => {
+            if (!castManager.isConnected() && audio === this.audio) {
+                this.onTimeUpdateCallback?.(audio.currentTime);
+            }
+        });
+
+        audio.addEventListener('loadedmetadata', () => {
+            if (!castManager.isConnected() && audio === this.audio) {
+                this.onDurationCallback?.(audio.duration || 0);
+            }
+        });
+
+        // hls.js updates the media element's duration asynchronously after manifest parsing.
+        // 'durationchange' fires when that happens, giving us the real VOD duration.
+        audio.addEventListener('durationchange', () => {
+            if (!castManager.isConnected() && audio === this.audio && isFinite(audio.duration) && audio.duration > 0) {
+                this.onDurationCallback?.(audio.duration);
+            }
+        });
+
+        audio.addEventListener('ended', () => {
+            if (!castManager.isConnected() && audio === this.audio) {
+                this.transitionStartedAt = performance.now();
+                this.onPlayStateChangeCallback?.('stopped');
+                this.onEndedCallback?.();
+            }
+        });
+
+        audio.addEventListener('waiting', () => {
+            if (!castManager.isConnected() && audio === this.audio) {
+                this.onBufferingChangeCallback?.(true);
+            }
+        });
+
+        audio.addEventListener('playing', () => {
+            if (!castManager.isConnected() && audio === this.audio) {
+                if (this.transitionStartedAt !== null) {
+                    const elapsed = performance.now() - this.transitionStartedAt;
+                    console.info(`[Playback] Track transition audible after ${Math.round(elapsed)}ms`);
+                    this.transitionStartedAt = null;
+                }
+                this.onBufferingChangeCallback?.(false);
+            }
+        });
+
+        audio.addEventListener('canplay', () => {
+            if (!castManager.isConnected() && audio === this.audio) {
+                this.onBufferingChangeCallback?.(false);
+            }
+        });
+
+        audio.addEventListener('play', () => {
+             if (!castManager.isConnected() && audio === this.audio) this.onPlayStateChangeCallback?.('playing');
+        });
+        audio.addEventListener('pause', () => {
+             if (!castManager.isConnected() && audio === this.audio) this.onPlayStateChangeCallback?.('paused');
+        });
     }
 
     public static getInstance(): PlaybackManager {
@@ -169,6 +187,10 @@ class PlaybackManager {
 
             // Route HLS URLs through hls.js
             if (effectiveHlsUrl.includes('.m3u8')) {
+                if (this.isPreparedUrl(effectiveHlsUrl)) {
+                    await this.promotePreparedAudio();
+                    return;
+                }
                 await this.playHls(effectiveHlsUrl);
                 return;
             }
@@ -196,6 +218,52 @@ class PlaybackManager {
 
     // --- HLS Playback ---
 
+    public prepareNextUrl(hlsUrl: string, rawUrl: string, title?: string, artist?: string, artUrl?: string, album?: string, format?: string): void {
+        if (castManager.isConnected()) return;
+        const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
+            hlsUrl,
+            usePlayerStore.getState().streamingQuality
+        );
+        const key = effectiveHlsUrl || rawUrl;
+        if (!key || !effectiveHlsUrl.includes('.m3u8')) return;
+        if (this.nextUrlKey === key) return;
+
+        this.destroyPreparedAudio();
+
+        try {
+            const nextAudio = this.createAudioElement();
+            nextAudio.volume = this.audio.volume;
+            nextAudio.muted = this.audio.muted;
+            this.attachAudioEvents(nextAudio);
+            this.nextAudio = nextAudio;
+            this.nextUrlKey = key;
+
+            const authToken = new URL(effectiveHlsUrl, window.location.origin).searchParams.get('token') || '';
+
+            if (Hls.isSupported()) {
+                const nextHls = this.createHlsInstance(authToken, 30, 60);
+                this.nextHls = nextHls;
+                nextHls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    console.debug(`[Playback] Prepared next HLS track: ${title || 'Unknown Title'}${artist ? ` by ${artist}` : ''}`);
+                });
+                nextHls.on(Hls.Events.ERROR, (_event: string, data: any) => {
+                    if (data.fatal) {
+                        console.debug('[Playback] Prepared next HLS track failed:', data);
+                        this.destroyPreparedAudio();
+                    }
+                });
+                nextHls.loadSource(effectiveHlsUrl);
+                nextHls.attachMedia(nextAudio);
+            } else if (nextAudio.canPlayType('application/vnd.apple.mpegurl')) {
+                nextAudio.src = effectiveHlsUrl;
+                nextAudio.load();
+            }
+        } catch (error) {
+            console.debug('[Playback] Failed to prepare next track:', error);
+            this.destroyPreparedAudio();
+        }
+    }
+
     private async playHls(playlistUrl: string): Promise<void> {
         // Clean up previous HLS instance
         this.destroyHls();
@@ -206,18 +274,7 @@ class PlaybackManager {
         const authToken = urlObj.searchParams.get('token') || '';
 
         if (Hls.isSupported()) {
-            this.hls = new Hls({
-                maxBufferLength: 60,         // Buffer up to 60s ahead
-                maxMaxBufferLength: 120,     // Hard cap at 120s
-                startFragPrefetch: true,     // Start fetching immediately
-                xhrSetup: (xhr: XMLHttpRequest, _url: string) => {
-                    // DO NOT call xhr.open() here — hls.js has already opened the request.
-                    // Use setRequestHeader to inject the auth token as a Bearer header.
-                    if (authToken) {
-                        xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
-                    }
-                },
-            });
+            this.hls = this.createHlsInstance(authToken, 60, 120);
 
             this.hls.loadSource(playlistUrl);
             this.hls.attachMedia(this.audio);
@@ -266,6 +323,48 @@ class PlaybackManager {
         }
     }
 
+    private createHlsInstance(authToken: string, maxBufferLength: number, maxMaxBufferLength: number): Hls {
+        return new Hls({
+            maxBufferLength,
+            maxMaxBufferLength,
+            startFragPrefetch: true,
+            xhrSetup: (xhr: XMLHttpRequest, _url: string) => {
+                // DO NOT call xhr.open() here — hls.js has already opened the request.
+                // Use setRequestHeader to inject the auth token as a Bearer header.
+                if (authToken) {
+                    xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
+                }
+            },
+        });
+    }
+
+    private isPreparedUrl(url: string): boolean {
+        return !!this.nextAudio && this.nextUrlKey === url;
+    }
+
+    private async promotePreparedAudio(): Promise<void> {
+        if (!this.nextAudio || !this.nextUrlKey) return;
+
+        const oldAudio = this.audio;
+        oldAudio.pause();
+        this.destroyHls();
+
+        this.audio = this.nextAudio;
+        this.hls = this.nextHls;
+        this.nextAudio = null;
+        this.nextHls = null;
+        this.nextUrlKey = null;
+
+        if (oldAudio.src && oldAudio.src.startsWith('blob:')) {
+            URL.revokeObjectURL(oldAudio.src);
+        }
+        oldAudio.removeAttribute('src');
+        oldAudio.load();
+
+        console.debug('[Playback] Promoting prepared next track');
+        await this.safePlay();
+    }
+
     /**
      * Safely handle AudioContext and play() promises.
      * Catches NotAllowedError which occurs when autoplay is blocked.
@@ -293,12 +392,30 @@ class PlaybackManager {
         }
     }
 
+    private destroyPreparedAudio(): void {
+        if (this.nextHls) {
+            this.nextHls.destroy();
+            this.nextHls = null;
+        }
+        if (this.nextAudio) {
+            this.nextAudio.pause();
+            if (this.nextAudio.src && this.nextAudio.src.startsWith('blob:')) {
+                URL.revokeObjectURL(this.nextAudio.src);
+            }
+            this.nextAudio.removeAttribute('src');
+            this.nextAudio.load();
+            this.nextAudio = null;
+        }
+        this.nextUrlKey = null;
+    }
+
     public async playFile(fileHandle: FileSystemFileHandle): Promise<void> {
         // Cast cannot play files loaded locally directly by default without spinning up a local server inline.
         // We just fallback to local playback.
         try {
             // Clean up HLS if active
             this.destroyHls();
+            this.destroyPreparedAudio();
 
             const file = await fileHandle.getFile();
             const url = URL.createObjectURL(file);
@@ -348,6 +465,7 @@ class PlaybackManager {
         } else {
             this.audio.pause();
             this.audio.currentTime = 0;
+            this.destroyPreparedAudio();
             this.onPlayStateChangeCallback?.('stopped');
         }
     }
@@ -400,6 +518,7 @@ class PlaybackManager {
 
     public destroy(): void {
         this.destroyHls();
+        this.destroyPreparedAudio();
         this.audio.pause();
         this.audio.src = '';
         if (this.audioContext) {

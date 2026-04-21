@@ -358,9 +358,22 @@ export const usePlayerStore = create<PlayerState>()(
       }, 0);
 
       const prewarmNextFromState = (state: PlayerState, currentIndex: number | null = state.currentIndex) => {
+        const nextIndex = currentIndex !== null ? currentIndex + 1 : null;
+        const nextTrack = nextIndex !== null ? state.playlist[nextIndex] : null;
         preloadManager.prewarmNext(state.playlist, currentIndex, state.streamingQuality, {
           castConnected: state.castConnected || castManager.isConnected(),
         });
+        if (!state.castConnected && !castManager.isConnected() && nextTrack?.url) {
+          playbackManager.prepareNextUrl(
+            nextTrack.url,
+            nextTrack.rawUrl || '',
+            nextTrack.title,
+            nextTrack.artist || ((nextTrack.artists as string[])?.join(', ')),
+            nextTrack.artUrl,
+            nextTrack.album,
+            nextTrack.format
+          );
+        }
       };
 
       return {

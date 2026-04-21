@@ -177,7 +177,7 @@ The scanner indicator in `App.tsx` must use reactive Zustand subscriptions for `
 - `queue.ts` — Sender-side queue identity helpers. Generates stable `queueEntryId` values for the active play queue so local queue actions can be mirrored onto an active Cast session without full reloads.
 - `PreloadManager.ts` — Lightweight next-track HLS prewarm manager. Watches store-driven queue changes and POSTs to the backend prewarm endpoint for the next queued item only; deduplicates in-flight/completed prewarms to avoid waste.
 - `CastManager` — Singleton Google Cast (Chromecast) manager. Handles cast context init, media loading, `LoadRequest + queueData` queue bootstrap, play/pause/seek/volume routing, runtime queue mutation (`Play Next`, append, remove, reorder, repeat sync), and custom receiver routing. Used by `PlaybackManager` to delegate controls when cast-connected.
-- `PlaybackManager` — Singleton audio playback manager. Routes play/pause/seek to local `HTMLAudioElement` or `CastManager` depending on connection state.
+- `PlaybackManager` — Singleton audio playback manager. Routes play/pause/seek to local `HTMLAudioElement` or `CastManager` depending on connection state. Local HLS playback has a secondary prepared audio/hls.js pipeline for the next queued track and logs track-end to next-audible transition latency in the browser console.
 
 ## Chromecast / HLS Architecture
 - `public/receiver.html` — Custom CAF receiver. Uses `PlaybackConfig` request handlers for manifest/segment auth, persistent receiver debug logging, Aurora-branded TV overlay UI, queue-aware `Up Next` rendering, and forced AAC HLS playback for deterministic Chromecast compatibility.
