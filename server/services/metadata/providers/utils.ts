@@ -15,8 +15,16 @@ export function cleanHtml(text: string): string {
  * Enhanced fetch with primitive retry for network resets.
  */
 export async function fetchWithRetry(url: string, options?: RequestInit, retries = 1): Promise<Response> {
+  const fetchOptions: RequestInit = {
+    ...options,
+    headers: {
+      'User-Agent': 'AuroraMediaServer/1.0',
+      ...(options?.headers || {})
+    }
+  };
+
   try {
-    const res = await fetch(url, options);
+    const res = await fetch(url, fetchOptions);
     if (res.status === 429 && retries > 0) {
       const retryAfter = res.headers.get('Retry-After');
       const delay = retryAfter ? parseInt(retryAfter, 10) * 1000 : 2000;
