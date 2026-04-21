@@ -19,8 +19,8 @@ This project uses **Semantic Versioning (semver)** with a pre-1.0 release model:
 | `major.minor.patch-prerelease` | `1.0.0-beta.1` | Pre-release (beta, alpha, rc) |
 
 ### Current Version
-- **package.json**: `version` field — currently `1.0.0-beta.1`
-- **TASKS.md / MEMORY.md**: Milestones labeled as `v1.0.0-beta.1`, `v0.9.0`, `v0.8.0`, etc.
+- **package.json**: `version` field — currently `1.0.0-beta.3`
+- **TASKS.md / MEMORY.md**: Milestones labeled as `v1.0.0-beta.3`, `v1.0.0-beta.2`, `v1.0.0-beta.1`, `v0.9.0`, etc.
 
 ### Version Mapping (Historical Milestones)
 | Milestone | Version | Description |
@@ -173,8 +173,17 @@ The scanner indicator in `App.tsx` must use reactive Zustand subscriptions for `
 - `safeBtoa(str)` — Base64-encodes strings that may contain multibyte characters.
 - `parseArtists(raw)` — Parses artist strings from metadata (handles JSON arrays, separators).
 - `fetchGenreImage(genre)`, `fetchArtistData(artist)`, `fetchAlbumImage(album, artist)` — External image lookup from `externalImagery.ts`.
-- `CastManager` — Singleton Google Cast (Chromecast) manager. Handles cast context init, media loading, play/pause/seek/volume routing. Used by `PlaybackManager` to delegate controls when cast-connected.
+- `streaming.ts` — Runtime HLS URL rewriting based on `streamingQuality`; used at actual playback/cast time so browser and Chromecast honor current settings instead of stale queued URLs.
+- `queue.ts` — Sender-side queue identity helpers. Generates stable `queueEntryId` values for the active play queue so local queue actions can be mirrored onto an active Cast session without full reloads.
+- `CastManager` — Singleton Google Cast (Chromecast) manager. Handles cast context init, media loading, `LoadRequest + queueData` queue bootstrap, play/pause/seek/volume routing, runtime queue mutation (`Play Next`, append, remove, reorder, repeat sync), and custom receiver routing. Used by `PlaybackManager` to delegate controls when cast-connected.
 - `PlaybackManager` — Singleton audio playback manager. Routes play/pause/seek to local `HTMLAudioElement` or `CastManager` depending on connection state.
+
+## Chromecast / HLS Architecture
+- `public/receiver.html` — Custom CAF receiver. Uses `PlaybackConfig` request handlers for manifest/segment auth, persistent receiver debug logging, Aurora-branded TV overlay UI, queue-aware `Up Next` rendering, and forced AAC HLS playback for deterministic Chromecast compatibility.
+- `server/routes/media.routes.ts` — HLS entrypoints. Serves a master playlist at `/api/stream/:trackId/playlist.m3u8`, a media playlist at `/api/stream/:trackId/media.m3u8`, exact-session MPEG-TS segments, and the `/api/cast/log` receiver log ingestion endpoint.
+- `server/services/hlsStream.service.ts` — FFmpeg-backed HLS session generation with per-session temp dirs, playlist readiness thresholds, playlist validation, first-segment probing, and session logging.
+- `server/services/debugLogger.service.ts` — File-backed diagnostics writer for `logs/hls-server.log`, `logs/cast-receiver.log`, and `logs/hls-sessions/*.log`.
+- Current Cast constraint: Chromecast custom receiver path is intentionally pinned to AAC-in-HLS for reliability. Browser HLS may use higher/source qualities; true lossless Cast remains future fMP4 work and should not replace the stable AAC Cast path casually.
 
 ## Server Services (server/services/)
 - `audioExtraction.service.ts` — ffmpeg subprocess decoding + Essentia.js WASM analysis. Smart seeking (35% into track), 15-second decode, non-ASCII filename symlink workaround, safe Essentia with individual algorithm error handling. Feature extraction optimized with **Hanning Window pre-computation** and **WASM buffer reuse**.

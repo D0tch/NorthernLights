@@ -8,25 +8,23 @@
     @import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;700&display=swap');
 
     :root {
-      --color-background: #030208;
-      --color-surface: rgba(6, 4, 18, 0.72);
-      --color-surface-strong: rgba(10, 8, 28, 0.82);
-      --color-surface-soft: rgba(14, 11, 32, 0.48);
-      --color-primary: #22c983;
-      --color-primary-dark: #10b981;
-      --color-secondary: #0ea5e9;
-      --color-accent: #f43f5e;
-      --color-text-primary: #d8d8e8;
-      --color-text-secondary: #8e8ea0;
-      --color-text-muted: #55556a;
-      --color-border: rgba(255, 255, 255, 0.06);
-      --glass-shadow: 0 20px 80px rgba(0, 0, 0, 0.45);
-      --glow-green: rgba(34, 201, 131, 0.22);
-      --glow-blue: rgba(14, 165, 233, 0.18);
-      --glow-rose: rgba(244, 63, 94, 0.16);
-      --radius-lg: 34px;
-      --radius-md: 24px;
-      --radius-sm: 18px;
+      --bg: #030208;
+      --surface: rgba(8, 6, 22, 0.48);
+      --surface-strong: rgba(8, 6, 22, 0.62);
+      --border: rgba(255, 255, 255, 0.075);
+      --border-bright: rgba(34, 201, 131, 0.18);
+      --text: #edf8f4;
+      --text-soft: #a8a9ba;
+      --text-muted: #66677b;
+      --green: #22c983;
+      --teal: #2dd4bf;
+      --blue: #0ea5e9;
+      --rose: #f43f5e;
+      --shadow: 0 24px 80px rgba(0, 0, 0, 0.46);
+      --glass-blur: 26px;
+      --radius-xl: 38px;
+      --radius-lg: 28px;
+      --radius-pill: 999px;
       --font-display: 'Syne', sans-serif;
       --font-body: 'DM Sans', sans-serif;
       --progress: 0%;
@@ -37,31 +35,31 @@
       box-sizing: border-box;
     }
 
-    html, body {
+    html,
+    body {
       width: 100%;
       height: 100%;
       margin: 0;
-      padding: 0;
       overflow: hidden;
-      background:
-        radial-gradient(circle at 14% 18%, var(--glow-green), transparent 26%),
-        radial-gradient(circle at 86% 20%, var(--glow-blue), transparent 28%),
-        radial-gradient(circle at 56% 88%, var(--glow-rose), transparent 24%),
-        var(--color-background);
-      color: var(--color-text-primary);
+      color: var(--text);
       font-family: var(--font-body);
+      background:
+        radial-gradient(circle at 12% 24%, rgba(34, 201, 131, 0.18), transparent 28%),
+        radial-gradient(circle at 88% 18%, rgba(14, 165, 233, 0.15), transparent 30%),
+        radial-gradient(circle at 56% 96%, rgba(244, 63, 94, 0.10), transparent 30%),
+        var(--bg);
     }
 
     body::before {
       content: '';
       position: fixed;
-      inset: 0;
+      inset: -6vh -6vw;
       background:
-        linear-gradient(120deg, rgba(3, 2, 8, 0.88), rgba(3, 2, 8, 0.52)),
-        var(--art-url) center center / cover no-repeat;
-      filter: blur(42px) saturate(1.15);
-      transform: scale(1.08);
-      opacity: 0.72;
+        linear-gradient(100deg, rgba(3, 2, 8, 0.92), rgba(3, 2, 8, 0.66), rgba(3, 2, 8, 0.84)),
+        var(--art-url) center / cover no-repeat;
+      filter: blur(46px) saturate(1.1);
+      opacity: 0.58;
+      transform: scale(1.04);
       pointer-events: none;
     }
 
@@ -69,12 +67,12 @@
       content: '';
       position: fixed;
       inset: 0;
-      background-image:
-        radial-gradient(circle at 20% 30%, rgba(255, 255, 255, 0.06), transparent 24%),
-        radial-gradient(circle at 78% 62%, rgba(255, 255, 255, 0.04), transparent 26%);
-      mix-blend-mode: screen;
-      opacity: 0.18;
       pointer-events: none;
+      background:
+        linear-gradient(115deg, transparent 0 20%, rgba(34, 201, 131, 0.055) 30%, transparent 44%),
+        linear-gradient(72deg, transparent 0 48%, rgba(14, 165, 233, 0.045) 60%, transparent 74%);
+      opacity: 0.75;
+      mix-blend-mode: screen;
     }
 
     cast-media-player {
@@ -86,181 +84,154 @@
       pointer-events: none;
     }
 
-    #receiver-shell {
+    .shell {
       position: relative;
+      z-index: 2;
       width: 100%;
       height: 100%;
-      padding: 3.2vh 3.2vw;
-      display: flex;
-      flex-direction: column;
-      gap: 2.8vh;
-      z-index: 2;
+      padding: 5vh 5vw;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 4vh;
     }
 
     .topbar {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 1.5vw;
+      min-height: 5vh;
     }
 
     .brand {
       display: flex;
       align-items: center;
       gap: 1vw;
-      min-width: 0;
+      color: var(--text-soft);
     }
 
     .brand-mark {
-      width: 3.6vw;
-      height: 3.6vw;
-      min-width: 56px;
-      min-height: 56px;
-      max-width: 76px;
-      max-height: 76px;
-      border-radius: 1.3vw;
-      background:
-        linear-gradient(145deg, rgba(34, 201, 131, 0.22), rgba(14, 165, 233, 0.12)),
-        rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(34, 201, 131, 0.22);
-      box-shadow: inset 0 1px 0 rgba(255,255,255,0.08), 0 0 32px rgba(34, 201, 131, 0.16);
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      width: 42px;
+      height: 42px;
+      border-radius: 16px;
       position: relative;
       overflow: hidden;
+      background: rgba(255, 255, 255, 0.045);
+      border: 1px solid var(--border);
+      backdrop-filter: blur(var(--glass-blur));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 0 34px rgba(34, 201, 131, 0.12);
     }
 
     .brand-mark::before,
     .brand-mark::after {
       content: '';
       position: absolute;
-      border-radius: 999px;
-      filter: blur(3px);
+      left: -20%;
+      right: -20%;
+      height: 12px;
+      border-radius: var(--radius-pill);
+      filter: blur(2px);
     }
 
     .brand-mark::before {
-      width: 120%;
-      height: 34%;
+      top: 13px;
       background: linear-gradient(90deg, transparent, rgba(34, 201, 131, 0.9), transparent);
-      transform: rotate(-18deg) translateY(-10%);
+      transform: rotate(-16deg);
     }
 
     .brand-mark::after {
-      width: 100%;
-      height: 26%;
-      background: linear-gradient(90deg, transparent, rgba(14, 165, 233, 0.75), transparent);
-      transform: rotate(13deg) translateY(55%);
+      top: 22px;
+      background: linear-gradient(90deg, transparent, rgba(45, 212, 191, 0.75), transparent);
+      transform: rotate(14deg);
     }
 
     .brand-copy {
-      min-width: 0;
-    }
-
-    .brand-kicker {
-      text-transform: uppercase;
-      letter-spacing: 0.28em;
-      font-size: 1.2vh;
-      color: var(--color-text-muted);
-      margin-bottom: 0.4vh;
+      display: flex;
+      flex-direction: column;
+      gap: 0.25vh;
     }
 
     .brand-title {
       font-family: var(--font-display);
-      font-size: 3.2vh;
+      font-size: 2.35vh;
       line-height: 1;
-      letter-spacing: -0.03em;
-      color: #eefaf5;
+      letter-spacing: -0.035em;
+      color: var(--text);
     }
 
-    .status-strip {
+    .brand-subtitle {
+      font-size: 1.2vh;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--text-muted);
+    }
+
+    .status {
       display: flex;
       align-items: center;
-      gap: 0.8vw;
-      flex-wrap: wrap;
-      justify-content: flex-end;
+      gap: 0.7vw;
+      padding: 0.9vh 1vw;
+      min-width: 0;
+      border-radius: var(--radius-pill);
+      color: var(--text-soft);
+      font-size: 1.45vh;
+      background: rgba(255, 255, 255, 0.038);
+      border: 1px solid var(--border);
+      backdrop-filter: blur(var(--glass-blur));
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.035);
     }
 
-    .chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.55vw;
-      padding: 0.95vh 1.1vw;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.05);
-      border: 1px solid var(--color-border);
-      color: var(--color-text-secondary);
-      font-size: 1.55vh;
-      letter-spacing: 0.01em;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
-      backdrop-filter: blur(18px);
-      white-space: nowrap;
+    .status-dot {
+      width: 9px;
+      height: 9px;
+      border-radius: var(--radius-pill);
+      background: var(--green);
+      box-shadow: 0 0 18px rgba(34, 201, 131, 0.62);
+      flex: 0 0 auto;
     }
 
-    .chip--accent {
-      color: #eefaf5;
-      border-color: rgba(34, 201, 131, 0.26);
-      background: linear-gradient(145deg, rgba(34, 201, 131, 0.12), rgba(14, 165, 233, 0.08));
-    }
-
-    .chip-dot {
-      width: 0.62vw;
-      height: 0.62vw;
-      min-width: 10px;
-      min-height: 10px;
-      border-radius: 999px;
-      background: var(--color-primary);
-      box-shadow: 0 0 16px rgba(34, 201, 131, 0.55);
-    }
-
-    .main-layout {
+    .stage {
+      min-height: 0;
       display: grid;
-      grid-template-columns: minmax(340px, 25vw) minmax(440px, 1fr) minmax(300px, 24vw);
-      gap: 2vw;
-      align-items: stretch;
-      flex: 1;
-      min-height: 0;
+      grid-template-columns: minmax(300px, 27vw) minmax(0, 1fr);
+      gap: 3.4vw;
+      align-items: center;
+      max-width: 1420px;
+      width: 100%;
+      justify-self: center;
     }
 
-    .art-card,
-    .meta-card,
-    .queue-card,
-    .debug-panel {
-      position: relative;
-      background: linear-gradient(145deg, rgba(8, 6, 22, 0.76), rgba(10, 8, 28, 0.54));
-      border: 1px solid var(--color-border);
-      box-shadow: var(--glass-shadow), inset 0 1px 0 rgba(255,255,255,0.04);
-      backdrop-filter: blur(26px);
+    .cover-wrap {
+      width: min(27vw, 440px);
+      aspect-ratio: 1;
+      justify-self: end;
+      border-radius: var(--radius-xl);
+      padding: 10px;
+      background:
+        linear-gradient(145deg, rgba(255,255,255,0.09), rgba(255,255,255,0.025)),
+        rgba(255, 255, 255, 0.035);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,0.06);
+      backdrop-filter: blur(var(--glass-blur));
     }
 
-    .art-card {
-      border-radius: calc(var(--radius-lg) + 10px);
+    .cover {
+      width: 100%;
+      height: 100%;
+      border-radius: calc(var(--radius-xl) - 12px);
       overflow: hidden;
-      min-height: 0;
-      display: flex;
-      align-items: stretch;
-      justify-content: stretch;
-    }
-
-    .art-card::after {
-      content: '';
-      position: absolute;
-      inset: auto 0 0 0;
-      height: 34%;
-      background: linear-gradient(to top, rgba(3, 2, 8, 0.8), transparent);
-      pointer-events: none;
+      background: rgba(255, 255, 255, 0.035);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.055);
     }
 
     #cover-art,
     #cover-fallback {
       width: 100%;
       height: 100%;
-      display: block;
     }
 
     #cover-art {
+      display: block;
       object-fit: cover;
-      background: rgba(255,255,255,0.02);
     }
 
     #cover-fallback {
@@ -268,255 +239,166 @@
       align-items: center;
       justify-content: center;
       font-family: var(--font-display);
-      font-size: 14vh;
-      letter-spacing: -0.08em;
-      color: rgba(238, 250, 245, 0.9);
+      font-size: 12vh;
+      color: rgba(237, 248, 244, 0.88);
       background:
-        radial-gradient(circle at 30% 25%, rgba(34, 201, 131, 0.28), transparent 30%),
-        radial-gradient(circle at 70% 30%, rgba(14, 165, 233, 0.22), transparent 28%),
-        radial-gradient(circle at 50% 72%, rgba(244, 63, 94, 0.18), transparent 26%),
-        rgba(255, 255, 255, 0.03);
+        radial-gradient(circle at 30% 24%, rgba(34, 201, 131, 0.28), transparent 34%),
+        radial-gradient(circle at 70% 76%, rgba(14, 165, 233, 0.22), transparent 34%),
+        rgba(255, 255, 255, 0.035);
     }
 
-    .art-overlay {
-      position: absolute;
-      inset: auto 1.6vw 1.6vw 1.6vw;
-      display: flex;
-      align-items: flex-end;
-      justify-content: space-between;
-      gap: 1vw;
-      z-index: 2;
-    }
-
-    .art-caption {
+    .content {
       min-width: 0;
+      max-width: 760px;
+      padding: 4.2vh 3.2vw;
+      border-radius: var(--radius-xl);
+      background: linear-gradient(145deg, rgba(8, 6, 22, 0.52), rgba(8, 6, 22, 0.34));
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,0.045);
+      backdrop-filter: blur(var(--glass-blur));
     }
 
-    .art-caption-label {
-      font-size: 1.25vh;
-      text-transform: uppercase;
-      letter-spacing: 0.22em;
-      color: var(--color-text-muted);
-      margin-bottom: 0.5vh;
-    }
-
-    .art-caption-value {
-      font-size: 1.85vh;
-      color: var(--color-text-secondary);
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      max-width: 15vw;
-    }
-
-    .meta-card {
-      border-radius: var(--radius-lg);
-      padding: 3.4vh 2.3vw;
-      display: flex;
-      flex-direction: column;
-      justify-content: space-between;
-      min-height: 0;
-      overflow: hidden;
-    }
-
-    .meta-card::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background:
-        radial-gradient(circle at top right, rgba(34, 201, 131, 0.12), transparent 28%),
-        radial-gradient(circle at bottom left, rgba(14, 165, 233, 0.12), transparent 32%);
-      pointer-events: none;
-    }
-
-    .meta-main {
-      position: relative;
-      z-index: 1;
-      min-height: 0;
-    }
-
-    .meta-kicker {
+    .kicker {
       display: inline-flex;
       align-items: center;
-      gap: 0.7vw;
+      gap: 0.65vw;
       margin-bottom: 2vh;
-      color: var(--color-text-secondary);
-      font-size: 1.55vh;
-      letter-spacing: 0.02em;
+      color: var(--text-muted);
+      font-size: 1.35vh;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
     }
 
-    .signal {
-      width: 1.4vw;
-      height: 1.4vw;
-      min-width: 18px;
-      min-height: 18px;
-      border-radius: 999px;
-      border: 1px solid rgba(34, 201, 131, 0.24);
-      background:
-        radial-gradient(circle at center, rgba(34, 201, 131, 0.9) 0 24%, transparent 28%),
-        rgba(34, 201, 131, 0.08);
-      box-shadow: 0 0 20px rgba(34, 201, 131, 0.22);
+    .kicker-line {
+      width: 4.2vw;
+      height: 1px;
+      background: linear-gradient(90deg, var(--green), transparent);
+      opacity: 0.7;
     }
 
     #track-title {
-      font-family: var(--font-display);
-      font-size: clamp(42px, 7vh, 86px);
-      line-height: 0.92;
-      letter-spacing: -0.05em;
-      margin: 0 0 1.5vh 0;
+      margin: 0 0 1.4vh;
       max-width: 100%;
+      font-family: var(--font-display);
+      font-size: clamp(40px, 6.2vh, 82px);
+      line-height: 0.94;
+      letter-spacing: -0.055em;
+      color: var(--text);
       overflow: hidden;
       display: -webkit-box;
       -webkit-line-clamp: 3;
       -webkit-box-orient: vertical;
-      color: #f6fffb;
       text-wrap: balance;
     }
 
     #track-artist {
-      margin: 0 0 0.8vh 0;
-      font-size: clamp(24px, 3vh, 34px);
-      color: var(--color-text-primary);
+      margin: 0 0 0.6vh;
+      font-size: clamp(21px, 2.7vh, 34px);
+      color: var(--text-soft);
       line-height: 1.2;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
     }
 
     #track-album {
       margin: 0;
-      font-size: 1.9vh;
-      color: var(--color-text-secondary);
+      font-size: 1.65vh;
+      color: var(--text-muted);
       line-height: 1.35;
-      max-width: 90%;
+      white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      white-space: nowrap;
     }
 
-    .progress-panel {
-      position: relative;
-      z-index: 1;
-      margin-top: 3vh;
+    .progress {
+      margin-top: 4vh;
     }
 
-    .progress-head {
+    .progress-times {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 1vw;
-      margin-bottom: 1.2vh;
-      color: var(--color-text-secondary);
-      font-size: 1.55vh;
+      margin-bottom: 1vh;
+      color: var(--text-muted);
+      font-size: 1.35vh;
+      font-variant-numeric: tabular-nums;
     }
 
-    .progress-bar {
+    .progress-track {
       position: relative;
-      width: 100%;
-      height: 1.1vh;
-      min-height: 10px;
-      border-radius: 999px;
+      height: 7px;
       overflow: hidden;
+      border-radius: var(--radius-pill);
       background: rgba(255, 255, 255, 0.08);
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      border: 1px solid rgba(255, 255, 255, 0.045);
     }
 
-    .progress-bar::before {
+    .progress-track::before {
       content: '';
       position: absolute;
       inset: 0 auto 0 0;
       width: var(--progress);
-      background: linear-gradient(90deg, var(--color-primary), var(--color-secondary));
-      box-shadow: 0 0 22px rgba(34, 201, 131, 0.28);
       border-radius: inherit;
+      background: linear-gradient(90deg, var(--green), var(--teal), var(--blue));
+      box-shadow: 0 0 18px rgba(34, 201, 131, 0.3);
     }
 
-    .progress-grid {
-      margin-top: 2.5vh;
+    .queue-strip {
+      justify-self: center;
+      width: min(940px, 82vw);
+      min-height: 8vh;
+      padding: 1.25vh 1.25vw;
       display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 1vw;
-    }
-
-    .stat-card {
-      padding: 1.6vh 1.1vw;
-      border-radius: var(--radius-sm);
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.05);
-    }
-
-    .stat-label {
-      font-size: 1.2vh;
-      text-transform: uppercase;
-      letter-spacing: 0.2em;
-      color: var(--color-text-muted);
-      margin-bottom: 0.8vh;
-    }
-
-    .stat-value {
-      font-size: 2.2vh;
-      color: #f2fbf7;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-    }
-
-    .queue-card {
+      grid-template-columns: auto 1fr;
+      gap: 1.2vw;
+      align-items: center;
       border-radius: var(--radius-lg);
-      padding: 2.8vh 1.4vw;
-      display: flex;
-      flex-direction: column;
-      min-height: 0;
-      overflow: hidden;
+      background: rgba(255, 255, 255, 0.035);
+      border: 1px solid var(--border);
+      box-shadow: 0 14px 44px rgba(0, 0, 0, 0.30), inset 0 1px 0 rgba(255,255,255,0.04);
+      backdrop-filter: blur(var(--glass-blur));
     }
 
-    .queue-head {
-      display: flex;
-      align-items: end;
-      justify-content: space-between;
-      gap: 1vw;
-      margin-bottom: 2.2vh;
-    }
-
-    .queue-title {
-      font-family: var(--font-display);
-      font-size: 3.4vh;
-      letter-spacing: -0.04em;
-      color: #eefaf5;
-      margin: 0;
-    }
-
-    .queue-subtitle {
-      color: var(--color-text-secondary);
-      font-size: 1.45vh;
+    .queue-label {
+      color: var(--text-muted);
+      font-size: 1.15vh;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      white-space: nowrap;
     }
 
     #up-next-list {
+      min-width: 0;
       display: flex;
-      flex-direction: column;
-      gap: 1vh;
-      min-height: 0;
+      align-items: center;
+      gap: 1.15vw;
       overflow: hidden;
     }
 
     .queue-item {
-      display: grid;
-      grid-template-columns: auto 1fr;
-      gap: 0.95vw;
-      padding: 1.3vh 0.9vw;
-      border-radius: var(--radius-sm);
-      background: rgba(255, 255, 255, 0.04);
-      border: 1px solid rgba(255, 255, 255, 0.04);
-      min-height: 0;
+      min-width: 0;
+      display: flex;
+      align-items: baseline;
+      gap: 0.55vw;
+      color: var(--text-soft);
+      font-size: 1.5vh;
+      white-space: nowrap;
     }
 
     .queue-index {
+      color: var(--green);
       font-family: var(--font-display);
-      font-size: 2.1vh;
-      color: var(--color-primary);
-      min-width: 2.4vw;
-      text-align: center;
+      font-size: 1.65vh;
+      letter-spacing: -0.03em;
+      opacity: 0.9;
     }
 
     .queue-copy {
       min-width: 0;
+      display: flex;
+      gap: 0.35vw;
+      overflow: hidden;
     }
 
     .queue-name,
@@ -527,23 +409,21 @@
     }
 
     .queue-name {
-      font-size: 1.75vh;
-      color: #f2fbf7;
-      margin-bottom: 0.3vh;
+      color: var(--text);
+      max-width: 17vw;
     }
 
     .queue-artist {
-      font-size: 1.4vh;
-      color: var(--color-text-secondary);
+      color: var(--text-muted);
+      max-width: 11vw;
     }
 
     .queue-empty {
-      padding: 1.6vh 1vw;
-      border-radius: var(--radius-sm);
-      background: rgba(255, 255, 255, 0.03);
-      border: 1px dashed rgba(255, 255, 255, 0.08);
-      color: var(--color-text-secondary);
-      font-size: 1.5vh;
+      color: var(--text-muted);
+      font-size: 1.45vh;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
     }
 
     #debug-toggle {
@@ -552,31 +432,35 @@
       bottom: 2vh;
       z-index: 50;
       border: 0;
-      border-radius: 999px;
-      padding: 1.1vh 1vw;
-      background: rgba(5, 4, 18, 0.72);
-      border: 1px solid rgba(255, 255, 255, 0.08);
-      color: var(--color-text-secondary);
+      border-radius: var(--radius-pill);
+      padding: 0.85vh 0.9vw;
+      color: var(--text-muted);
+      background: rgba(255, 255, 255, 0.032);
+      border: 1px solid var(--border);
       font-family: var(--font-body);
-      font-size: 1.35vh;
-      letter-spacing: 0.08em;
+      font-size: 1.15vh;
+      letter-spacing: 0.12em;
       text-transform: uppercase;
-      backdrop-filter: blur(18px);
-      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.32);
+      backdrop-filter: blur(var(--glass-blur));
     }
 
     .debug-panel {
       position: fixed;
       left: 2vw;
       right: 2vw;
-      bottom: 6.5vh;
-      max-height: 29vh;
+      bottom: 6.2vh;
+      max-height: 28vh;
       padding: 1.4vh 1.2vw;
-      border-radius: 22px;
       overflow-y: auto;
       z-index: 49;
+      border-radius: 22px;
+      color: var(--text-soft);
+      background: rgba(4, 2, 14, 0.76);
+      border: 1px solid var(--border);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(var(--glass-blur));
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-      font-size: 1.25vh;
+      font-size: 1.2vh;
       line-height: 1.45;
       white-space: pre-wrap;
       word-break: break-word;
@@ -591,21 +475,32 @@
     .debug-panel .ok { color: #9ce5bd; }
 
     @media (max-aspect-ratio: 16/10) {
-      #receiver-shell {
-        padding: 2.6vh 2.2vw;
+      .shell {
+        padding: 4vh 4vw;
       }
 
-      .main-layout {
+      .stage {
         grid-template-columns: 1fr;
-        grid-template-rows: auto auto auto;
+        gap: 3vh;
       }
 
-      .art-card {
-        min-height: 32vh;
+      .cover-wrap {
+        width: min(44vh, 62vw);
+        justify-self: center;
       }
 
-      .queue-card {
-        min-height: 24vh;
+      .content {
+        justify-self: center;
+        width: min(820px, 86vw);
+        text-align: center;
+      }
+
+      .kicker {
+        justify-content: center;
+      }
+
+      #track-title {
+        -webkit-line-clamp: 2;
       }
     }
   </style>
@@ -614,85 +509,55 @@
 <body>
   <cast-media-player></cast-media-player>
 
-  <div id="receiver-shell">
+  <div class="shell">
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"></div>
         <div class="brand-copy">
-          <div class="brand-kicker">Custom Receiver</div>
           <div class="brand-title">Aurora</div>
+          <div class="brand-subtitle">NorthernLights Receiver</div>
         </div>
       </div>
-      <div class="status-strip">
-        <div class="chip chip--accent">
-          <span class="chip-dot"></span>
-          <span id="status-chip">Idle</span>
-        </div>
-        <div class="chip"><span id="codec-chip">AAC HLS</span></div>
-        <div class="chip"><span id="queue-chip">Queue 0</span></div>
+
+      <div class="status">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span id="status-chip">Idle</span>
       </div>
     </header>
 
-    <main class="main-layout">
-      <section class="art-card">
-        <img id="cover-art" alt="" />
-        <div id="cover-fallback">A</div>
-        <div class="art-overlay">
-          <div class="art-caption">
-            <div class="art-caption-label">Album</div>
-            <div class="art-caption-value" id="cover-album">Nothing loaded</div>
-          </div>
-          <div class="chip">Aurora Cast</div>
+    <main class="stage">
+      <section class="cover-wrap" aria-label="Album artwork">
+        <div class="cover">
+          <img id="cover-art" alt="" />
+          <div id="cover-fallback">A</div>
         </div>
       </section>
 
-      <section class="meta-card">
-        <div class="meta-main">
-          <div class="meta-kicker">
-            <span class="signal" aria-hidden="true"></span>
-            <span id="meta-kicker">Ready for playback</span>
-          </div>
-          <h1 id="track-title">Aurora Receiver</h1>
-          <p id="track-artist">Waiting for media</p>
-          <p id="track-album">Start casting from Aurora to see the active queue here.</p>
+      <section class="content" aria-label="Now playing">
+        <div class="kicker">
+          <span class="kicker-line" aria-hidden="true"></span>
+          <span id="meta-kicker">Ready for playback</span>
         </div>
+        <h1 id="track-title">Aurora Receiver</h1>
+        <p id="track-artist">Waiting for media</p>
+        <p id="track-album">Start casting from Aurora.</p>
 
-        <div class="progress-panel">
-          <div class="progress-head">
+        <div class="progress">
+          <div class="progress-times">
             <span id="current-time">0:00</span>
             <span id="duration-time">0:00</span>
           </div>
-          <div class="progress-bar" id="progress-bar"></div>
-
-          <div class="progress-grid">
-            <div class="stat-card">
-              <div class="stat-label">State</div>
-              <div class="stat-value" id="state-value">Idle</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Position</div>
-              <div class="stat-value" id="position-value">0:00 / 0:00</div>
-            </div>
-            <div class="stat-card">
-              <div class="stat-label">Queue</div>
-              <div class="stat-value" id="queue-value">No items</div>
-            </div>
-          </div>
+          <div class="progress-track" id="progress-bar"></div>
         </div>
       </section>
-
-      <aside class="queue-card">
-        <div class="queue-head">
-          <div>
-            <h2 class="queue-title">Up Next</h2>
-            <div class="queue-subtitle" id="queue-subtitle">Queue is empty</div>
-          </div>
-        </div>
-        <div id="up-next-list">
-          <div class="queue-empty">Start a cast session to preview the next tracks.</div>
-        </div>
-      </aside>
     </main>
+
+    <aside class="queue-strip" aria-label="Up next">
+      <div class="queue-label">Up Next</div>
+      <div id="up-next-list">
+        <div class="queue-empty">Queue appears here once playback starts.</div>
+      </div>
+    </aside>
   </div>
 
   <button id="debug-toggle" type="button">Logs</button>
@@ -727,20 +592,13 @@
         title: document.getElementById('track-title'),
         artist: document.getElementById('track-artist'),
         album: document.getElementById('track-album'),
-        coverAlbum: document.getElementById('cover-album'),
         coverArt: document.getElementById('cover-art'),
         coverFallback: document.getElementById('cover-fallback'),
         currentTime: document.getElementById('current-time'),
         durationTime: document.getElementById('duration-time'),
         progressBar: document.getElementById('progress-bar'),
         statusChip: document.getElementById('status-chip'),
-        codecChip: document.getElementById('codec-chip'),
-        queueChip: document.getElementById('queue-chip'),
         metaKicker: document.getElementById('meta-kicker'),
-        stateValue: document.getElementById('state-value'),
-        positionValue: document.getElementById('position-value'),
-        queueValue: document.getElementById('queue-value'),
-        queueSubtitle: document.getElementById('queue-subtitle'),
         upNextList: document.getElementById('up-next-list'),
         debugPanel: document.getElementById('debug-panel'),
         debugToggle: document.getElementById('debug-toggle')
@@ -873,7 +731,7 @@
 
       function getStatusCopy() {
         if (currentPlayerState === 'BUFFERING') return 'Buffering';
-        if (currentPlayerState === 'PLAYING') return 'Now Playing';
+        if (currentPlayerState === 'PLAYING') return 'Playing';
         if (currentPlayerState === 'PAUSED') return 'Paused';
         if (currentPlayerState === 'LOADING') return 'Loading';
         return 'Idle';
@@ -885,22 +743,16 @@
         var nextItems = [];
         var i;
 
-        for (i = currentIndex + 1; i < items.length && nextItems.length < 4; i += 1) {
+        for (i = currentIndex + 1; i < items.length && nextItems.length < 3; i += 1) {
           nextItems.push(items[i]);
         }
-
-        ui.queueChip.textContent = 'Queue ' + items.length;
-        ui.queueValue.textContent = items.length ? (currentIndex + 1) + ' / ' + items.length : 'No items';
-        ui.queueSubtitle.textContent = nextItems.length
-          ? nextItems.length + ' track' + (nextItems.length === 1 ? '' : 's') + ' queued next'
-          : (items.length ? 'End of queue' : 'Queue is empty');
 
         ui.upNextList.innerHTML = '';
 
         if (!nextItems.length) {
           var empty = document.createElement('div');
           empty.className = 'queue-empty';
-          empty.textContent = items.length ? 'No further tracks queued after this one.' : 'Start a cast session to preview the next tracks.';
+          empty.textContent = items.length ? 'No further tracks queued.' : 'Queue appears here once playback starts.';
           ui.upNextList.appendChild(empty);
           return;
         }
@@ -916,7 +768,7 @@
               '<div class="queue-artist"></div>' +
             '</div>';
           row.querySelector('.queue-name').textContent = getDisplayTitle(mediaInfo);
-          row.querySelector('.queue-artist').textContent = getDisplayArtist(mediaInfo);
+          row.querySelector('.queue-artist').textContent = 'by ' + getDisplayArtist(mediaInfo);
           ui.upNextList.appendChild(row);
         });
       }
@@ -934,21 +786,18 @@
 
         ui.title.textContent = title || 'Aurora Receiver';
         ui.artist.textContent = artist || 'Waiting for media';
-        ui.album.textContent = album || 'Start casting from Aurora to see the active queue here.';
-        ui.coverAlbum.textContent = album || 'No album metadata';
+        ui.album.textContent = album || 'Start casting from Aurora.';
         ui.currentTime.textContent = formatTime(currentTime);
         ui.durationTime.textContent = formatTime(duration);
-        ui.positionValue.textContent = formatTime(currentTime) + ' / ' + formatTime(duration);
         ui.progressBar.style.setProperty('--progress', progress.toFixed(2) + '%');
         ui.statusChip.textContent = statusCopy;
-        ui.stateValue.textContent = statusCopy;
-        ui.metaKicker.textContent = statusCopy === 'Now Playing'
-          ? 'Streaming from Aurora with custom receiver visuals'
+        ui.metaKicker.textContent = statusCopy === 'Playing'
+          ? 'Now streaming'
           : statusCopy === 'Buffering'
-            ? 'Refreshing stream data and filling the receiver buffer'
+            ? 'Buffering'
             : statusCopy === 'Paused'
-              ? 'Playback paused on the receiver'
-              : 'Ready for playback';
+              ? 'Paused'
+              : 'Ready';
 
         setArtwork(imageUrl, title);
         renderQueue();
@@ -973,7 +822,6 @@
       };
 
       context.addEventListener(cast.framework.system.EventType.READY, function() {
-        ui.codecChip.textContent = 'AAC HLS';
         logAndPost('ok', LOG_TAG, 'Receiver started — forced codec: ' + FORCED_CAST_CODEC);
         syncUi();
       });
