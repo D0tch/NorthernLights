@@ -88,6 +88,7 @@ PWA low-risk hardening completed on 2026-04-21: Workbox runtime caching now prio
   - **Authenticated API Safety**: Replaced the broad `NetworkFirst` API cache with `NetworkOnly` for remaining `/api/` requests to avoid replaying stale or wrong-user auth/library/admin data from Cache Storage.
   - **Prompt-Controlled Updates**: Switched vite-plugin-pwa registration from `autoUpdate` to `prompt` and wired the existing update banner to apply the waiting service worker instead of blindly reloading.
   - **Non-Blocking Cast SDK**: Added async loading for the Google Cast sender SDK so slow or offline `gstatic.com` access does not block initial app shell parsing.
+  - **Install Prompt Capture Fix**: Moved `beforeinstallprompt` capture into an app-boot singleton so the native install event is not missed when `UserMenu` mounts only after login.
 
 
 ---
