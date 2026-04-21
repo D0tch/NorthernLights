@@ -279,24 +279,7 @@ export class CastManager {
                 () => {
                     if (!this.isConnected()) return;
                     try {
-                        const session = this.castContext.getCurrentSession();
-                        const mediaSession = session?.getMediaSession();
-                        if (!mediaSession) return;
-                        this.syncQueueItemMapFromSession(mediaSession);
-                        const currentQueueEntryId = this.getCurrentQueueEntryId(mediaSession);
-                        if (currentQueueEntryId) {
-                            const playlist = usePlayerStore.getState().playlist;
-                            const index = playlist.findIndex((track) => track.queueEntryId === currentQueueEntryId);
-                            if (index >= 0) {
-                                this.onTrackChange?.(index);
-                                return;
-                            }
-                        }
-
-                        const fallbackIndex = mediaSession.media?.metadata?.index;
-                        if (typeof fallbackIndex === 'number' && fallbackIndex >= 0) {
-                            this.onTrackChange?.(fallbackIndex);
-                        }
+                        this.syncCurrentTrackFromSession(this.castContext.getCurrentSession()?.getMediaSession());
                     } catch { /* ignore */ }
                 }
             );
@@ -305,7 +288,7 @@ export class CastManager {
                 cast.framework.RemotePlayerEventType.MEDIA_STATUS_CHANGED,
                 () => {
                     try {
-                        this.syncQueueItemMapFromSession(this.castContext.getCurrentSession()?.getMediaSession());
+                        this.syncCurrentTrackFromSession(this.castContext.getCurrentSession()?.getMediaSession());
                     } catch { /* ignore */ }
                 }
             );
@@ -432,6 +415,42 @@ export class CastManager {
             if (currentEntryId) return currentEntryId;
         }
         return mediaSession.media?.customData?.queueEntryId || null;
+    }
+
+    private syncCurrentTrackFromSession(mediaSession: any | null = this.getMediaSession()): boolean {
+        if (!mediaSession) return false;
+
+        this.syncQueueItemMapFromSession(mediaSession);
+
+        const state = usePlayerStore.getState();
+        const currentQueueEntryId = this.getCurrentQueueEntryId(mediaSession);
+        if (currentQueueEntryId) {
+            const index = state.playlist.findIndex((track) => track.queueEntryId === currentQueueEntryId);
+            if (index >= 0) {
+                if (index !== state.currentIndex) {
+                    this.onTrackChange?.(index);
+                }
+                return true;
+            }
+        }
+
+        const currentItemIndex = mediaSession.currentItemIndex;
+        if (typeof currentItemIndex === 'number' && currentItemIndex >= 0 && currentItemIndex < state.playlist.length) {
+            if (currentItemIndex !== state.currentIndex) {
+                this.onTrackChange?.(currentItemIndex);
+            }
+            return true;
+        }
+
+        const fallbackIndex = mediaSession.media?.metadata?.index;
+        if (typeof fallbackIndex === 'number' && fallbackIndex >= 0 && fallbackIndex < state.playlist.length) {
+            if (fallbackIndex !== state.currentIndex) {
+                this.onTrackChange?.(fallbackIndex);
+            }
+            return true;
+        }
+
+        return false;
     }
 
     private getQueueItemId(queueEntryId: string, mediaSession: any | null = this.getMediaSession()): number | null {
