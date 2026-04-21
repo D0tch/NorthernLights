@@ -90,7 +90,7 @@ pm2 start "npx tsx server/index.ts" --name northernlights
 
 ### Prerequisites
 - Node.js (v18+ recommended)
-- `npm` or `yarn`
+- `npm` or `yarn` (includes `bottleneck` for robust external API rate limiting)
 - **uv** (Optional but highly recommended) — *A fast Python package manager. Automatically fetched during setup to provide an isolated Python 3.11 environment since the ML models require specific Python versions.*
 - **FFmpeg** (v4.0+ recommended) — *Required for on-the-fly transcoding of non-native formats and ML audio extraction.*
 - **Podman** or **Docker** — *Required for the automatic PostgreSQL database container. The app auto-detects which is available (Podman preferred).*

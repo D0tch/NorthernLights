@@ -3,6 +3,7 @@ import { usePlayerStore } from '../../store/index';
 import { useProviderConnectionTest } from '../../hooks/useProviderConnectionTest';
 import { useToast } from '../../hooks/useToast';
 import { Trash2 } from 'lucide-react';
+import { DependencyBadge, DependencyGroup } from '../DependencyBadge';
 
 export const MetadataTab: React.FC = () => {
     const lastFmApiKey = usePlayerStore(state => state.lastFmApiKey);
@@ -49,9 +50,29 @@ export const MetadataTab: React.FC = () => {
             <div className="settings-section-header mb-4">
                 <h3 className="text-xl font-bold text-[var(--color-text-primary)]">Metadata Providers</h3>
             </div>
-            <p className="text-sm text-[var(--color-text-muted)] mb-8">
+            <p className="text-sm text-[var(--color-text-muted)] mb-6">
                 Configure external APIs to automatically enrich your local library with vivid artist imagery, detailed biographies, and high-quality album art.
             </p>
+
+            <div className="mb-6 space-y-4">
+                <DependencyGroup title="Provider Status">
+                    <DependencyBadge
+                        label="Last.fm Integration"
+                        status={lastFmApiKey && lastFmSharedSecret ? 'available' : 'unavailable'}
+                        message={lastFmApiKey && lastFmSharedSecret ? 'Connected & ready for artwork/bios' : 'Requires API Key and Shared Secret'}
+                    />
+                    <DependencyBadge
+                        label="Genius Integration"
+                        status={geniusApiKey ? 'available' : 'unavailable'}
+                        message={geniusApiKey ? 'Connected & ready for lyrics/artwork' : 'Requires Access Token'}
+                    />
+                    <DependencyBadge
+                        label="MusicBrainz Application"
+                        status={musicBrainzConnected ? 'available' : (musicBrainzEnabled ? 'partial' : 'unavailable')}
+                        message={musicBrainzConnected ? 'Connected & ready for metadata' : (musicBrainzEnabled ? 'Requires OAuth Authorization' : 'Integration currently disabled')}
+                    />
+                </DependencyGroup>
+            </div>
 
             <div className="flex flex-col gap-6">
                 
