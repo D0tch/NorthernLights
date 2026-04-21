@@ -5,8 +5,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>NorthernLights Cast Receiver</title>
   <style>
-    @import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:wght@400;500;700&display=swap');
-
     :root {
       --bg: #030208;
       --surface: rgba(8, 6, 22, 0.48);
@@ -20,15 +18,13 @@
       --teal: #2dd4bf;
       --blue: #0ea5e9;
       --rose: #f43f5e;
-      --shadow: 0 24px 80px rgba(0, 0, 0, 0.46);
-      --glass-blur: 26px;
+      --shadow: 0 18px 44px rgba(0, 0, 0, 0.38);
       --radius-xl: 38px;
       --radius-lg: 28px;
       --radius-pill: 999px;
-      --font-display: 'Syne', sans-serif;
-      --font-body: 'DM Sans', sans-serif;
+      --font-display: sans-serif;
+      --font-body: sans-serif;
       --progress: 0%;
-      --art-url: none;
     }
 
     * {
@@ -44,35 +40,25 @@
       color: var(--text);
       font-family: var(--font-body);
       background:
-        radial-gradient(circle at 12% 24%, rgba(34, 201, 131, 0.18), transparent 28%),
-        radial-gradient(circle at 88% 18%, rgba(14, 165, 233, 0.15), transparent 30%),
-        radial-gradient(circle at 56% 96%, rgba(244, 63, 94, 0.10), transparent 30%),
+        radial-gradient(circle at 12% 24%, rgba(34, 201, 131, 0.14), transparent 28%),
+        radial-gradient(circle at 88% 18%, rgba(14, 165, 233, 0.11), transparent 30%),
+        radial-gradient(circle at 56% 96%, rgba(244, 63, 94, 0.07), transparent 30%),
         var(--bg);
     }
 
     body::before {
       content: '';
       position: fixed;
-      inset: -6vh -6vw;
+      inset: 0;
       background:
-        linear-gradient(100deg, rgba(3, 2, 8, 0.92), rgba(3, 2, 8, 0.66), rgba(3, 2, 8, 0.84)),
-        var(--art-url) center / cover no-repeat;
-      filter: blur(46px) saturate(1.1);
-      opacity: 0.58;
-      transform: scale(1.04);
+        linear-gradient(115deg, transparent 0 20%, rgba(34, 201, 131, 0.035) 30%, transparent 44%),
+        linear-gradient(72deg, transparent 0 48%, rgba(14, 165, 233, 0.03) 60%, transparent 74%);
+      opacity: 0.64;
       pointer-events: none;
     }
 
     body::after {
-      content: '';
-      position: fixed;
-      inset: 0;
-      pointer-events: none;
-      background:
-        linear-gradient(115deg, transparent 0 20%, rgba(34, 201, 131, 0.055) 30%, transparent 44%),
-        linear-gradient(72deg, transparent 0 48%, rgba(14, 165, 233, 0.045) 60%, transparent 74%);
-      opacity: 0.75;
-      mix-blend-mode: screen;
+      display: none;
     }
 
     cast-media-player {
@@ -117,8 +103,7 @@
       overflow: hidden;
       background: rgba(255, 255, 255, 0.045);
       border: 1px solid var(--border);
-      backdrop-filter: blur(var(--glass-blur));
-      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 0 34px rgba(34, 201, 131, 0.12);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.06);
     }
 
     .brand-mark::before,
@@ -129,18 +114,17 @@
       right: -20%;
       height: 12px;
       border-radius: var(--radius-pill);
-      filter: blur(2px);
     }
 
     .brand-mark::before {
       top: 13px;
-      background: linear-gradient(90deg, transparent, rgba(34, 201, 131, 0.9), transparent);
+      background: linear-gradient(90deg, transparent, rgba(34, 201, 131, 0.76), transparent);
       transform: rotate(-16deg);
     }
 
     .brand-mark::after {
       top: 22px;
-      background: linear-gradient(90deg, transparent, rgba(45, 212, 191, 0.75), transparent);
+      background: linear-gradient(90deg, transparent, rgba(45, 212, 191, 0.62), transparent);
       transform: rotate(14deg);
     }
 
@@ -176,7 +160,6 @@
       font-size: 1.45vh;
       background: rgba(255, 255, 255, 0.038);
       border: 1px solid var(--border);
-      backdrop-filter: blur(var(--glass-blur));
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.035);
     }
 
@@ -211,7 +194,6 @@
         rgba(255, 255, 255, 0.035);
       border: 1px solid var(--border);
       box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,0.06);
-      backdrop-filter: blur(var(--glass-blur));
     }
 
     .cover {
@@ -255,7 +237,6 @@
       background: linear-gradient(145deg, rgba(8, 6, 22, 0.52), rgba(8, 6, 22, 0.34));
       border: 1px solid var(--border);
       box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,0.045);
-      backdrop-filter: blur(var(--glass-blur));
     }
 
     .kicker {
@@ -357,7 +338,6 @@
       background: rgba(255, 255, 255, 0.035);
       border: 1px solid var(--border);
       box-shadow: 0 14px 44px rgba(0, 0, 0, 0.30), inset 0 1px 0 rgba(255,255,255,0.04);
-      backdrop-filter: blur(var(--glass-blur));
     }
 
     .queue-label {
@@ -441,7 +421,6 @@
       font-size: 1.15vh;
       letter-spacing: 0.12em;
       text-transform: uppercase;
-      backdrop-filter: blur(var(--glass-blur));
     }
 
     .debug-panel {
@@ -458,7 +437,6 @@
       background: rgba(4, 2, 14, 0.76);
       border: 1px solid var(--border);
       box-shadow: var(--shadow);
-      backdrop-filter: blur(var(--glass-blur));
       font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
       font-size: 1.2vh;
       line-height: 1.45;
@@ -605,6 +583,8 @@
       };
 
       var MAX_LINES = 80;
+      var VERBOSE_NETWORK_LOGS = false;
+      var UI_PROGRESS_INTERVAL_MS = 2000;
       var currentAuthToken = '';
       var currentPlayerState = 'IDLE';
       var lastRender = {
@@ -666,7 +646,9 @@
 
       function logAndPost(level, tag, msg) {
         log(level, tag, msg);
-        postServerLog(level, '[' + tag + '] ' + msg);
+        if (level !== 'ok' || VERBOSE_NETWORK_LOGS) {
+          postServerLog(level, '[' + tag + '] ' + msg);
+        }
       }
 
       function withAuth(url) {
@@ -689,7 +671,9 @@
         if (currentAuthToken && !requestInfo.headers.Authorization) {
           requestInfo.headers.Authorization = 'Bearer ' + currentAuthToken;
         }
-        logAndPost('ok', LOG_TAG, resourceType + ' request: ' + requestInfo.url);
+        if (VERBOSE_NETWORK_LOGS) {
+          logAndPost('ok', LOG_TAG, resourceType + ' request');
+        }
       }
 
       function formatTime(value) {
@@ -739,13 +723,11 @@
           ui.coverArt.src = imageUrl;
           ui.coverArt.style.display = 'block';
           ui.coverFallback.style.display = 'none';
-          document.documentElement.style.setProperty('--art-url', 'url("' + imageUrl.replace(/"/g, '\\"') + '")');
         } else {
           ui.coverArt.removeAttribute('src');
           ui.coverArt.style.display = 'none';
           ui.coverFallback.textContent = (title || 'A').trim().charAt(0).toUpperCase() || 'A';
           ui.coverFallback.style.display = 'flex';
-          document.documentElement.style.setProperty('--art-url', 'none');
         }
       }
 
@@ -872,13 +854,17 @@
         applyAuth(requestInfo, 'Segment');
       };
       playbackConfig.manifestHandler = function(manifest, responseInfo) {
-        var detail = responseInfo && responseInfo.headers ? ' headers received' : ' response received';
-        logAndPost('ok', LOG_TAG, 'Manifest' + detail);
+        if (VERBOSE_NETWORK_LOGS) {
+          var detail = responseInfo && responseInfo.headers ? ' headers received' : ' response received';
+          logAndPost('ok', LOG_TAG, 'Manifest' + detail);
+        }
         return manifest;
       };
       playbackConfig.segmentHandler = function(segment, responseInfo) {
-        var detail = responseInfo && responseInfo.headers ? ' headers received' : ' response received';
-        logAndPost('ok', LOG_TAG, 'Segment' + detail);
+        if (VERBOSE_NETWORK_LOGS) {
+          var detail = responseInfo && responseInfo.headers ? ' headers received' : ' response received';
+          logAndPost('ok', LOG_TAG, 'Segment' + detail);
+        }
         return segment;
       };
 
@@ -984,7 +970,7 @@
 
       setInterval(function() {
         syncUi(false);
-      }, 1000);
+      }, UI_PROGRESS_INTERVAL_MS);
 
       logAndPost('ok', LOG_TAG, 'Starting receiver...');
       context.start({ playbackConfig: playbackConfig });
