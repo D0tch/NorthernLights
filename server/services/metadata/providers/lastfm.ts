@@ -1,7 +1,7 @@
 import { Semaphore, fetchWithRetry } from '../rateLimiter';
 import { RateLimitError, ProviderError } from '../errors';
 
-const LASTFM_API = 'https://ws.audioscrobbler.org/2.0/';
+const LASTFM_API = 'https://ws.audioscrobbler.com/2.0/';
 
 export interface LastFmArtistInfo {
   name: string;
@@ -150,31 +150,79 @@ export async function lastFmTagInfo(
   }
 }
 
+import { createHash } from 'crypto';
+
+function buildTestSignature(params: Record<string, string>, secret: string): string {
+  const filtered = Object.entries(params)
+    .filter(([key]) => key !== 'format' && key !== 'callback')
+    .sort(([a], [b]) => a.localeCompare(b));
+
+  let sigString = '';
+  for (const [key, value] of filtered) {
+    sigString += key + value;
+  }
+  sigString += secret;
+
+  return createHash('md5').update(sigString, 'utf8').digest('hex');
+}
+
 export async function testLastFm(apiKey: string, sharedSecret: string): Promise<{ status: string; error?: string }> {
   if (!apiKey) return { status: 'error', error: 'No API key configured' };
   if (!sharedSecret) return { status: 'error', error: 'No Shared Secret configured' };
 
   try {
-    const res = await fetchWithRetry(
-      `${LASTFM_API}?method=artist.getinfo&artist=Radiohead&api_key=${encodeURIComponent(apiKey.trim())}&format=json`
-    );
-    
-    // Safely parse JSON to avoid crashing on HTML error pages
-    const rawText = await res.text();
-    let json;
-    try {
-        json = JSON.parse(rawText);
-    } catch (parseErr) {
-        return { status: 'error', error: `Invalid response format (HTTP ${res.status}): ${rawText.substring(0, 100)}` };
-    }
+    // Step 1: Validate API Key and fetch an unauthorized token
+    const tokenParams = new URLSearchParams({
+      method: 'auth.getToken',
+      api_key: apiKey.trim(),
+      format: 'json'
+    });
 
-    if (json.error) {
-      return { status: 'error', error: json.message || `API error ${json.error}` };
+    const tokenRes = await fetchWithRetry(LASTFM_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: tokenParams.toString()
+    });
+    
+    let tokenJson = await tokenRes.json().catch(() => ({}));
+
+    if (tokenJson.error) {
+      return { status: 'error', error: tokenJson.message || `API error ${tokenJson.error}` };
     }
-    if (json.artist) {
+    
+    const token = tokenJson.token;
+    if (!token) return { status: 'error', error: 'Unexpected response from Last.fm' };
+
+    // Step 2: Validate Shared Secret by generating a signature for auth.getSession
+    const sessionParams: Record<string, string> = {
+      method: 'auth.getSession',
+      api_key: apiKey.trim(),
+      token: token
+    };
+    sessionParams.api_sig = buildTestSignature(sessionParams, sharedSecret.trim());
+
+    // Send as query parameters alongside format=json
+    const sessionUrl = `${LASTFM_API}?method=auth.getSession&api_key=${encodeURIComponent(sessionParams.api_key)}&token=${encodeURIComponent(sessionParams.token)}&api_sig=${encodeURIComponent(sessionParams.api_sig)}&format=json`;
+
+    const sessionRes = await fetchWithRetry(sessionUrl);
+    let sessionJson = await sessionRes.json().catch(() => ({}));
+
+    // Error 14 is "Unauthorized Token", which GUARANTEES the signature (and thus the Secret) was Valid!
+    if (sessionJson.error === 14) {
       return { status: 'ok' };
     }
-    return { status: 'error', error: 'Unexpected response' };
+
+    // Error 13 is "Invalid signature", indicating wrong secretly
+    if (sessionJson.error === 13) {
+      return { status: 'error', error: 'Invalid Shared Secret (Signature Mismatch)' };
+    }
+
+    if (sessionJson.error) {
+       return { status: 'error', error: sessionJson.message || `API error ${sessionJson.error}` };
+    }
+
+    // If it somehow succeeds completely (highly unlikely without browser auth)
+    return { status: 'ok' };
   } catch (err: any) {
     return { status: 'error', error: err.message || 'Network error' };
   }
