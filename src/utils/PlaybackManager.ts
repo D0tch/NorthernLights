@@ -492,7 +492,7 @@ class PlaybackManager {
             hlsUrl,
             usePlayerStore.getState().streamingQuality
         );
-        const key = effectiveHlsUrl || rawUrl;
+        const key = this.normalizePreparedUrlKey(effectiveHlsUrl || rawUrl);
         if (!key || !effectiveHlsUrl.includes('.m3u8')) return;
         if (this.nextUrlKey === key) return;
 
@@ -746,8 +746,22 @@ class PlaybackManager {
         }
     }
 
+    private normalizePreparedUrlKey(url: string): string {
+        try {
+            const parsed = new URL(url, window.location.origin);
+            const sortedParams = new URLSearchParams();
+            Array.from(parsed.searchParams.entries())
+                .sort(([left], [right]) => left.localeCompare(right))
+                .forEach(([key, value]) => sortedParams.append(key, value));
+            parsed.search = sortedParams.toString();
+            return parsed.toString();
+        } catch {
+            return url;
+        }
+    }
+
     private isPreparedUrl(url: string): boolean {
-        return !!this.nextAudio && this.nextUrlKey === url;
+        return !!this.nextAudio && this.nextUrlKey === this.normalizePreparedUrlKey(url);
     }
 
     private async promotePreparedAudio(): Promise<void> {
@@ -831,6 +845,11 @@ class PlaybackManager {
             this.nextAudio = null;
         }
         this.nextUrlKey = null;
+    }
+
+    public clearPreparedAudio(): void {
+        this.destroyPreparedAudio();
+        this.lastPrepareFailureReason = null;
     }
 
     public async playFile(fileHandle: FileSystemFileHandle): Promise<void> {

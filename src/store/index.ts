@@ -624,11 +624,13 @@ export const usePlayerStore = create<PlayerState>()(
         },
 
         setSettings: (settings: Partial<PlayerState>) => {
+          const previousStreamingQuality = get().streamingQuality;
           set((state: PlayerState) => ({ ...state, ...settings }));
           if (settings.playbackDebugLogging !== undefined) {
             setPlaybackDebugLogging(settings.playbackDebugLogging);
           }
-          if (settings.streamingQuality) {
+          if (settings.streamingQuality && settings.streamingQuality !== previousStreamingQuality) {
+            playbackManager.clearPreparedAudio();
             prewarmNextFromState(get());
           }
         },
