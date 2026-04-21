@@ -6,6 +6,7 @@ import { playbackManager, PlaybackState } from '../utils/PlaybackManager';
 import { castManager } from '../utils/CastManager';
 import { cloneTrackForQueue, ensureQueueEntryIds } from '../utils/queue';
 import { preloadManager } from '../utils/PreloadManager';
+import { setPlaybackDebugLogging } from '../utils/playbackDebug';
 
 import { clearExternalCache } from '../utils/externalImagery';
 import type { ToastType } from '../components/Toast';
@@ -103,6 +104,7 @@ export interface PlayerState {
   providerAlbumArt: 'lastfm' | 'genius' | 'musicbrainz';
   authToken: string | null; // JWT token
   streamingQuality: 'auto' | '64k' | '128k' | '160k' | '320k' | 'source';
+  playbackDebugLogging: boolean;
 
   // Current User State
   currentUser: { id: string; username: string; role: string } | null;
@@ -423,6 +425,7 @@ export const usePlayerStore = create<PlayerState>()(
         providerAlbumArt: 'lastfm' as 'lastfm' | 'genius' | 'musicbrainz',
         authToken: null as string | null,
         streamingQuality: 'auto' as 'auto' | '64k' | '128k' | '160k' | '320k' | 'source',
+        playbackDebugLogging: false as boolean,
         currentUser: null as { id: string; username: string; role: string } | null,
 
         // Last.fm scrobble state
@@ -549,6 +552,9 @@ export const usePlayerStore = create<PlayerState>()(
 
         setSettings: (settings: Partial<PlayerState>) => {
           set((state: PlayerState) => ({ ...state, ...settings }));
+          if (settings.playbackDebugLogging !== undefined) {
+            setPlaybackDebugLogging(settings.playbackDebugLogging);
+          }
           if (settings.streamingQuality) {
             prewarmNextFromState(get());
           }
@@ -1349,6 +1355,7 @@ export const usePlayerStore = create<PlayerState>()(
         authToken: state.authToken,
         currentUser: state.currentUser,
         streamingQuality: state.streamingQuality,
+        playbackDebugLogging: state.playbackDebugLogging,
         // Persist playlist + position for cast session recovery
         playlist: state.playlist ? state.playlist.map((t: TrackInfo) => {
           const { fileHandle, ...rest } = t;
@@ -1357,6 +1364,9 @@ export const usePlayerStore = create<PlayerState>()(
         currentIndex: state.currentIndex,
         currentTime: state.currentTime,
       }),
+      onRehydrateStorage: () => (state) => {
+        setPlaybackDebugLogging(state?.playbackDebugLogging === true);
+      },
     }
   )
 );

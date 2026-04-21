@@ -2,6 +2,7 @@ import Hls from 'hls.js';
 import { castManager } from './CastManager';
 import { usePlayerStore } from '../store';
 import { applyStreamingQualityToHlsUrl } from './streaming';
+import { logPlaybackInfo } from './playbackDebug';
 
 export type PlaybackState = 'playing' | 'paused' | 'stopped';
 
@@ -113,7 +114,7 @@ class PlaybackManager {
             if (!castManager.isConnected() && audio === this.audio) {
                 if (this.transitionStartedAt !== null) {
                     const elapsed = performance.now() - this.transitionStartedAt;
-                    console.info(`[Playback] Track transition audible after ${Math.round(elapsed)}ms`);
+                    logPlaybackInfo(`[Playback] Track transition audible after ${Math.round(elapsed)}ms`);
                     this.transitionStartedAt = null;
                 }
                 this.onBufferingChangeCallback?.(false);
@@ -231,7 +232,7 @@ class PlaybackManager {
         this.destroyPreparedAudio();
 
         try {
-            console.info(`[Playback] Preparing next HLS track: ${title || 'Unknown Title'}${artist ? ` by ${artist}` : ''}`);
+            logPlaybackInfo(`[Playback] Preparing next HLS track: ${title || 'Unknown Title'}${artist ? ` by ${artist}` : ''}`);
 
             const nextAudio = this.createAudioElement();
             nextAudio.volume = this.audio.volume;
@@ -246,7 +247,7 @@ class PlaybackManager {
                 const nextHls = this.createHlsInstance(authToken, 30, 60);
                 this.nextHls = nextHls;
                 nextHls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    console.info(`[Playback] Prepared next HLS track: ${title || 'Unknown Title'}${artist ? ` by ${artist}` : ''}`);
+                    logPlaybackInfo(`[Playback] Prepared next HLS track: ${title || 'Unknown Title'}${artist ? ` by ${artist}` : ''}`);
                 });
                 nextHls.on(Hls.Events.ERROR, (_event: string, data: any) => {
                     if (data.fatal) {
@@ -363,7 +364,7 @@ class PlaybackManager {
         oldAudio.removeAttribute('src');
         oldAudio.load();
 
-        console.info('[Playback] Promoting prepared next track');
+        logPlaybackInfo('[Playback] Promoting prepared next track');
         await this.safePlay();
     }
 

@@ -1,4 +1,5 @@
 import type { TrackInfo } from './fileSystem';
+import { logPlaybackInfo } from './playbackDebug';
 import { applyStreamingQualityToHlsUrl, type StreamingQualityPreset } from './streaming';
 
 type PrewarmOptions = {
@@ -43,7 +44,7 @@ class PreloadManager {
         if (completedAt && Date.now() - completedAt < this.completedTtlMs) return;
         if (this.inFlight.has(key)) return;
 
-        console.info(`[Preload] Prewarming next HLS session: ${track.title || 'Unknown Title'}${track.artist ? ` by ${track.artist}` : ''}`);
+        logPlaybackInfo(`[Preload] Prewarming next HLS session: ${track.title || 'Unknown Title'}${track.artist ? ` by ${track.artist}` : ''}`);
 
         const request = fetch(prewarmUrl, {
             method: 'POST',
@@ -53,7 +54,7 @@ class PreloadManager {
                 if (!response.ok) {
                     throw new Error(`HLS prewarm failed with HTTP ${response.status}`);
                 }
-                console.info(`[Preload] Next HLS session ready: ${track.title || 'Unknown Title'}${track.artist ? ` by ${track.artist}` : ''}`);
+                logPlaybackInfo(`[Preload] Next HLS session ready: ${track.title || 'Unknown Title'}${track.artist ? ` by ${track.artist}` : ''}`);
                 this.completedAt.set(key, Date.now());
             })
             .catch((error) => {

@@ -14,6 +14,7 @@ export const PlaybackTab: React.FC = () => {
     
     const setSettings = usePlayerStore(state => state.setSettings);
     const streamingQuality = usePlayerStore(state => state.streamingQuality);
+    const playbackDebugLogging = usePlayerStore(state => state.playbackDebugLogging);
     const networkInfo = useNetworkInfo();
     
     const [playbackTab, setPlaybackTab] = useState<'streaming' | 'infinity' | 'llm'>('streaming');
@@ -87,6 +88,23 @@ export const PlaybackTab: React.FC = () => {
                                 : `Audio will be transcoded to AAC at ${streamingQuality}bps. Both browser playback and Chromecast now honor this bitrate when a track starts. Higher bitrates sound better but use more bandwidth and storage.`
                             }
                         </p>
+                    </div>
+
+                    <div className="mb-6 p-3 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)]">
+                        <label className="flex items-start gap-3 cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={playbackDebugLogging}
+                                onChange={e => setSettings({ playbackDebugLogging: e.target.checked })}
+                                className="mt-1 accent-[var(--color-primary)]"
+                            />
+                            <span>
+                                <span className="block text-sm font-medium text-[var(--color-text-primary)]">Playback debug logging</span>
+                                <span className="block text-xs text-[var(--color-text-muted)] mt-1">
+                                    Shows HLS prewarm, local prebuffer, promotion, and transition-latency entries in the browser console. Warnings and errors are always shown.
+                                </span>
+                            </span>
+                        </label>
                     </div>
 
                     {/* Network info indicator */}
