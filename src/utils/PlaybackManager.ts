@@ -231,6 +231,8 @@ class PlaybackManager {
         this.destroyPreparedAudio();
 
         try {
+            console.info(`[Playback] Preparing next HLS track: ${title || 'Unknown Title'}${artist ? ` by ${artist}` : ''}`);
+
             const nextAudio = this.createAudioElement();
             nextAudio.volume = this.audio.volume;
             nextAudio.muted = this.audio.muted;
@@ -244,11 +246,11 @@ class PlaybackManager {
                 const nextHls = this.createHlsInstance(authToken, 30, 60);
                 this.nextHls = nextHls;
                 nextHls.on(Hls.Events.MANIFEST_PARSED, () => {
-                    console.debug(`[Playback] Prepared next HLS track: ${title || 'Unknown Title'}${artist ? ` by ${artist}` : ''}`);
+                    console.info(`[Playback] Prepared next HLS track: ${title || 'Unknown Title'}${artist ? ` by ${artist}` : ''}`);
                 });
                 nextHls.on(Hls.Events.ERROR, (_event: string, data: any) => {
                     if (data.fatal) {
-                        console.debug('[Playback] Prepared next HLS track failed:', data);
+                        console.warn('[Playback] Prepared next HLS track failed:', data);
                         this.destroyPreparedAudio();
                     }
                 });
@@ -259,7 +261,7 @@ class PlaybackManager {
                 nextAudio.load();
             }
         } catch (error) {
-            console.debug('[Playback] Failed to prepare next track:', error);
+            console.warn('[Playback] Failed to prepare next track:', error);
             this.destroyPreparedAudio();
         }
     }
@@ -361,7 +363,7 @@ class PlaybackManager {
         oldAudio.removeAttribute('src');
         oldAudio.load();
 
-        console.debug('[Playback] Promoting prepared next track');
+        console.info('[Playback] Promoting prepared next track');
         await this.safePlay();
     }
 

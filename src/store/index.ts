@@ -360,10 +360,11 @@ export const usePlayerStore = create<PlayerState>()(
       const prewarmNextFromState = (state: PlayerState, currentIndex: number | null = state.currentIndex) => {
         const nextIndex = currentIndex !== null ? currentIndex + 1 : null;
         const nextTrack = nextIndex !== null ? state.playlist[nextIndex] : null;
+        const isActuallyCasting = castManager.isConnected();
         preloadManager.prewarmNext(state.playlist, currentIndex, state.streamingQuality, {
-          castConnected: state.castConnected || castManager.isConnected(),
+          castConnected: isActuallyCasting,
         });
-        if (!state.castConnected && !castManager.isConnected() && nextTrack?.url) {
+        if (!isActuallyCasting && nextTrack?.url) {
           playbackManager.prepareNextUrl(
             nextTrack.url,
             nextTrack.rawUrl || '',
@@ -1355,7 +1356,6 @@ export const usePlayerStore = create<PlayerState>()(
         }) : [],
         currentIndex: state.currentIndex,
         currentTime: state.currentTime,
-        castConnected: state.castConnected,
       }),
     }
   )

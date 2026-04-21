@@ -43,6 +43,8 @@ class PreloadManager {
         if (completedAt && Date.now() - completedAt < this.completedTtlMs) return;
         if (this.inFlight.has(key)) return;
 
+        console.info(`[Preload] Prewarming next HLS session: ${track.title || 'Unknown Title'}${track.artist ? ` by ${track.artist}` : ''}`);
+
         const request = fetch(prewarmUrl, {
             method: 'POST',
             keepalive: true,
@@ -51,10 +53,11 @@ class PreloadManager {
                 if (!response.ok) {
                     throw new Error(`HLS prewarm failed with HTTP ${response.status}`);
                 }
+                console.info(`[Preload] Next HLS session ready: ${track.title || 'Unknown Title'}${track.artist ? ` by ${track.artist}` : ''}`);
                 this.completedAt.set(key, Date.now());
             })
             .catch((error) => {
-                console.debug('[Preload] HLS prewarm skipped/failed:', error);
+                console.warn('[Preload] HLS prewarm skipped/failed:', error);
             })
             .finally(() => {
                 this.inFlight.delete(key);
@@ -94,4 +97,3 @@ class PreloadManager {
 }
 
 export const preloadManager = PreloadManager.getInstance();
-
