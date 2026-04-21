@@ -178,19 +178,28 @@ export async function getLyrics(trackName: string, artistName: string): Promise<
   return _providers.genius.getLyrics!(trackName, artistName, settings);
 }
 
-export async function testLastFm(): Promise<{ status: string; error?: string; username?: string }> {
+export async function testLastFm(providedApiKey?: string, providedSecret?: string): Promise<{ status: string; error?: string; username?: string }> {
   try {
     const settings = await getProviderSettings();
-    const sharedSecret = (await getSystemSetting('lastFmSharedSecret')) || '';
+    const apiKey = providedApiKey || settings.lastFmApiKey;
+    const sharedSecret = providedSecret || (await getSystemSetting('lastFmSharedSecret')) || '';
     
-    if (!settings.lastFmApiKey) return { status: 'error', error: 'No API key configured' };
+    if (!apiKey) return { status: 'error', error: 'No API key configured' };
     if (!sharedSecret) return { status: 'error', error: 'No Shared Secret configured' };
 
     // Use utils manually for the test bypass to avoid bottleneck queue
-    const res = await fetchWithRetry(
-      `https://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=Radiohead&api_key=${settings.lastFmApiKey}&format=json`
-    );
-    const json = await res.json();
+    const url = `https://ws.audioscrobbler.com/2.0/?method=artist.getinfo&artist=Radiohead&api_key=${encodeURIComponent(apiKey.trim())}&format=json`;
+    const res = await fetchWithRetry(url);
+    
+    // Safely parse JSON to avoid crashing on HTML error pages
+    const rawText = await res.text();
+    let json;
+    try {
+        json = JSON.parse(rawText);
+    } catch (parseErr) {
+        return { status: 'error', error: `Invalid response format (HTTP ${res.status}): ${rawText.substring(0, 100)}` };
+    }
+
     if (json.error) {
       return { status: 'error', error: json.message || `API error ${json.error}` };
     }

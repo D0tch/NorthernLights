@@ -549,10 +549,10 @@ router.post('/providers/lastfm/unlove', async (req, res) => {
 });
 
 // ─── Last.fm Test (server-side, consistent with Genius/MusicBrainz) ──
-router.get('/providers/lastfm/test', async (req, res) => {
+router.post('/providers/lastfm/test', async (req, res) => {
   try {
-    const apiKey = await getSystemSetting('lastFmApiKey') || '';
-    const sharedSecret = await getSystemSetting('lastFmSharedSecret') || '';
+    const apiKey = req.body.apiKey || await getSystemSetting('lastFmApiKey') || '';
+    const sharedSecret = req.body.sharedSecret || await getSystemSetting('lastFmSharedSecret') || '';
     const result = await testLastFm(apiKey, sharedSecret);
     if (result.status === 'ok') {
       res.json(result);

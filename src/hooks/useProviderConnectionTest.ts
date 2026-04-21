@@ -11,13 +11,18 @@ export const useProviderConnectionTest = () => {
   const [musicBrainzStatus, setMusicBrainzStatus] = useState<ConnectionStatus>('idle');
   const [musicBrainzMessage, setMusicBrainzMessage] = useState('');
 
-  const testLastFm = useCallback(async (_apiKey?: string) => {
+  const testLastFm = useCallback(async (apiKey?: string) => {
     setLastFmStatus('testing');
     setLastFmMessage('');
     try {
       const state = usePlayerStore.getState();
       const authHeaders = (state as any).getAuthHeader?.() || {};
-      const res = await fetch('/api/providers/lastfm/test', { headers: authHeaders });
+      const sharedSecret = state.lastFmSharedSecret;
+      const res = await fetch('/api/providers/lastfm/test', { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ apiKey, sharedSecret })
+      });
       const data = await res.json();
       if (data.status === 'ok') {
         setLastFmStatus('success');
