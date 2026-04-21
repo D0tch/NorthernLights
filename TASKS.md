@@ -3,7 +3,7 @@
 ## Current Status
 The core music player architecture has transitioned to a client-server model using Node.js and PostgreSQL. The UI has been polished with a premium "Matte Glass" aesthetic and responsive library views.
 Chromecast HLS hardening is in progress as of 2026-04-20, focused on deterministic AAC casting, CAF request instrumentation, and stricter HLS playlist/session behavior for custom receivers.
-PWA low-risk hardening completed on 2026-04-21: Workbox runtime caching now prioritizes HLS/audio/art routes before the generic API route, authenticated API requests are network-only by default, service worker updates use the existing prompt banner instead of forced auto-update reloads, and the Google Cast SDK no longer blocks initial HTML parsing.
+PWA low-risk hardening completed on 2026-04-21: Workbox runtime caching now prioritizes HLS/audio/art routes before the generic API route, authenticated API requests are network-only by default, service worker updates use the existing prompt banner instead of forced auto-update reloads, the Google Cast SDK no longer blocks initial HTML parsing, and the PWA icon/splash assets now match the custom Chromecast receiver brand mark.
 
 ## Milestone Completion History
 - [x] **v0.0.2: Core Player**: Basic playback, volume, and progress bar with persistence.
@@ -89,6 +89,7 @@ PWA low-risk hardening completed on 2026-04-21: Workbox runtime caching now prio
   - **Prompt-Controlled Updates**: Switched vite-plugin-pwa registration from `autoUpdate` to `prompt` and wired the existing update banner to apply the waiting service worker instead of blindly reloading.
   - **Non-Blocking Cast SDK**: Added async loading for the Google Cast sender SDK so slow or offline `gstatic.com` access does not block initial app shell parsing.
   - **Install Prompt Capture Fix**: Moved `beforeinstallprompt` capture into an app-boot singleton so the native install event is not missed when `UserMenu` mounts only after login.
+  - **Receiver-Matched PWA Assets**: Rebuilt the PWA icon set, Apple touch icon, favicon PNG, iOS startup images, and install-prompt screenshots from the same aurora/glass brand mark used by the custom Chromecast receiver. Added `npm run generate:pwa-assets` for repeatable regeneration.
 
 
 ---
