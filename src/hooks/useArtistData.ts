@@ -10,6 +10,8 @@ interface ArtistDataState {
   lifeSpan: { begin?: string; end?: string } | undefined;
   links: { url: string; type: string }[] | undefined;
   genres: string[] | undefined;
+  listeners: string | undefined;
+  members: string[] | undefined;
   isLoading: boolean;
   error: string | undefined;
 }
@@ -25,6 +27,8 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
   const [lifeSpan, setLifeSpan] = useState<{ begin?: string; end?: string } | undefined>();
   const [links, setLinks] = useState<{ url: string; type: string }[] | undefined>();
   const [genres, setGenres] = useState<string[] | undefined>();
+  const [listeners, setListeners] = useState<string | undefined>();
+  const [members, setMembers] = useState<string[] | undefined>();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | undefined>();
 
@@ -49,6 +53,8 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
       setLifeSpan(undefined);
       setLinks(undefined);
       setGenres(undefined);
+      setListeners(undefined);
+      setMembers(undefined);
       setError(undefined);
     }
 
@@ -66,6 +72,8 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
             setLifeSpan(data.lifeSpan);
             setLinks(data.links);
             setGenres(data.genres);
+            setListeners(data.listeners);
+            setMembers(data.members);
             setError(undefined);
           }
         })
@@ -86,5 +94,5 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
     };
   }, [artistName, mbArtistId, enabled, debounceMs, lastFetchedName]);
 
-  return { imageUrl, bio, disambiguation, area, type, lifeSpan, links, genres, isLoading, error };
+  return { imageUrl, bio, disambiguation, area, type, lifeSpan, links, genres, listeners, members, isLoading, error };
 };

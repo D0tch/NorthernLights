@@ -9,6 +9,8 @@ interface ArtistData {
     lifeSpan?: { begin?: string; end?: string };
     links?: { url: string; type: string }[];
     genres?: string[];
+    listeners?: string;
+    members?: string[];
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -47,6 +49,30 @@ export const fetchArtistData = async (artistName: string, mbArtistId?: string | 
     if (!data) return {};
 
     // Proxy image URL for CORS-free loading
+    if (data.imageUrl) {
+        data.imageUrl = proxyImageUrl(data.imageUrl);
+    }
+
+    return data;
+};
+
+interface AlbumData {
+    imageUrl?: string;
+    description?: string;
+    tags?: string[];
+    listeners?: string;
+    playcount?: string;
+}
+
+export const fetchAlbumData = async (albumName: string, artistName: string, mbAlbumId?: string | null): Promise<AlbumData> => {
+    if (!albumName || !artistName) return {};
+
+    const params = new URLSearchParams({ album: albumName, artist: artistName });
+    if (mbAlbumId) params.set('mbid', mbAlbumId);
+
+    const data = await serverFetch<AlbumData>(`/api/providers/external/album?${params}`);
+    if (!data) return {};
+
     if (data.imageUrl) {
         data.imageUrl = proxyImageUrl(data.imageUrl);
     }

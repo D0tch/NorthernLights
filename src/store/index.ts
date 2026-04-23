@@ -33,12 +33,46 @@ const buildTrackUrls = (trackId: string, path: string, token: string, quality: s
   };
 };
 
+const dedupeTrackIds = (trackIds: string[]): string[] => {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const trackId of trackIds) {
+    if (!trackId || seen.has(trackId)) continue;
+    seen.add(trackId);
+    result.push(trackId);
+  }
+
+  return result;
+};
+
+const hydratePlaylistTracks = (
+  trackIds: string[],
+  library: TrackInfo[],
+  existingTracks: TrackInfo[],
+  authToken: string,
+  streamingQuality: PlayerState['streamingQuality']
+): TrackInfo[] => {
+  const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+  const libraryById = new Map(library.map((track) => [track.id, track]));
+  const existingById = new Map(existingTracks.map((track) => [track.id, track]));
+
+  return trackIds
+    .map((trackId) => libraryById.get(trackId) || existingById.get(trackId))
+    .filter((track): track is TrackInfo => Boolean(track?.id && track?.path))
+    .map((track) => ({
+      ...track,
+      ...buildTrackUrls(track.id, track.path, authToken, quality),
+    }));
+};
+
 export interface Playlist {
   id: string;
   title: string;
   description: string | null;
   isLlmGenerated: boolean;
   pinned?: boolean;
+  createdAt?: number;
   tracks: TrackInfo[];
 }
 
@@ -151,8 +185,12 @@ export interface PlayerState {
   artistAmnesiaLimit: number;
   llmPlaylistDiversity: number;
   llmVetoMode: LlmVetoMode;
-  genreBlendWeight: number;
+  llmGenreCohesion: number;
+  llmDiscoveryBias: number;
+  llmArtistSpread: number;
   genrePenaltyCurve: number;
+  llmRecoveryStrength: number;
+  llmAdjacentReach: number;
   llmTracksPerPlaylist: number;
   llmPlaylistCount: number;
   audioAnalysisCpu: string;
@@ -189,6 +227,7 @@ export interface PlayerState {
   createPlaylist: (title: string, description?: string) => Promise<void>;
   deletePlaylist: (playlistId: string) => Promise<void>;
   togglePin: (playlistId: string, pinned: boolean) => Promise<void>;
+  replaceTracksInUserPlaylist: (playlistId: string, trackIds: string[]) => Promise<void>;
   addTracksToUserPlaylist: (playlistId: string, trackIds: string[]) => Promise<void>;
   setAuthToken: (token: string) => void;
   clearAuthToken: () => void;
@@ -220,8 +259,8 @@ export interface PlayerState {
   moveInPlaylist: (fromIndex: number, toIndex: number) => void;
 
   // Global Track Context Menu
-  contextMenu: { track: TrackInfo; x: number; y: number } | null;
-  openContextMenu: (track: TrackInfo, x: number, y: number) => void;
+  contextMenu: { track: TrackInfo; x: number; y: number; playlistId?: string; playlistTrackIndex?: number } | null;
+  openContextMenu: (track: TrackInfo, x: number, y: number, playlistId?: string, playlistTrackIndex?: number) => void;
   closeContextMenu: () => void;
 
   // Playback Actions
@@ -536,8 +575,12 @@ export const usePlayerStore = create<PlayerState>()(
         artistAmnesiaLimit: 50,
         llmPlaylistDiversity: 50,
         llmVetoMode: 'hard' as LlmVetoMode,
-        genreBlendWeight: 50,
+        llmGenreCohesion: 50,
+        llmDiscoveryBias: 45,
+        llmArtistSpread: 70,
         genrePenaltyCurve: 50,
+        llmRecoveryStrength: 50,
+        llmAdjacentReach: 50,
         llmTracksPerPlaylist: 10,
         llmPlaylistCount: 3,
         audioAnalysisCpu: 'Balanced',
@@ -684,8 +727,12 @@ export const usePlayerStore = create<PlayerState>()(
                 artistAmnesiaLimit: data.artistAmnesiaLimit !== undefined ? data.artistAmnesiaLimit : 50,
                 llmPlaylistDiversity: data.llmPlaylistDiversity !== undefined ? data.llmPlaylistDiversity : 50,
                 llmVetoMode: data.llmVetoMode === 'adaptive' ? 'adaptive' : 'hard',
-                genreBlendWeight: data.genreBlendWeight !== undefined ? data.genreBlendWeight : 50,
+                llmGenreCohesion: data.llmGenreCohesion !== undefined ? data.llmGenreCohesion : (data.genreBlendWeight !== undefined ? data.genreBlendWeight : 50),
+                llmDiscoveryBias: data.llmDiscoveryBias !== undefined ? data.llmDiscoveryBias : 45,
+                llmArtistSpread: data.llmArtistSpread !== undefined ? data.llmArtistSpread : 70,
                 genrePenaltyCurve: data.genrePenaltyCurve !== undefined ? data.genrePenaltyCurve : 50,
+                llmRecoveryStrength: data.llmRecoveryStrength !== undefined ? data.llmRecoveryStrength : 50,
+                llmAdjacentReach: data.llmAdjacentReach !== undefined ? data.llmAdjacentReach : 50,
                 llmTracksPerPlaylist: data.llmTracksPerPlaylist !== undefined ? data.llmTracksPerPlaylist : 10,
                 llmPlaylistCount: data.llmPlaylistCount !== undefined ? data.llmPlaylistCount : 3,
                 audioAnalysisCpu: data.audioAnalysisCpu || 'Balanced',
@@ -744,8 +791,12 @@ export const usePlayerStore = create<PlayerState>()(
                 artistAmnesiaLimit: state.artistAmnesiaLimit,
                 llmPlaylistDiversity: state.llmPlaylistDiversity,
                 llmVetoMode: state.llmVetoMode,
-                genreBlendWeight: state.genreBlendWeight,
+                llmGenreCohesion: state.llmGenreCohesion,
+                llmDiscoveryBias: state.llmDiscoveryBias,
+                llmArtistSpread: state.llmArtistSpread,
                 genrePenaltyCurve: state.genrePenaltyCurve,
+                llmRecoveryStrength: state.llmRecoveryStrength,
+                llmAdjacentReach: state.llmAdjacentReach,
                 llmTracksPerPlaylist: state.llmTracksPerPlaylist,
                 llmPlaylistCount: state.llmPlaylistCount,
                 audioAnalysisCpu: state.audioAnalysisCpu,
@@ -982,19 +1033,60 @@ export const usePlayerStore = create<PlayerState>()(
             }
          },
 
-         addTracksToUserPlaylist: async (playlistId: string, trackIds: string[]) => {
+         replaceTracksInUserPlaylist: async (playlistId: string, trackIds: string[]) => {
+           const nextTrackIds = dedupeTrackIds(trackIds);
+           const previousPlaylists = get().playlists;
+           const targetPlaylist = previousPlaylists.find((playlist) => playlist.id === playlistId);
+           if (!targetPlaylist) return;
+
+           const optimisticTracks = hydratePlaylistTracks(
+             nextTrackIds,
+             get().library,
+             targetPlaylist.tracks,
+             get().authToken || '',
+             get().streamingQuality
+           );
+
+           set({
+             playlists: previousPlaylists.map((playlist) =>
+               playlist.id === playlistId
+                 ? { ...playlist, tracks: optimisticTracks }
+                 : playlist
+             ),
+           });
+
            try {
-              const authHeaders = (get() as any).getAuthHeader();
-              const res = await fetch(`/api/playlists/${playlistId}/tracks`, {
-                 method: 'POST',
-                 headers: { 'Content-Type': 'application/json', ...authHeaders },
-                 body: JSON.stringify({ trackIds })
-              });
-              if (res.ok) {
-                 await get().fetchPlaylistsFromServer();
-              }
+             const authHeaders = (get() as any).getAuthHeader();
+             const res = await fetch(`/api/playlists/${playlistId}/tracks`, {
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json', ...authHeaders },
+               body: JSON.stringify({ trackIds: nextTrackIds }),
+             });
+
+             if (!res.ok) {
+               throw new Error(`Playlist update failed with status ${res.status}`);
+             }
+
+             await get().fetchPlaylistsFromServer();
            } catch (e) {
-              console.error(`Failed to add tracks to playlist ${playlistId}`, e);
+             set({ playlists: previousPlaylists });
+             console.error(`Failed to replace tracks in playlist ${playlistId}`, e);
+             throw e;
+           }
+         },
+
+         addTracksToUserPlaylist: async (playlistId: string, trackIds: string[]) => {
+           const existingTrackIds = get().playlists
+             .find((playlist) => playlist.id === playlistId)
+             ?.tracks
+             .map((track) => track.id) || [];
+
+           const mergedTrackIds = dedupeTrackIds([...existingTrackIds, ...trackIds]);
+           try {
+             await get().replaceTracksInUserPlaylist(playlistId, mergedTrackIds);
+           } catch (e) {
+             console.error(`Failed to add tracks to playlist ${playlistId}`, e);
+             throw e;
            }
         },
 
@@ -1184,8 +1276,8 @@ export const usePlayerStore = create<PlayerState>()(
         }),
 
         // Global context menu
-        contextMenu: null as { track: TrackInfo; x: number; y: number } | null,
-        openContextMenu: (track: TrackInfo, x: number, y: number) => set({ contextMenu: { track, x, y } }),
+        contextMenu: null as { track: TrackInfo; x: number; y: number; playlistId?: string; playlistTrackIndex?: number } | null,
+        openContextMenu: (track: TrackInfo, x: number, y: number, playlistId?: string, playlistTrackIndex?: number) => set({ contextMenu: { track, x, y, playlistId, playlistTrackIndex } }),
         closeContextMenu: () => set({ contextMenu: null }),
 
         removeFromPlaylist: (index: number) => set((state: PlayerState) => {

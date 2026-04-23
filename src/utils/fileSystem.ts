@@ -32,6 +32,7 @@ export interface TrackInfo {
   genre?: string;
   duration?: number;
   trackNumber?: number;
+  discNumber?: number;
   year?: number;
   releaseType?: string;
   isCompilation?: boolean | number;
@@ -53,6 +54,9 @@ export interface TrackInfo {
   mbReleaseGroupId?: string;
   mbWorkId?: string;
   
+  // File-embedded URL tags (from ID3v2 / Vorbis Comments)
+  rawUrls?: { url: string; type: string }[];
+
   // Legacy / UI fields
   fileHandle?: FileSystemFileHandle;
   url?: string;

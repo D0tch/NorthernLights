@@ -23,7 +23,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
     // Step 2 State
     const [libraryPath, setLibraryPath] = useState('');
     
-    // Step 3 State — LLM Provider
+    // Step 5 State — LLM Provider
     const [llmBaseUrl, setLlmBaseUrl] = useState('http://localhost:1234/v1');
     const [llmApiKey, setLlmApiKey] = useState('');
     const [llmModelName, setLlmModelName] = useState('');
@@ -42,7 +42,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
         },
     });
 
-    // Step 4 State
+    // Step 6 State
     const [lastFmKey, setLastFmKeyState] = useState('');
     const [lastFmSecret, setLastFmSecretState] = useState('');
     const [geniusKey, setGeniusKeyState] = useState('');
@@ -208,7 +208,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
     const handleCreateAdmin = async () => {
         setAuthError('');
         if (username.length < 3 || password.length < 5) {
-            setAuthError('Username > 3 chars, Password > 5 chars required.');
+            setAuthError('Username must be ≥ 3 chars, password ≥ 5 chars.');
             return;
         }
         
@@ -259,7 +259,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                 body: JSON.stringify({ llmBaseUrl, llmApiKey, llmModelName })
             });
         }
-        setStep(4);
+        setStep(6);
     };
 
     const handleFinish = async () => {
@@ -547,7 +547,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                 )}
 
                 {/* Step 5: LLM Provider */}
-                {step === 4 && (
+                {step === 5 && (
                     <div className="space-y-5 animate-in slide-in-from-right-8 fade-in duration-500 fill-mode-both">
                         <div className="text-center mb-4">
                             <h2 className="text-xl font-bold flex justify-center items-center gap-2"><Cpu className="w-5 h-5 text-[var(--color-primary)]"/> AI Playlist Provider</h2>
@@ -670,7 +670,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                         </div>
 
                         <div className="flex gap-4 mt-2">
-                            <button onClick={() => { handleSaveLlm(); setStep(6); }} className="flex-1 bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white font-semibold py-4 rounded-xl shadow-lg transition-transform active:scale-[0.98] flex items-center justify-center gap-2">
+                            <button onClick={handleSaveLlm} className="flex-1 bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white font-semibold py-4 rounded-xl shadow-lg transition-transform active:scale-[0.98] flex items-center justify-center gap-2">
                                 Save & Continue <ChevronRight className="w-5 h-5" />
                             </button>
                             <button onClick={() => setStep(6)} className="px-6 bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] border border-[var(--glass-border)] text-[var(--color-text-primary)] font-semibold rounded-xl transition-all">

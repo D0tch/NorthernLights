@@ -31,8 +31,12 @@ export const PlaybackTab: React.FC = () => {
     const artistAmnesiaLimit = usePlayerStore(state => state.artistAmnesiaLimit);
     const llmPlaylistDiversity = usePlayerStore(state => state.llmPlaylistDiversity);
     const llmVetoMode = usePlayerStore(state => state.llmVetoMode);
-    const genreBlendWeight = usePlayerStore(state => state.genreBlendWeight);
+    const llmGenreCohesion = usePlayerStore(state => state.llmGenreCohesion);
+    const llmDiscoveryBias = usePlayerStore(state => state.llmDiscoveryBias);
+    const llmArtistSpread = usePlayerStore(state => state.llmArtistSpread);
     const genrePenaltyCurve = usePlayerStore(state => state.genrePenaltyCurve);
+    const llmRecoveryStrength = usePlayerStore(state => state.llmRecoveryStrength);
+    const llmAdjacentReach = usePlayerStore(state => state.llmAdjacentReach);
     const llmTracksPerPlaylist = usePlayerStore(state => state.llmTracksPerPlaylist);
     const llmPlaylistCount = usePlayerStore(state => state.llmPlaylistCount);
     
@@ -44,11 +48,12 @@ export const PlaybackTab: React.FC = () => {
     const networkInfo = useNetworkInfo();
     
     const [playbackTab, setPlaybackTab] = useState<'streaming' | 'infinity' | 'llm'>('streaming');
+    const [showLlmAdvanced, setShowLlmAdvanced] = useState(false);
 
     // Live penalty preview computed from current slider values
     const penaltyPreview = useMemo(() => {
         const curve = 0.5 + (genrePenaltyCurve / 100) * 1.5;
-        const weight = genreBlendWeight / 100;
+        const weight = llmGenreCohesion / 100;
         const format = (hop: number) => Math.pow(1 + hop, weight * curve).toFixed(2);
         return {
             deep: format(0.05),
@@ -56,7 +61,7 @@ export const PlaybackTab: React.FC = () => {
             shareRoot: format(0.50),
             alien: format(2.0),
         };
-    }, [genrePenaltyCurve, genreBlendWeight]);
+    }, [genrePenaltyCurve, llmGenreCohesion]);
 
     return (
         <div className="settings-section mb-8">
@@ -285,7 +290,7 @@ export const PlaybackTab: React.FC = () => {
             {playbackTab === 'llm' && (
                 <div>
                     <p className="text-sm text-[var(--color-text-muted)] mb-6">
-                        These settings control how the AI generates Hub playlists. The engine first decides how many playlists to make, then finds tracks by sound similarity, penalizes genre jumps, and finally adds variety to the selection.
+                        These settings control how the library-relative playlist engine compiles each AI concept, recovers when the local library is thin, and balances cohesion against discovery.
                     </p>
 
                     <div className="mb-6">
@@ -319,43 +324,38 @@ export const PlaybackTab: React.FC = () => {
 
                     <div className="mb-6">
                         <label className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mb-2">
-                            <span>Genre Blend Weight</span>
-                            <span>{genreBlendWeight}%</span>
+                            <span>Genre Cohesion</span>
+                            <span>{llmGenreCohesion}%</span>
                         </label>
-                        <input type="range" min="0" max="100" value={genreBlendWeight} onChange={e => setSettings({ genreBlendWeight: Number(e.target.value) })} className="w-full accent-[var(--color-primary)]" />
-                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5"><strong>Step 3:</strong> How much genre matters when ranking tracks. Low values pick tracks that sound similar regardless of genre; high values keep playlists genre-coherent.</p>
+                        <input type="range" min="0" max="100" value={llmGenreCohesion} onChange={e => setSettings({ llmGenreCohesion: Number(e.target.value) })} className="w-full accent-[var(--color-primary)]" />
+                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5"><strong>Step 3:</strong> How tightly playlists stay near the compiled genre path. Low values lean on sound similarity; high values stay closer to the concept's genre family.</p>
                     </div>
 
                     <div className="mb-6">
                         <label className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mb-2">
-                            <span>Genre Penalty Curve</span>
-                            <span>{genrePenaltyCurve}%</span>
+                            <span>Playlist Diversity</span>
+                            <span>{llmPlaylistDiversity}%</span>
                         </label>
-                        <input type="range" min="0" max="100" value={genrePenaltyCurve} onChange={e => setSettings({ genrePenaltyCurve: Number(e.target.value) })} className="w-full accent-[var(--color-primary)]" />
-                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5"><strong>Step 4:</strong> How harshly distant genres are penalized. Low values are forgiving (cousin genres get a small penalty); high values are strict (even cousin genres get heavily penalized).</p>
+                        <input type="range" min="0" max="100" value={llmPlaylistDiversity} onChange={e => setSettings({ llmPlaylistDiversity: Number(e.target.value) })} className="w-full accent-[var(--color-primary)]" />
+                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5"><strong>Step 4:</strong> How much controlled randomness the final selector allows. Low values stay close to best fit; high values let the optimizer take more interesting side roads.</p>
+                    </div>
 
-                        {/* Live penalty preview */}
-                        <div className="mt-3 p-3 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)]">
-                            <p className="text-xs font-medium text-[var(--color-text-muted)] mb-2">Penalty Preview (how much harder it is to pick)</p>
-                            <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
-                                <div className="flex justify-between">
-                                    <span className="text-[var(--color-text-muted)]">Same subgenre</span>
-                                    <span className="font-mono text-[var(--color-text-primary)]">{penaltyPreview.deep}&times;</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-[var(--color-text-muted)]">Cousin genre</span>
-                                    <span className="font-mono text-[var(--color-text-primary)]">{penaltyPreview.cousin}&times;</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-[var(--color-text-muted)]">Same root genre</span>
-                                    <span className="font-mono text-[var(--color-text-primary)]">{penaltyPreview.shareRoot}&times;</span>
-                                </div>
-                                <div className="flex justify-between">
-                                    <span className="text-[var(--color-text-muted)]">Completely different</span>
-                                    <span className="font-mono text-[var(--color-text-primary)]">{penaltyPreview.alien}&times;</span>
-                                </div>
-                            </div>
-                        </div>
+                    <div className="mb-6">
+                        <label className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                            <span>Discovery Bias</span>
+                            <span>{llmDiscoveryBias}%</span>
+                        </label>
+                        <input type="range" min="0" max="100" value={llmDiscoveryBias} onChange={e => setSettings({ llmDiscoveryBias: Number(e.target.value) })} className="w-full accent-[var(--color-primary)]" />
+                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5"><strong>Step 5:</strong> How much the engine favors discovery and bridge pools over safest-fit picks. Higher values surface more underplayed or less obvious tracks without fully abandoning cohesion.</p>
+                    </div>
+
+                    <div className="mb-6">
+                        <label className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                            <span>Artist Spread</span>
+                            <span>{llmArtistSpread}%</span>
+                        </label>
+                        <input type="range" min="0" max="100" value={llmArtistSpread} onChange={e => setSettings({ llmArtistSpread: Number(e.target.value) })} className="w-full accent-[var(--color-primary)]" />
+                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5"><strong>Step 6:</strong> How strongly the selector avoids repeating the same artist. Higher values push harder for broad artist coverage within each playlist.</p>
                     </div>
 
                     <div className="mb-6">
@@ -368,16 +368,78 @@ export const PlaybackTab: React.FC = () => {
                             <option value="hard">Hard Veto — never include banned genres</option>
                             <option value="adaptive">Adaptive Penalty — relax only if the local pool fails</option>
                         </select>
-                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5"><strong>Step 5:</strong> Controls how LLM banned genres are enforced. Hard veto keeps excluded styles out entirely; adaptive penalty can recover sparse libraries by treating banned genres as heavily penalized fallback candidates.</p>
+                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5"><strong>Step 7:</strong> Controls how LLM banned genres are enforced. Hard veto keeps excluded styles out entirely; adaptive penalty can recover sparse libraries by treating banned genres as heavily penalized fallback candidates.</p>
                     </div>
 
-                    <div className="mb-6">
-                        <label className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mb-2">
-                            <span>Playlist Diversity</span>
-                            <span>{llmPlaylistDiversity}%</span>
-                        </label>
-                        <input type="range" min="0" max="100" value={llmPlaylistDiversity} onChange={e => setSettings({ llmPlaylistDiversity: Number(e.target.value) })} className="w-full accent-[var(--color-primary)]" />
-                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5"><strong>Step 6:</strong> Adds randomness to the final pick. Low values always choose the best-matching track; high values sometimes pick lower-ranked tracks for surprise and variety.</p>
+                    <div className="mb-6 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-4">
+                        <div className="flex items-center justify-between gap-4">
+                            <div>
+                                <p className="text-sm font-medium text-[var(--color-text-primary)]">Advanced Tuning</p>
+                                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+                                    Recovery aggressiveness, adjacent-genre expansion, and raw genre penalty behavior.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => setShowLlmAdvanced((value) => !value)}
+                                className="btn btn-ghost btn-sm"
+                            >
+                                {showLlmAdvanced ? 'Hide' : 'Show'}
+                            </button>
+                        </div>
+
+                        {showLlmAdvanced && (
+                            <div className="mt-4">
+                                <div className="mb-6">
+                                    <label className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                                        <span>Recovery Strength</span>
+                                        <span>{llmRecoveryStrength}%</span>
+                                    </label>
+                                    <input type="range" min="0" max="100" value={llmRecoveryStrength} onChange={e => setSettings({ llmRecoveryStrength: Number(e.target.value) })} className="w-full accent-[var(--color-primary)]" />
+                                    <p className="text-xs text-[var(--color-text-muted)] mt-1.5">How aggressively the engine widens non-genre pools when the concept is weak in your local library.</p>
+                                </div>
+
+                                <div className="mb-6">
+                                    <label className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                                        <span>Adjacent Reach</span>
+                                        <span>{llmAdjacentReach}%</span>
+                                    </label>
+                                    <input type="range" min="0" max="100" value={llmAdjacentReach} onChange={e => setSettings({ llmAdjacentReach: Number(e.target.value) })} className="w-full accent-[var(--color-primary)]" />
+                                    <p className="text-xs text-[var(--color-text-muted)] mt-1.5">How far the concept compiler may expand into adjacent genres when the exact path is thin.</p>
+                                </div>
+
+                                <div className="mb-0">
+                                    <label className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                                        <span>Genre Penalty Curve</span>
+                                        <span>{genrePenaltyCurve}%</span>
+                                    </label>
+                                    <input type="range" min="0" max="100" value={genrePenaltyCurve} onChange={e => setSettings({ genrePenaltyCurve: Number(e.target.value) })} className="w-full accent-[var(--color-primary)]" />
+                                    <p className="text-xs text-[var(--color-text-muted)] mt-1.5">How harshly distant genres are penalized once genre anchoring is active.</p>
+
+                                    <div className="mt-3 p-3 rounded-lg bg-[var(--color-bg-secondary)] border border-[var(--glass-border)]">
+                                        <p className="text-xs font-medium text-[var(--color-text-muted)] mb-2">Penalty Preview</p>
+                                        <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                                            <div className="flex justify-between">
+                                                <span className="text-[var(--color-text-muted)]">Same subgenre</span>
+                                                <span className="font-mono text-[var(--color-text-primary)]">{penaltyPreview.deep}&times;</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-[var(--color-text-muted)]">Cousin genre</span>
+                                                <span className="font-mono text-[var(--color-text-primary)]">{penaltyPreview.cousin}&times;</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-[var(--color-text-muted)]">Same root genre</span>
+                                                <span className="font-mono text-[var(--color-text-primary)]">{penaltyPreview.shareRoot}&times;</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-[var(--color-text-muted)]">Completely different</span>
+                                                <span className="font-mono text-[var(--color-text-primary)]">{penaltyPreview.alien}&times;</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
                     </div>
                 </div>
             )}

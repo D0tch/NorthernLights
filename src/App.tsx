@@ -12,6 +12,7 @@ import { LibraryHome } from './components/library/LibraryHome';
 import { AlbumDetail } from './components/library/AlbumDetail';
 import { ArtistDetail } from './components/library/ArtistDetail';
 import { GenreDetail } from './components/library/GenreDetail';
+import { PlaylistDetail } from './components/library/PlaylistDetail';
 import { SetupWizard } from './components/SetupWizard';
 import { LoginPage } from './components/LoginPage';
 import { Hub } from './components/Hub';
@@ -525,6 +526,7 @@ const App: React.FC = () => {
                   <Route path="/library/genres" element={<LibraryHome section="genres" />} />
                   <Route path="/library/genre/:genreId" element={<GenreDetail />} />
                   <Route path="/playlists" element={<Playlists />} />
+                  <Route path="/playlists/:playlistId" element={<PlaylistDetail />} />
                   <Route path="*" element={<Navigate to="/library" replace />} />
                 </Routes>
               )}

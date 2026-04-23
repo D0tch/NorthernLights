@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../store';
 import { Play, Pin, PinOff, Disc3, Sparkles, Wand2, Compass } from 'lucide-react';
 import type { TrackInfo } from '../utils/fileSystem';
@@ -25,24 +25,25 @@ const HubCardSkeleton: React.FC = () => (
 
 interface HubCardProps {
   collection: HubCollection;
+  onOpen: () => void;
   onPlay: () => void;
   onPinToggle?: () => void;
 }
 
-const HubCard: React.FC<HubCardProps> = ({ collection, onPlay, onPinToggle }) => {
+const HubCard: React.FC<HubCardProps> = ({ collection, onOpen, onPlay, onPinToggle }) => {
   const { artUrls, bgColor } = useDominantColor(collection.tracks);
   const hasCovers = artUrls.length > 0;
 
   return (
     <div
       className="relative p-4 sm:p-5 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] hub-card-animate"
-      onClick={onPlay}
+      onClick={onOpen}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onPlay();
+          onOpen();
         }
       }}
       aria-label={`Play ${collection.title || 'Untitled playlist'}`}
@@ -114,7 +115,7 @@ const HubCard: React.FC<HubCardProps> = ({ collection, onPlay, onPinToggle }) =>
           e.stopPropagation();
           onPlay();
         }}
-        className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-all duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95"
+        className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-all duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95 z-20"
         aria-label="Play"
       >
         <Play className="w-5 h-5 ml-0.5" fill="currentColor" />
@@ -125,10 +126,11 @@ const HubCard: React.FC<HubCardProps> = ({ collection, onPlay, onPinToggle }) =>
 
 interface DiscoverCardProps {
   collection: HubCollection;
+  onOpen: () => void;
   onPlay: () => void;
 }
 
-const DiscoverCard: React.FC<DiscoverCardProps> = ({ collection, onPlay }) => {
+const DiscoverCard: React.FC<DiscoverCardProps> = ({ collection, onOpen, onPlay }) => {
   const { artUrls } = useDominantColor(collection.tracks);
   const covers = artUrls.slice(0, 4);
   const hasCovers = covers.length > 0;
@@ -136,13 +138,13 @@ const DiscoverCard: React.FC<DiscoverCardProps> = ({ collection, onPlay }) => {
   return (
     <div
       className="relative flex flex-col sm:flex-row gap-4 p-4 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] hub-card-animate"
-      onClick={onPlay}
+      onClick={onOpen}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          onPlay();
+          onOpen();
         }
       }}
       aria-label={`Play ${collection.title || 'Untitled playlist'}`}
@@ -186,7 +188,7 @@ const DiscoverCard: React.FC<DiscoverCardProps> = ({ collection, onPlay }) => {
           e.stopPropagation();
           onPlay();
         }}
-        className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-all duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95"
+        className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-all duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95 z-20"
         aria-label="Play"
       >
         <Play className="w-5 h-5 ml-0.5" fill="currentColor" />
@@ -261,6 +263,7 @@ const ExploreCard: React.FC<ExploreCardProps> = ({ genre, trackCount, entity }) 
 
 export const Hub: React.FC = () => {
   const { library, setPlaylist, getAuthHeader, togglePin, currentUser, genres: genreEntities } = usePlayerStore();
+  const navigate = useNavigate();
   const [collections, setCollections] = useState<HubCollection[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -422,6 +425,7 @@ export const Hub: React.FC = () => {
               <HubCard
                 key={collection.id}
                 collection={collection}
+                onOpen={() => collection.id && navigate(`/playlists/${collection.id}`)}
                 onPlay={() => handlePlayCollection(collection.tracks)}
                 onPinToggle={() =>
                   collection.id && handleTogglePin(collection.id, !collection.pinned)
@@ -442,6 +446,7 @@ export const Hub: React.FC = () => {
               <DiscoverCard
                 key={collection.id}
                 collection={collection}
+                onOpen={() => collection.id && navigate(`/playlists/${collection.id}`)}
                 onPlay={() => handlePlayCollection(collection.tracks)}
               />
             ))}
