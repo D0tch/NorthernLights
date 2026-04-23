@@ -171,6 +171,7 @@ export interface PlayerState {
   musicBrainzClientId: string;
   musicBrainzClientSecret: string;
   musicBrainzConnected: boolean;
+  musicBrainzRedirectUri: string;
   providerArtistImage: 'lastfm' | 'genius' | 'musicbrainz';
   providerArtistBio: 'lastfm' | 'genius';
   providerAlbumArt: 'lastfm' | 'genius' | 'musicbrainz';
@@ -295,6 +296,7 @@ export interface PlayerState {
   setMusicBrainzClientId: (id: string) => void;
   setMusicBrainzClientSecret: (secret: string) => void;
   setMusicBrainzConnected: (connected: boolean) => void;
+  setMusicBrainzRedirectUri: (uri: string) => void;
   setProviderArtistImage: (provider: 'lastfm' | 'genius' | 'musicbrainz') => void;
   setProviderArtistBio: (provider: 'lastfm' | 'genius') => void;
   setProviderAlbumArt: (provider: 'lastfm' | 'genius' | 'musicbrainz') => void;
@@ -578,6 +580,7 @@ export const usePlayerStore = create<PlayerState>()(
         musicBrainzClientId: '',
         musicBrainzClientSecret: '',
         musicBrainzConnected: false as boolean,
+        musicBrainzRedirectUri: '',
         providerArtistImage: 'lastfm' as 'lastfm' | 'genius' | 'musicbrainz',
         providerArtistBio: 'lastfm' as 'lastfm' | 'genius',
         providerAlbumArt: 'lastfm' as 'lastfm' | 'genius' | 'musicbrainz',
@@ -783,6 +786,7 @@ export const usePlayerStore = create<PlayerState>()(
                 musicBrainzClientId: data.musicBrainzClientId || '',
                 musicBrainzClientSecret: data.musicBrainzClientSecret || '',
                 musicBrainzConnected: data.musicBrainzConnected ?? false,
+                musicBrainzRedirectUri: data.musicBrainzRedirectUri || '',
                 providerArtistImage: data.providerArtistImage || 'lastfm',
                 providerArtistBio: data.providerArtistBio || 'lastfm',
                 providerAlbumArt: data.providerAlbumArt || 'lastfm',
@@ -841,6 +845,7 @@ export const usePlayerStore = create<PlayerState>()(
                 musicBrainzEnabled: state.musicBrainzEnabled,
                 musicBrainzClientId: state.musicBrainzClientId,
                 musicBrainzClientSecret: state.musicBrainzClientSecret,
+                musicBrainzRedirectUri: state.musicBrainzRedirectUri,
                 providerArtistImage: state.providerArtistImage,
                 providerArtistBio: state.providerArtistBio,
                 providerAlbumArt: state.providerAlbumArt,
@@ -1544,6 +1549,7 @@ export const usePlayerStore = create<PlayerState>()(
         setMusicBrainzClientId: (id: string) => set({ musicBrainzClientId: id }),
         setMusicBrainzClientSecret: (secret: string) => set({ musicBrainzClientSecret: secret }),
         setMusicBrainzConnected: (connected: boolean) => set({ musicBrainzConnected: connected }),
+        setMusicBrainzRedirectUri: (uri: string) => set({ musicBrainzRedirectUri: uri }),
         setProviderArtistImage: (provider: 'lastfm' | 'genius' | 'musicbrainz') => set({ providerArtistImage: provider }),
         setProviderArtistBio: (provider: 'lastfm' | 'genius') => set({ providerArtistBio: provider }),
         setProviderAlbumArt: (provider: 'lastfm' | 'genius' | 'musicbrainz') => set({ providerAlbumArt: provider }),
@@ -1617,6 +1623,7 @@ export const usePlayerStore = create<PlayerState>()(
         musicBrainzClientId: state.musicBrainzClientId,
         musicBrainzClientSecret: state.musicBrainzClientSecret,
         musicBrainzConnected: state.musicBrainzConnected,
+        musicBrainzRedirectUri: state.musicBrainzRedirectUri,
         llmConnected: state.llmConnected,
         providerArtistImage: state.providerArtistImage,
         providerArtistBio: state.providerArtistBio,

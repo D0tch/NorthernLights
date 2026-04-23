@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useProviderConnectionTest } from '../../hooks/useProviderConnectionTest';
 import { useToast } from '../../hooks/useToast';
@@ -22,6 +22,8 @@ export const MetadataTab: React.FC = () => {
     const setMusicBrainzClientSecret = usePlayerStore(state => state.setMusicBrainzClientSecret);
     const musicBrainzConnected = usePlayerStore(state => state.musicBrainzConnected);
     const setMusicBrainzConnected = usePlayerStore(state => state.setMusicBrainzConnected);
+    const musicBrainzRedirectUri = usePlayerStore(state => state.musicBrainzRedirectUri);
+    const setMusicBrainzRedirectUri = usePlayerStore(state => state.setMusicBrainzRedirectUri);
     const providerArtistImage = usePlayerStore(state => state.providerArtistImage);
     const providerArtistBio = usePlayerStore(state => state.providerArtistBio);
     const providerAlbumArt = usePlayerStore(state => state.providerAlbumArt);
@@ -30,6 +32,20 @@ export const MetadataTab: React.FC = () => {
     const loadSettings = usePlayerStore(state => state.loadSettings);
     const { addToast } = useToast();
     const showToast = useCallback((msg: string, type: 'success' | 'error' | 'info') => addToast(msg, type), [addToast]);
+
+    // Effective redirect URI the server will use (override if set, else SERVER_URL default)
+    const [mbEffectiveRedirectUri, setMbEffectiveRedirectUri] = useState<string>('');
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await fetch('/api/providers/musicbrainz/status', { headers: getAuthHeader() });
+                const data = await res.json().catch(() => ({}));
+                if (!cancelled && res.ok && data.redirectUri) setMbEffectiveRedirectUri(data.redirectUri);
+            } catch {}
+        })();
+        return () => { cancelled = true; };
+    }, [getAuthHeader, musicBrainzRedirectUri]);
 
     // Surface MusicBrainz OAuth callback status from the redirect back to the app
     useEffect(() => {
@@ -141,6 +157,41 @@ export const MetadataTab: React.FC = () => {
                             <div className="flex flex-col gap-3 mt-1 border-t border-[var(--glass-border)] pt-4">
                                 <input type="text" value={musicBrainzClientId} onChange={e => setMusicBrainzClientId(e.target.value)} placeholder="Client ID" className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
                                 <input type="password" value={musicBrainzClientSecret} onChange={e => setMusicBrainzClientSecret(e.target.value)} placeholder="Client Secret" className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
+                                <div className="flex flex-col gap-2 mt-1 bg-[var(--color-bg)]/40 border border-[var(--glass-border)] rounded-xl p-3">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <label className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Callback / Redirect URI</label>
+                                        <button
+                                            type="button"
+                                            onClick={async () => {
+                                                const uri = musicBrainzRedirectUri.trim() || mbEffectiveRedirectUri;
+                                                if (!uri) return;
+                                                try {
+                                                    await navigator.clipboard.writeText(uri);
+                                                    showToast('Copied redirect URI', 'success');
+                                                } catch {
+                                                    showToast('Failed to copy', 'error');
+                                                }
+                                            }}
+                                            className="text-xs text-[var(--color-primary)] hover:underline disabled:opacity-50"
+                                            disabled={!musicBrainzRedirectUri.trim() && !mbEffectiveRedirectUri}
+                                        >Copy</button>
+                                    </div>
+                                    <p className="text-xs text-[var(--color-text-muted)]">
+                                        Register this exact URL as the Callback URL in your{' '}
+                                        <a href="https://musicbrainz.org/account/applications" target="_blank" rel="noreferrer" className="text-[var(--color-primary)] underline">MusicBrainz OAuth application</a>.
+                                        Mismatches cause <code>invalid_request: Mismatched redirect URI</code>.
+                                    </p>
+                                    <code className="block text-xs px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--glass-border)] text-[var(--color-text-primary)] break-all">
+                                        {musicBrainzRedirectUri.trim() || mbEffectiveRedirectUri || 'Loading…'}
+                                    </code>
+                                    <input
+                                        type="text"
+                                        value={musicBrainzRedirectUri}
+                                        onChange={e => setMusicBrainzRedirectUri(e.target.value)}
+                                        placeholder="Optional override (leave blank to use the server default above)"
+                                        className="w-full p-2 text-xs rounded-lg border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                    />
+                                </div>
                                 <div className="flex gap-2 items-center mt-2">
                                     <button onClick={() => testMusicBrainz()} disabled={musicBrainzStatus === 'testing'} className="btn btn-ghost btn-sm whitespace-nowrap disabled:opacity-50">{musicBrainzStatus === 'testing' ? 'Testing...' : 'Test Connection'}</button>
                                     {musicBrainzStatus === 'success' && <span className="text-green-500 font-semibold text-xs drop-shadow-sm">✓ {musicBrainzMessage}</span>}
@@ -172,6 +223,7 @@ export const MetadataTab: React.FC = () => {
                                                         musicBrainzEnabled: true,
                                                         musicBrainzClientId,
                                                         musicBrainzClientSecret,
+                                                        musicBrainzRedirectUri: musicBrainzRedirectUri.trim(),
                                                     }),
                                                 });
                                                 if (!saveRes.ok) {
@@ -182,7 +234,7 @@ export const MetadataTab: React.FC = () => {
                                                 // Fetch the authorize URL and redirect — the endpoint returns
                                                 // JSON `{url}`, so a plain window.location.href to it would
                                                 // just show JSON instead of navigating to MusicBrainz.
-                                                const res = await fetch('/api/providers/musicbrainz/authorize', { headers: authHeaders });
+                                                const res = await fetch(`/api/providers/musicbrainz/authorize?origin=${encodeURIComponent(window.location.origin)}`, { headers: authHeaders });
                                                 const data = await res.json().catch(() => ({}));
                                                 if (!res.ok || !data.url) {
                                                     showToast(data.error || 'Failed to start authorization', 'error');

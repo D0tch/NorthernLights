@@ -161,7 +161,7 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                                     // Fetch the authorize URL and redirect — the endpoint returns
                                     // JSON `{url}`, so a plain window.location.href to it would
                                     // just show JSON instead of navigating to Last.fm.
-                                    const res = await fetch('/api/providers/lastfm/authorize', { headers: getAuthHeader() });
+                                    const res = await fetch(`/api/providers/lastfm/authorize?origin=${encodeURIComponent(window.location.origin)}`, { headers: getAuthHeader() });
                                     const data = await res.json().catch(() => ({}));
                                     if (!res.ok || !data.url) {
                                         showToast(data.error || 'Failed to start authorization', 'error');

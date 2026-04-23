@@ -27,6 +27,32 @@ const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3001';
 
 // ─── MusicBrainz OAuth2 Helpers ─────────────────────────────────────
 
+// The redirect URI must exactly match what is registered in the MusicBrainz
+// OAuth application. Allow an admin-supplied override so the app can work
+// across dev (localhost:3000 via Vite), prod, and reverse-proxied deployments
+// without code changes.
+async function getMbRedirectUri(): Promise<string> {
+  const override = (await getSystemSetting('musicBrainzRedirectUri')) as string | null;
+  if (override && typeof override === 'string' && override.trim().length > 0) {
+    return override.trim();
+  }
+  return `${SERVER_URL}/api/providers/musicbrainz/callback`;
+}
+
+// Sanitize a user-supplied app origin (http[s]://host[:port]). Returns null if invalid.
+// Used to redirect the browser back to the frontend origin after OAuth callbacks,
+// since in dev the frontend runs on a different port from the backend.
+function sanitizeOrigin(raw: unknown): string | null {
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  try {
+    const u = new URL(raw.trim());
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
+    return `${u.protocol}//${u.host}`;
+  } catch {
+    return null;
+  }
+}
+
 // ─── MusicBrainz Proxy Routes ────────────────────────────────────────
 
 router.get('/providers/musicbrainz/artist/:mbid', async (req, res) => {
@@ -143,7 +169,14 @@ router.get('/providers/musicbrainz/authorize', async (req, res) => {
     if (!clientId) return res.status(400).json({ error: 'MusicBrainz Client ID not configured' });
 
     const userId = req.user?.userId;
-    const redirectUri = `${SERVER_URL}/api/providers/musicbrainz/callback`;
+    const redirectUri = await getMbRedirectUri();
+
+    // Remember where the user came from for the post-callback redirect
+    const appOrigin = sanitizeOrigin(req.query.origin);
+    if (appOrigin) {
+      await setSystemSetting('musicBrainzAppOrigin', appOrigin);
+    }
+
     const url = new URL('https://musicbrainz.org/oauth2/authorize');
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('client_id', clientId);
@@ -160,23 +193,26 @@ router.get('/providers/musicbrainz/authorize', async (req, res) => {
 
 router.get('/providers/musicbrainz/callback', async (req, res) => {
   try {
+    const appOrigin = (await getSystemSetting('musicBrainzAppOrigin')) as string | null;
+    const returnBase = (appOrigin && typeof appOrigin === 'string' && appOrigin.trim()) ? appOrigin.trim() : SERVER_URL;
+
     const { code, state, error } = req.query;
 
     if (error) {
-      return res.redirect(`${SERVER_URL}/?mb_error=${encodeURIComponent(error as string)}`);
+      return res.redirect(`${returnBase}/?mb_error=${encodeURIComponent(error as string)}`);
     }
 
     if (!code) {
-      return res.redirect(`${SERVER_URL}/?mb_error=missing_code`);
+      return res.redirect(`${returnBase}/?mb_error=missing_code`);
     }
 
     const clientId = await getSystemSetting('musicBrainzClientId');
     const clientSecret = await getSystemSetting('musicBrainzClientSecret');
     if (!clientId || !clientSecret) {
-      return res.redirect(`${SERVER_URL}/?mb_error=credentials_not_configured`);
+      return res.redirect(`${returnBase}/?mb_error=credentials_not_configured`);
     }
 
-    const redirectUri = `${SERVER_URL}/api/providers/musicbrainz/callback`;
+    const redirectUri = await getMbRedirectUri();
 
     const tokenRes = await fetch('https://musicbrainz.org/oauth2/token', {
       method: 'POST',
@@ -193,7 +229,7 @@ router.get('/providers/musicbrainz/callback', async (req, res) => {
     if (!tokenRes.ok) {
       const errText = await tokenRes.text();
       console.error('[MusicBrainz OAuth] Token exchange failed:', tokenRes.status, errText);
-      return res.redirect(`${SERVER_URL}/?mb_error=token_exchange_failed`);
+      return res.redirect(`${returnBase}/?mb_error=token_exchange_failed`);
     }
 
     const tokenData = await tokenRes.json();
@@ -214,7 +250,7 @@ router.get('/providers/musicbrainz/callback', async (req, res) => {
       }
     } catch {}
 
-    res.redirect(`${SERVER_URL}/?mb_connected=1`);
+    res.redirect(`${returnBase}/?mb_connected=1`);
   } catch (err: any) {
     console.error('[MusicBrainz OAuth] Callback error:', err.message);
     res.redirect(`${SERVER_URL}/?mb_error=internal_error`);
@@ -272,11 +308,13 @@ router.get('/providers/musicbrainz/status', async (req, res) => {
     const connected = await getSystemSetting('musicBrainzConnected');
     const username = await getSystemSetting('musicBrainzUsername');
     const expiresAt = await getSystemSetting('musicBrainzTokenExpiresAt');
+    const redirectUri = await getMbRedirectUri();
 
     res.json({
       connected: connected === true || connected === 'true',
       username: username || null,
       expiresAt: expiresAt ? Number(expiresAt) : null,
+      redirectUri,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -373,6 +411,13 @@ router.get('/providers/lastfm/authorize', async (req, res) => {
     // Store the temporary token so the callback can use it
     await setUserSetting(userId, 'lastFmPendingToken', tokenRes.token);
 
+    // Remember where the user came from so we can redirect back to the frontend
+    // after the callback (in dev the backend and frontend run on different ports).
+    const appOrigin = sanitizeOrigin(req.query.origin);
+    if (appOrigin) {
+      await setUserSetting(userId, 'lastFmAppOrigin', appOrigin);
+    }
+
     // Encode userId in callback URL so the unauthenticated callback can identify the user
     const cbUrl = `${SERVER_URL}/api/providers/lastfm/callback?cb_state=${encodeURIComponent(userId)}`;
     const authUrl = `https://www.last.fm/api/auth/?api_key=${apiKey}&token=${tokenRes.token}&cb=${encodeURIComponent(cbUrl)}`;
@@ -387,36 +432,39 @@ router.get('/providers/lastfm/callback', async (req, res) => {
   try {
     // userId is passed via the callback URL's cb_state param (set in authorize)
     const userId = req.query.cb_state as string;
-    if (!userId) return res.redirect(`${SERVER_URL}/?lfm_error=missing_state`);
+    const appOrigin = userId ? (await getUserSetting(userId, 'lastFmAppOrigin')) as string | null : null;
+    const returnBase = (appOrigin && typeof appOrigin === 'string' && appOrigin.trim()) ? appOrigin.trim() : SERVER_URL;
+
+    if (!userId) return res.redirect(`${returnBase}/?lfm_error=missing_state`);
 
     const { token, error } = req.query;
 
     if (error) {
-      return res.redirect(`${SERVER_URL}/?lfm_error=${encodeURIComponent(error as string)}`);
+      return res.redirect(`${returnBase}/?lfm_error=${encodeURIComponent(error as string)}`);
     }
 
     if (!token) {
-      return res.redirect(`${SERVER_URL}/?lfm_error=missing_token`);
+      return res.redirect(`${returnBase}/?lfm_error=missing_token`);
     }
 
     // Verify the token matches what we stored for this user
     const pendingToken = await getUserSetting(userId, 'lastFmPendingToken');
     if (!pendingToken || pendingToken !== token) {
-      return res.redirect(`${SERVER_URL}/?lfm_error=token_mismatch`);
+      return res.redirect(`${returnBase}/?lfm_error=token_mismatch`);
     }
 
     const apiKey = await getSystemSetting('lastFmApiKey');
     const sharedSecret = (await getSystemSetting('lastFmSharedSecret')) || '';
 
     if (!apiKey) {
-      return res.redirect(`${SERVER_URL}/?lfm_error=no_api_key`);
+      return res.redirect(`${returnBase}/?lfm_error=no_api_key`);
     }
 
     // Exchange token for session key
     const sessionRes = await lfmFetch(userId, 'auth.getSession', { token: token as string }, { apiKey, sharedSecret, sessionKey: '' });
 
     if (!sessionRes.session?.key) {
-      return res.redirect(`${SERVER_URL}/?lfm_error=session_failed`);
+      return res.redirect(`${returnBase}/?lfm_error=session_failed`);
     }
 
     await setUserSetting(userId, 'lastFmSessionKey', sessionRes.session.key);
@@ -424,7 +472,7 @@ router.get('/providers/lastfm/callback', async (req, res) => {
     await setUserSetting(userId, 'lastFmConnected', true);
     await setUserSetting(userId, 'lastFmPendingToken', '');
 
-    res.redirect(`${SERVER_URL}/?lfm_connected=1`);
+    res.redirect(`${returnBase}/?lfm_connected=1`);
   } catch (err: any) {
     console.error('[Last.fm] callback error:', err.message);
     res.redirect(`${SERVER_URL}/?lfm_error=internal_error`);
