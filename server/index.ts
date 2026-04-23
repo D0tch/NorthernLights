@@ -1,8 +1,15 @@
+// NOTE: dotenv.config() must run before any import that reads process.env
+// at module-top level (e.g. route files capturing env vars into `const`s).
+// If it runs later, those modules see `undefined` and silently break —
+// that bug caused OAuth callbacks to use http://localhost:3001 instead of
+// the configured SERVER_URL.
+import dotenv from 'dotenv';
+dotenv.config();
+
 import express from 'express';
 import cors from 'cors';
 import fs from 'fs';
 import path from 'path';
-import dotenv from 'dotenv';
 import dns from 'dns';
 import { spawn } from 'child_process';
 
@@ -26,10 +33,13 @@ import genresRoutes from './routes/genres.routes';
 import mediaRoutes from './routes/media.routes';
 import providersRoutes from './routes/providers.routes';
 
-dotenv.config();
-
 const app = express();
 const port = process.env.PORT || 3001;
+
+// Honor X-Forwarded-Proto / X-Forwarded-Host from reverse proxies (nginx,
+// Traefik, Caddy, cloud load balancers) so req.protocol + req.get('host')
+// reflect the public-facing URL. Required for OAuth callback URL construction.
+app.set('trust proxy', true);
 
 // Allowed origins setup
 const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:3000'];

@@ -23,7 +23,25 @@ import {
 
 const router = Router();
 
-const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3001';
+// Derive the public-facing origin of the backend.
+//
+// Read env lazily: this module may be imported before dotenv.config() runs,
+// so capturing `process.env.SERVER_URL` into a module-top-level const would
+// freeze in `undefined` and silently break all OAuth callbacks.
+//
+// Order of precedence:
+//   1. SERVER_URL env var (explicit override for odd proxy setups)
+//   2. req.protocol + req.get('host') — with `trust proxy` enabled in
+//      server/index.ts these reflect X-Forwarded-Proto/X-Forwarded-Host
+//      from the reverse proxy, giving the public HTTPS origin.
+//   3. Final fallback for safety.
+function getServerOrigin(req: import('express').Request): string {
+  const envOverride = (process.env.SERVER_URL || '').trim();
+  if (envOverride) return envOverride.replace(/\/+$/, '');
+  const host = req.get('host');
+  if (host) return `${req.protocol}://${host}`;
+  return 'http://localhost:3001';
+}
 
 // ─── MusicBrainz OAuth2 Helpers ─────────────────────────────────────
 
@@ -31,12 +49,12 @@ const SERVER_URL = process.env.SERVER_URL || 'http://localhost:3001';
 // OAuth application. Allow an admin-supplied override so the app can work
 // across dev (localhost:3000 via Vite), prod, and reverse-proxied deployments
 // without code changes.
-async function getMbRedirectUri(): Promise<string> {
+async function getMbRedirectUri(req: import('express').Request): Promise<string> {
   const override = (await getSystemSetting('musicBrainzRedirectUri')) as string | null;
   if (override && typeof override === 'string' && override.trim().length > 0) {
     return override.trim();
   }
-  return `${SERVER_URL}/api/providers/musicbrainz/callback`;
+  return `${getServerOrigin(req)}/api/providers/musicbrainz/callback`;
 }
 
 // Sanitize a user-supplied app origin (http[s]://host[:port]). Returns null if invalid.
@@ -169,7 +187,7 @@ router.get('/providers/musicbrainz/authorize', async (req, res) => {
     if (!clientId) return res.status(400).json({ error: 'MusicBrainz Client ID not configured' });
 
     const userId = req.user?.userId;
-    const redirectUri = await getMbRedirectUri();
+    const redirectUri = await getMbRedirectUri(req);
 
     // Remember where the user came from for the post-callback redirect
     const appOrigin = sanitizeOrigin(req.query.origin);
@@ -194,7 +212,7 @@ router.get('/providers/musicbrainz/authorize', async (req, res) => {
 router.get('/providers/musicbrainz/callback', async (req, res) => {
   try {
     const appOrigin = (await getSystemSetting('musicBrainzAppOrigin')) as string | null;
-    const returnBase = (appOrigin && typeof appOrigin === 'string' && appOrigin.trim()) ? appOrigin.trim() : SERVER_URL;
+    const returnBase = (appOrigin && typeof appOrigin === 'string' && appOrigin.trim()) ? appOrigin.trim() : getServerOrigin(req);
 
     const { code, state, error } = req.query;
 
@@ -212,7 +230,7 @@ router.get('/providers/musicbrainz/callback', async (req, res) => {
       return res.redirect(`${returnBase}/?mb_error=credentials_not_configured`);
     }
 
-    const redirectUri = await getMbRedirectUri();
+    const redirectUri = await getMbRedirectUri(req);
 
     const tokenRes = await fetch('https://musicbrainz.org/oauth2/token', {
       method: 'POST',
@@ -253,7 +271,7 @@ router.get('/providers/musicbrainz/callback', async (req, res) => {
     res.redirect(`${returnBase}/?mb_connected=1`);
   } catch (err: any) {
     console.error('[MusicBrainz OAuth] Callback error:', err.message);
-    res.redirect(`${SERVER_URL}/?mb_error=internal_error`);
+    res.redirect(`${getServerOrigin(req)}/?mb_error=internal_error`);
   }
 });
 
@@ -308,7 +326,7 @@ router.get('/providers/musicbrainz/status', async (req, res) => {
     const connected = await getSystemSetting('musicBrainzConnected');
     const username = await getSystemSetting('musicBrainzUsername');
     const expiresAt = await getSystemSetting('musicBrainzTokenExpiresAt');
-    const redirectUri = await getMbRedirectUri();
+    const redirectUri = await getMbRedirectUri(req);
 
     res.json({
       connected: connected === true || connected === 'true',
@@ -419,7 +437,7 @@ router.get('/providers/lastfm/authorize', async (req, res) => {
     }
 
     // Encode userId in callback URL so the unauthenticated callback can identify the user
-    const cbUrl = `${SERVER_URL}/api/providers/lastfm/callback?cb_state=${encodeURIComponent(userId)}`;
+    const cbUrl = `${getServerOrigin(req)}/api/providers/lastfm/callback?cb_state=${encodeURIComponent(userId)}`;
     const authUrl = `https://www.last.fm/api/auth/?api_key=${apiKey}&token=${tokenRes.token}&cb=${encodeURIComponent(cbUrl)}`;
     res.json({ url: authUrl });
   } catch (err: any) {
@@ -433,7 +451,7 @@ router.get('/providers/lastfm/callback', async (req, res) => {
     // userId is passed via the callback URL's cb_state param (set in authorize)
     const userId = req.query.cb_state as string;
     const appOrigin = userId ? (await getUserSetting(userId, 'lastFmAppOrigin')) as string | null : null;
-    const returnBase = (appOrigin && typeof appOrigin === 'string' && appOrigin.trim()) ? appOrigin.trim() : SERVER_URL;
+    const returnBase = (appOrigin && typeof appOrigin === 'string' && appOrigin.trim()) ? appOrigin.trim() : getServerOrigin(req);
 
     if (!userId) return res.redirect(`${returnBase}/?lfm_error=missing_state`);
 
@@ -475,7 +493,7 @@ router.get('/providers/lastfm/callback', async (req, res) => {
     res.redirect(`${returnBase}/?lfm_connected=1`);
   } catch (err: any) {
     console.error('[Last.fm] callback error:', err.message);
-    res.redirect(`${SERVER_URL}/?lfm_error=internal_error`);
+    res.redirect(`${getServerOrigin(req)}/?lfm_error=internal_error`);
   }
 });
 
