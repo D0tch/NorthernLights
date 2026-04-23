@@ -16,6 +16,9 @@ export interface LastFmAlbumInfo {
   artist?: string;
   image?: Array<{ size: string; '#text': string }>;
   tags?: { tag: Array<{ name: string }> };
+  wiki?: { summary?: string; content?: string };
+  listeners?: string;
+  playcount?: string;
 }
 
 export interface LastFmTagAlbums {

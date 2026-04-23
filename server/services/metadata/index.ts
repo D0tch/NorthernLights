@@ -9,6 +9,8 @@ import {
   upsertGenreCache,
   clearExternalCache,
   isCacheFresh,
+  type ArtistCacheExtras,
+  type AlbumCacheExtras,
 } from './cache';
 import {
   lastFmArtistInfo,
@@ -19,7 +21,7 @@ import {
   testLastFm,
 } from './providers/lastfm';
 import { geniusSearch, geniusGetArtist } from './providers/genius';
-import { extractMbLinks, mbGetArtist, mbGetAlbumCover, mbSearchReleaseGroup } from './providers/musicbrainz';
+import { extractMbLinks, extractMbMembers, mbGetArtist, mbGetAlbumCover, mbSearchReleaseGroup } from './providers/musicbrainz';
 
 // ─── Types ──────────────────────────────────────────────────────────
 export interface ArtistData {
@@ -31,6 +33,17 @@ export interface ArtistData {
   lifeSpan?: { begin?: string; end?: string };
   links?: { url: string; type: string }[];
   genres?: string[];
+  listeners?: string;
+  members?: string[];
+  error?: string;
+}
+
+export interface AlbumData {
+  imageUrl?: string;
+  description?: string;
+  tags?: string[];
+  listeners?: string;
+  playcount?: string;
   error?: string;
 }
 
@@ -92,10 +105,18 @@ export async function getArtistData(
   const cached = await getCachedArtist(name);
 
   if (cached && isCacheFresh(cached.last_updated)) {
-    if (cached.image_url || cached.bio) {
+    if (cached.image_url || cached.bio || cached.area || cached.artist_type || cached.disambiguation) {
       return {
         imageUrl: cached.image_url || undefined,
         bio: cached.bio || undefined,
+        disambiguation: cached.disambiguation || undefined,
+        area: cached.area || undefined,
+        type: cached.artist_type || undefined,
+        lifeSpan: cached.lifespan_begin ? { begin: cached.lifespan_begin || undefined, end: cached.lifespan_end || undefined } : undefined,
+        links: cached.links ? JSON.parse(cached.links) : undefined,
+        genres: cached.genres ? JSON.parse(cached.genres) : undefined,
+        listeners: cached.listeners || undefined,
+        members: cached.members ? JSON.parse(cached.members) : undefined,
       };
     }
   }
@@ -123,6 +144,8 @@ export async function getArtistData(
           if (Array.isArray(mbArtist.genres) && mbArtist.genres.length > 0) {
             data.genres = mbArtist.genres.map((g: any) => g.name);
           }
+          const members = extractMbMembers(mbArtist.relations || []);
+          if (members.length > 0) data.members = members;
         }
       } catch (e) {
         console.warn('[Metadata] MusicBrainz artist lookup failed:', e);
@@ -226,6 +249,9 @@ export async function getArtistData(
               const imageUrl = extractLastFmImage(artist.image);
               if (imageUrl) data.imageUrl = imageUrl;
             }
+            if (!data.listeners && artist.stats?.listeners) {
+              data.listeners = artist.stats.listeners;
+            }
           }
         } catch (err) {
           if (isRateLimitError(err)) {
@@ -246,18 +272,93 @@ export async function getArtistData(
   }
 
   if (!wasRateLimited || data.imageUrl || data.bio) {
+    const extras: ArtistCacheExtras = {
+      disambiguation: data.disambiguation ?? null,
+      area: data.area ?? null,
+      artistType: data.type ?? null,
+      lifespanBegin: data.lifeSpan?.begin ?? null,
+      lifespanEnd: data.lifeSpan?.end ?? null,
+      links: data.links && data.links.length > 0 ? JSON.stringify(data.links) : null,
+      genres: data.genres && data.genres.length > 0 ? JSON.stringify(data.genres) : null,
+      listeners: data.listeners ?? null,
+      members: data.members && data.members.length > 0 ? JSON.stringify(data.members) : null,
+    };
     await upsertArtistCache(
       name,
       data.imageUrl || null,
       data.bio || null,
       mbArtistId || cached?.mbid || null,
-      !wasRateLimited
+      !wasRateLimited,
+      extras
     );
   }
 
   if (lastError && !data.imageUrl && !data.bio) {
     data.error = lastError;
   }
+
+  return data;
+}
+
+/**
+ * Fetch album metadata (description, tags, listener stats).
+ * Checks DB cache first, falls back to Last.fm.
+ */
+export async function getAlbumData(
+  albumName: string,
+  artistName: string,
+  mbAlbumId?: string | null
+): Promise<AlbumData> {
+  if (!albumName || !artistName) return {};
+
+  const settings = await getProviderSettings();
+  const cached = await getCachedAlbum(albumName, artistName);
+
+  if (cached && isCacheFresh(cached.last_updated)) {
+    if (cached.image_url || cached.description || cached.listeners) {
+      return {
+        imageUrl: cached.image_url || undefined,
+        description: cached.description || undefined,
+        tags: cached.tags ? JSON.parse(cached.tags) : undefined,
+        listeners: cached.listeners || undefined,
+        playcount: cached.playcount || undefined,
+      };
+    }
+  }
+
+  const data: AlbumData = {};
+
+  if (settings.lastFmApiKey) {
+    try {
+      const album = await lastFmAlbumInfo(albumName, artistName, settings.lastFmApiKey);
+      if (album) {
+        if (album.wiki?.summary) {
+          data.description = cleanHtml(album.wiki.summary.split('<a href')[0].trim());
+          if (!data.description) delete data.description;
+        }
+        if (album.tags?.tag && album.tags.tag.length > 0) {
+          data.tags = album.tags.tag.map((t: any) => t.name).filter(Boolean);
+        }
+        if (album.listeners) data.listeners = album.listeners;
+        if (album.playcount) data.playcount = album.playcount;
+        if (!data.imageUrl && album.image) {
+          const imageUrl = extractLastFmImage(album.image);
+          if (imageUrl) data.imageUrl = imageUrl;
+        }
+      }
+    } catch (e) {
+      console.warn('[Metadata] Last.fm album data fetch failed:', e);
+    }
+  }
+
+  const extras: AlbumCacheExtras = {
+    description: data.description ?? null,
+    tags: data.tags && data.tags.length > 0 ? JSON.stringify(data.tags) : null,
+    listeners: data.listeners ?? null,
+    playcount: data.playcount ?? null,
+  };
+
+  await upsertAlbumCache(albumName, artistName, data.imageUrl || null, mbAlbumId || cached?.mbid || null, true, extras);
 
   return data;
 }

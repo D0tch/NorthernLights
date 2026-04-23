@@ -5,6 +5,7 @@ import { requireAuth, requireAdmin } from '../middleware/auth';
 import { mbFetch, checkMbEnabled, refreshMbToken } from '../services/musicbrainz.service';
 import {
   getArtistData,
+  getAlbumData,
   getAlbumImage,
   getGenreImage,
   getGenreInfo,
@@ -576,6 +577,20 @@ router.get('/providers/external/artist', requireAuth, async (req, res) => {
   } catch (err: any) {
     console.error('[ExternalMeta] artist error:', err.message);
     res.status(502).json({ error: 'Failed to fetch artist data' });
+  }
+});
+
+router.get('/providers/external/album', requireAuth, async (req, res) => {
+  try {
+    const album = req.query.album as string;
+    const artist = req.query.artist as string;
+    if (!album || !artist) return res.status(400).json({ error: 'Missing album or artist parameter' });
+    const mbid = (req.query.mbid as string) || undefined;
+    const data = await getAlbumData(album, artist, mbid);
+    res.json(data);
+  } catch (err: any) {
+    console.error('[ExternalMeta] album error:', err.message);
+    res.status(502).json({ error: 'Failed to fetch album data' });
   }
 });
 

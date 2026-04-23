@@ -40,7 +40,9 @@ export interface HubCollection {
   title?: string;
   description: string;
   target_vector: [number, number, number, number, number, number, number, number];
-  target_genre?: string; // A single macro-genre keyword (e.g. "r&b", "pop", "electronic")
+  target_genres?: string[];
+  banned_genres?: string[];
+  target_genre?: string; // Legacy singular field
 }
 
 export async function generateHubConcepts(

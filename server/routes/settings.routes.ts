@@ -19,7 +19,7 @@ router.get('/settings', async (req, res) => {
     }
 
     // User-level settings (includes Last.fm which is per-user)
-    const allUserKeys = ['discoveryLevel', 'genreStrictness', 'artistAmnesiaLimit', 'llmPlaylistDiversity', 'llmVetoMode', 'genreBlendWeight', 'genrePenaltyCurve', 'llmTracksPerPlaylist', 'llmPlaylistCount', 'lastFmScrobbleEnabled', 'lastFmConnected', 'lastFmUsername'];
+    const allUserKeys = ['discoveryLevel', 'genreStrictness', 'artistAmnesiaLimit', 'llmPlaylistDiversity', 'llmVetoMode', 'llmGenreCohesion', 'llmDiscoveryBias', 'llmArtistSpread', 'genrePenaltyCurve', 'llmRecoveryStrength', 'llmAdjacentReach', 'llmTracksPerPlaylist', 'llmPlaylistCount', 'lastFmScrobbleEnabled', 'lastFmConnected', 'lastFmUsername'];
     if (userId) {
       for (const k of allUserKeys) {
         const userVal = await getUserSetting(userId, k);
@@ -31,9 +31,18 @@ router.get('/settings', async (req, res) => {
         }
       }
     } else {
-      const fallbackKeys = ['discoveryLevel', 'genreStrictness', 'artistAmnesiaLimit', 'llmPlaylistDiversity', 'llmVetoMode', 'genreBlendWeight', 'genrePenaltyCurve', 'llmTracksPerPlaylist', 'llmPlaylistCount'];
+      const fallbackKeys = ['discoveryLevel', 'genreStrictness', 'artistAmnesiaLimit', 'llmPlaylistDiversity', 'llmVetoMode', 'llmGenreCohesion', 'llmDiscoveryBias', 'llmArtistSpread', 'genrePenaltyCurve', 'llmRecoveryStrength', 'llmAdjacentReach', 'llmTracksPerPlaylist', 'llmPlaylistCount'];
       for (const k of fallbackKeys) {
         settings[k] = await getSystemSetting(k);
+      }
+    }
+
+    if (settings.llmGenreCohesion === null || settings.llmGenreCohesion === undefined) {
+      if (userId) {
+        const legacyUserGenreBlend = await getUserSetting(userId, 'genreBlendWeight');
+        settings.llmGenreCohesion = legacyUserGenreBlend !== null ? legacyUserGenreBlend : await getSystemSetting('genreBlendWeight');
+      } else {
+        settings.llmGenreCohesion = await getSystemSetting('genreBlendWeight');
       }
     }
 
@@ -49,7 +58,7 @@ router.post('/settings', async (req, res) => {
     const userId = req.user?.userId;
     const settings = req.body;
 
-    const userKeys = new Set(['discoveryLevel', 'genreStrictness', 'artistAmnesiaLimit', 'llmPlaylistDiversity', 'llmVetoMode', 'genreBlendWeight', 'genrePenaltyCurve', 'llmTracksPerPlaylist', 'llmPlaylistCount', 'lastFmScrobbleEnabled']);
+    const userKeys = new Set(['discoveryLevel', 'genreStrictness', 'artistAmnesiaLimit', 'llmPlaylistDiversity', 'llmVetoMode', 'llmGenreCohesion', 'llmDiscoveryBias', 'llmArtistSpread', 'genrePenaltyCurve', 'llmRecoveryStrength', 'llmAdjacentReach', 'llmTracksPerPlaylist', 'llmPlaylistCount', 'lastFmScrobbleEnabled']);
     const serverKeys = new Set(['llmBaseUrl', 'llmApiKey', 'llmModelName', 'hubGenerationSchedule', 'audioAnalysisCpu', 'scannerConcurrency', 'geniusApiKey', 'lastFmApiKey', 'lastFmSharedSecret', 'musicBrainzEnabled', 'musicBrainzClientId', 'musicBrainzClientSecret', 'providerArtistImage', 'providerArtistBio', 'providerAlbumArt', 'autoFolderWalk']);
     // Keys that are written by OAuth2 flows server-side, not exposed to frontend
     const protectedKeys = new Set(['musicBrainzAccessToken', 'musicBrainzRefreshToken', 'musicBrainzTokenExpiresAt', 'musicBrainzConnected', 'musicBrainzUsername', 'lastFmSessionKey', 'lastFmUsername', 'lastFmConnected']);

@@ -13,25 +13,56 @@ export async function getCachedArtist(name: string): Promise<any | null> {
   return res.rows[0] || null;
 }
 
+export interface ArtistCacheExtras {
+  disambiguation?: string | null;
+  area?: string | null;
+  artistType?: string | null;
+  lifespanBegin?: string | null;
+  lifespanEnd?: string | null;
+  links?: string | null; // JSON
+  genres?: string | null; // JSON
+  listeners?: string | null;
+  members?: string | null; // JSON
+}
+
 export async function upsertArtistCache(
   name: string,
   imageUrl: string | null,
   bio: string | null,
   mbid: string | null,
-  updateLastUpdated = true
+  updateLastUpdated = true,
+  extras: ArtistCacheExtras = {}
 ): Promise<void> {
   const db = await initDB();
   const now = Math.floor(Date.now() / 1000);
   if (updateLastUpdated) {
     await db.query(
-      `INSERT INTO artists (id, name, image_url, bio, mbid, last_updated)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
+      `INSERT INTO artists (id, name, image_url, bio, mbid, last_updated, disambiguation, area, artist_type, lifespan_begin, lifespan_end, links, genres, listeners, members)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
        ON CONFLICT (name) DO UPDATE SET
          image_url = COALESCE($2, artists.image_url),
          bio = COALESCE($3, artists.bio),
          mbid = COALESCE($4, artists.mbid),
-         last_updated = $5`,
-      [name, imageUrl, bio, mbid, now]
+         last_updated = $5,
+         disambiguation = COALESCE($6, artists.disambiguation),
+         area = COALESCE($7, artists.area),
+         artist_type = COALESCE($8, artists.artist_type),
+         lifespan_begin = COALESCE($9, artists.lifespan_begin),
+         lifespan_end = COALESCE($10, artists.lifespan_end),
+         links = COALESCE($11, artists.links),
+         genres = COALESCE($12, artists.genres),
+         listeners = COALESCE($13, artists.listeners),
+         members = COALESCE($14, artists.members)`,
+      [name, imageUrl, bio, mbid, now,
+       extras.disambiguation ?? null,
+       extras.area ?? null,
+       extras.artistType ?? null,
+       extras.lifespanBegin ?? null,
+       extras.lifespanEnd ?? null,
+       extras.links ?? null,
+       extras.genres ?? null,
+       extras.listeners ?? null,
+       extras.members ?? null]
     );
   } else {
     await db.query(
@@ -58,24 +89,40 @@ export async function getCachedAlbum(
   return res.rows[0] || null;
 }
 
+export interface AlbumCacheExtras {
+  description?: string | null;
+  tags?: string | null; // JSON
+  listeners?: string | null;
+  playcount?: string | null;
+}
+
 export async function upsertAlbumCache(
   title: string,
   artistName: string,
   imageUrl: string | null,
   mbid: string | null,
-  updateLastUpdated = true
+  updateLastUpdated = true,
+  extras: AlbumCacheExtras = {}
 ): Promise<void> {
   const db = await initDB();
   const now = Math.floor(Date.now() / 1000);
   if (updateLastUpdated) {
     await db.query(
-      `INSERT INTO albums (id, title, artist_name, image_url, mbid, last_updated)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5)
+      `INSERT INTO albums (id, title, artist_name, image_url, mbid, last_updated, description, tags, listeners, playcount)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (title, artist_name) DO UPDATE SET
          image_url = COALESCE($3, albums.image_url),
          mbid = COALESCE($4, albums.mbid),
-         last_updated = $5`,
-      [title, artistName, imageUrl, mbid, now]
+         last_updated = $5,
+         description = COALESCE($6, albums.description),
+         tags = COALESCE($7, albums.tags),
+         listeners = COALESCE($8, albums.listeners),
+         playcount = COALESCE($9, albums.playcount)`,
+      [title, artistName, imageUrl, mbid, now,
+       extras.description ?? null,
+       extras.tags ?? null,
+       extras.listeners ?? null,
+       extras.playcount ?? null]
     );
   } else {
     await db.query(

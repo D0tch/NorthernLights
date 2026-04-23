@@ -39,15 +39,24 @@ async function runLlmHubRegeneration(userId: string, opts: { force?: boolean } =
   const llmPlaylistCountRaw = await getUserSetting(userId, 'llmPlaylistCount');
   const llmPlaylistCount = llmPlaylistCountRaw ? Number(llmPlaylistCountRaw) : 3;
 
-  const genreBlendRaw = await getUserSetting(userId, 'genreBlendWeight');
+  const genreCohesionRaw = await getUserSetting(userId, 'llmGenreCohesion');
+  const legacyGenreBlendRaw = genreCohesionRaw === null ? await getUserSetting(userId, 'genreBlendWeight') : null;
+  const discoveryBiasRaw = await getUserSetting(userId, 'llmDiscoveryBias');
+  const artistSpreadRaw = await getUserSetting(userId, 'llmArtistSpread');
   const penaltyCurveRaw = await getUserSetting(userId, 'genrePenaltyCurve');
+  const recoveryStrengthRaw = await getUserSetting(userId, 'llmRecoveryStrength');
+  const adjacentReachRaw = await getUserSetting(userId, 'llmAdjacentReach');
   const tracksPerRaw = await getUserSetting(userId, 'llmTracksPerPlaylist');
   const diversityRaw = await getUserSetting(userId, 'llmPlaylistDiversity');
   const vetoModeRaw = await getUserSetting(userId, 'llmVetoMode');
 
   const hubSettings = {
-    genreBlendWeight: genreBlendRaw !== null ? Number(genreBlendRaw) : 50,
+    llmGenreCohesion: genreCohesionRaw !== null ? Number(genreCohesionRaw) : (legacyGenreBlendRaw !== null ? Number(legacyGenreBlendRaw) : 50),
+    llmDiscoveryBias: discoveryBiasRaw !== null ? Number(discoveryBiasRaw) : 45,
+    llmArtistSpread: artistSpreadRaw !== null ? Number(artistSpreadRaw) : 70,
     genrePenaltyCurve: penaltyCurveRaw !== null ? Number(penaltyCurveRaw) : 50,
+    llmRecoveryStrength: recoveryStrengthRaw !== null ? Number(recoveryStrengthRaw) : 50,
+    llmAdjacentReach: adjacentReachRaw !== null ? Number(adjacentReachRaw) : 50,
     llmTracksPerPlaylist: tracksPerRaw !== null ? Number(tracksPerRaw) : 10,
     llmPlaylistDiversity: diversityRaw !== null ? Number(diversityRaw) : 50,
     llmVetoMode: vetoModeRaw === 'adaptive' ? 'adaptive' as const : 'hard' as const,
@@ -117,14 +126,23 @@ router.post('/generate-custom', async (req, res) => {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       return res.status(400).json({ error: 'A prompt is required' });
     }
-    const genreBlendRaw = userId ? await getUserSetting(userId, 'genreBlendWeight') : null;
+    const genreCohesionRaw = userId ? await getUserSetting(userId, 'llmGenreCohesion') : null;
+    const legacyGenreBlendRaw = userId && genreCohesionRaw === null ? await getUserSetting(userId, 'genreBlendWeight') : null;
+    const discoveryBiasRaw = userId ? await getUserSetting(userId, 'llmDiscoveryBias') : null;
+    const artistSpreadRaw = userId ? await getUserSetting(userId, 'llmArtistSpread') : null;
     const penaltyCurveRaw = userId ? await getUserSetting(userId, 'genrePenaltyCurve') : null;
+    const recoveryStrengthRaw = userId ? await getUserSetting(userId, 'llmRecoveryStrength') : null;
+    const adjacentReachRaw = userId ? await getUserSetting(userId, 'llmAdjacentReach') : null;
     const tracksPerRaw = userId ? await getUserSetting(userId, 'llmTracksPerPlaylist') : null;
     const diversityRaw = userId ? await getUserSetting(userId, 'llmPlaylistDiversity') : null;
     const vetoModeRaw = userId ? await getUserSetting(userId, 'llmVetoMode') : null;
     const hubSettings = {
-      genreBlendWeight: genreBlendRaw !== null ? Number(genreBlendRaw) : 50,
+      llmGenreCohesion: genreCohesionRaw !== null ? Number(genreCohesionRaw) : (legacyGenreBlendRaw !== null ? Number(legacyGenreBlendRaw) : 50),
+      llmDiscoveryBias: discoveryBiasRaw !== null ? Number(discoveryBiasRaw) : 45,
+      llmArtistSpread: artistSpreadRaw !== null ? Number(artistSpreadRaw) : 70,
       genrePenaltyCurve: penaltyCurveRaw !== null ? Number(penaltyCurveRaw) : 50,
+      llmRecoveryStrength: recoveryStrengthRaw !== null ? Number(recoveryStrengthRaw) : 50,
+      llmAdjacentReach: adjacentReachRaw !== null ? Number(adjacentReachRaw) : 50,
       llmTracksPerPlaylist: tracksPerRaw !== null ? Number(tracksPerRaw) : 10,
       llmPlaylistDiversity: diversityRaw !== null ? Number(diversityRaw) : 50,
       llmVetoMode: vetoModeRaw === 'adaptive' ? 'adaptive' as const : 'hard' as const,

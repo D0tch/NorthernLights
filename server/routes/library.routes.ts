@@ -213,6 +213,7 @@ async function processMetadataBatch(fileBufs: Buffer[], concurrency: number): Pr
               genre: primaryGenreName,
               duration: metadata.duration || 0,
               trackNumber: metadata.trackNumber || null,
+              discNumber: metadata.discNumber || null,
               year: metadata.year || null,
               releaseType: metadata.releaseType || null,
               isCompilation: metadata.isCompilation || false,
@@ -229,7 +230,8 @@ async function processMetadataBatch(fileBufs: Buffer[], concurrency: number): Pr
               mbArtistId: metadata.mbArtistId || null,
               mbAlbumArtistId: metadata.mbAlbumArtistId || null,
               mbReleaseGroupId: metadata.mbReleaseGroupId || null,
-              mbWorkId: metadata.mbWorkId || null
+              mbWorkId: metadata.mbWorkId || null,
+              rawUrls: metadata.rawUrls || null,
             });
 
             if (!metadata.genre || metadata.genre.length === 0) {

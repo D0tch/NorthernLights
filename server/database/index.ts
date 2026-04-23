@@ -440,6 +440,45 @@ export async function initDB(): Promise<Pool> {
         EXCEPTION WHEN OTHERS THEN null;
         END $$;
 
+        -- Extended artist metadata cache (MusicBrainz fields + Last.fm stats)
+        DO $$
+        BEGIN
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS disambiguation TEXT;
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS area TEXT;
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS artist_type TEXT;
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS lifespan_begin TEXT;
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS lifespan_end TEXT;
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS links TEXT;
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS genres TEXT;
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS listeners TEXT;
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS members TEXT;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+
+        -- File-embedded URL tags per track
+        DO $$
+        BEGIN
+          ALTER TABLE tracks ADD COLUMN IF NOT EXISTS raw_urls TEXT;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+
+        -- Disc number for multi-disc albums
+        DO $$
+        BEGIN
+          ALTER TABLE tracks ADD COLUMN IF NOT EXISTS disc_number INTEGER;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+
+        -- Extended album metadata cache (Last.fm wiki + stats)
+        DO $$
+        BEGIN
+          ALTER TABLE albums ADD COLUMN IF NOT EXISTS description TEXT;
+          ALTER TABLE albums ADD COLUMN IF NOT EXISTS tags TEXT;
+          ALTER TABLE albums ADD COLUMN IF NOT EXISTS listeners TEXT;
+          ALTER TABLE albums ADD COLUMN IF NOT EXISTS playcount TEXT;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+
         -- ==========================================
         -- MULTI-USER TABLES
         -- ==========================================
@@ -581,6 +620,7 @@ function mapTrackRow(row: any) {
     ...row,
     albumArtist: row.album_artist,
     trackNumber: row.track_number,
+    discNumber: row.disc_number ?? null,
     releaseType: row.release_type,
     isCompilation: !!row.is_compilation,
     playCount: row.play_count,
@@ -590,7 +630,8 @@ function mapTrackRow(row: any) {
     artistId: row.artist_id,
     albumId: row.album_id,
     genreId: row.genre_id,
-    genres: row.genres ? JSON.parse(row.genres) : []
+    genres: row.genres ? JSON.parse(row.genres) : [],
+    rawUrls: row.raw_urls ? JSON.parse(row.raw_urls) : [],
   };
 }
 
@@ -634,8 +675,8 @@ export async function addTrack(track: any) {
   const sanitizeArray = (arr: any) => Array.isArray(arr) ? arr.map(sanitizeString) : arr;
 
   await db.query(`
-    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27)
+    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
     ON CONFLICT (id) DO UPDATE SET
       title = EXCLUDED.title,
       artist = EXCLUDED.artist,
@@ -645,6 +686,7 @@ export async function addTrack(track: any) {
       genre = EXCLUDED.genre,
       duration = EXCLUDED.duration,
       track_number = EXCLUDED.track_number,
+      disc_number = EXCLUDED.disc_number,
       year = EXCLUDED.year,
       release_type = EXCLUDED.release_type,
       is_compilation = EXCLUDED.is_compilation,
@@ -662,8 +704,9 @@ export async function addTrack(track: any) {
       mb_artist_id = EXCLUDED.mb_artist_id,
       mb_album_artist_id = EXCLUDED.mb_album_artist_id,
       mb_release_group_id = EXCLUDED.mb_release_group_id,
-      mb_work_id = EXCLUDED.mb_work_id
-    WHERE 
+      mb_work_id = EXCLUDED.mb_work_id,
+      raw_urls = EXCLUDED.raw_urls
+    WHERE
       tracks.title IS DISTINCT FROM EXCLUDED.title OR
       tracks.artist IS DISTINCT FROM EXCLUDED.artist OR
       tracks.album_artist IS DISTINCT FROM EXCLUDED.album_artist OR
@@ -672,6 +715,7 @@ export async function addTrack(track: any) {
       tracks.genre IS DISTINCT FROM EXCLUDED.genre OR
       tracks.duration IS DISTINCT FROM EXCLUDED.duration OR
       tracks.track_number IS DISTINCT FROM EXCLUDED.track_number OR
+      tracks.disc_number IS DISTINCT FROM EXCLUDED.disc_number OR
       tracks.year IS DISTINCT FROM EXCLUDED.year OR
       tracks.release_type IS DISTINCT FROM EXCLUDED.release_type OR
       tracks.is_compilation IS DISTINCT FROM EXCLUDED.is_compilation OR
@@ -689,7 +733,8 @@ export async function addTrack(track: any) {
       tracks.mb_artist_id IS DISTINCT FROM EXCLUDED.mb_artist_id OR
       tracks.mb_album_artist_id IS DISTINCT FROM EXCLUDED.mb_album_artist_id OR
       tracks.mb_release_group_id IS DISTINCT FROM EXCLUDED.mb_release_group_id OR
-      tracks.mb_work_id IS DISTINCT FROM EXCLUDED.mb_work_id
+      tracks.mb_work_id IS DISTINCT FROM EXCLUDED.mb_work_id OR
+      tracks.raw_urls IS DISTINCT FROM EXCLUDED.raw_urls
   `, [
     id,
     sanitizeString(track.title) || path.basename(track.path),
@@ -700,6 +745,7 @@ export async function addTrack(track: any) {
     sanitizeString(track.genre) || null,
     track.duration || 0,
     track.trackNumber || null,
+    track.discNumber || null,
     track.year || null,
     track.releaseType || null,
     !!track.isCompilation,
@@ -717,7 +763,8 @@ export async function addTrack(track: any) {
     track.mbArtistId || null,
     track.mbAlbumArtistId || null,
     track.mbReleaseGroupId || null,
-    track.mbWorkId || null
+    track.mbWorkId || null,
+    track.rawUrls ? JSON.stringify(track.rawUrls) : null,
   ]);
 
   if (track.audioFeatures) {
