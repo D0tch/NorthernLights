@@ -12,6 +12,8 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
     const currentUser = usePlayerStore(state => state.currentUser);
     const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
     const clearAuthToken = usePlayerStore(state => state.clearAuthToken);
+    const lastFmApiKey = usePlayerStore(state => state.lastFmApiKey);
+    const lastFmSharedSecret = usePlayerStore(state => state.lastFmSharedSecret);
     const lastFmConnected = usePlayerStore(state => state.lastFmConnected);
     const lastFmUsername = usePlayerStore(state => state.lastFmUsername);
     const lastFmScrobbleEnabled = usePlayerStore(state => state.lastFmScrobbleEnabled);
@@ -192,11 +194,31 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                         <p className="text-sm text-[var(--color-text-secondary)]">Not connected.</p>
                         <button
                             onClick={async () => {
+                                if (!lastFmApiKey.trim() || !lastFmSharedSecret.trim()) {
+                                    showToast('Configure the Last.fm API Key and Shared Secret first', 'error');
+                                    return;
+                                }
+
                                 // Open the popup synchronously so browsers don't treat it as
                                 // a programmatic pop-up (which they block). Navigate it once
                                 // the authorize URL comes back from the server.
                                 const popup = window.open('about:blank', 'lastfm-auth', 'popup=yes,width=640,height=740');
                                 try {
+                                    const saveRes = await fetch('/api/settings', {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                                        body: JSON.stringify({
+                                            lastFmApiKey: lastFmApiKey.trim(),
+                                            lastFmSharedSecret: lastFmSharedSecret.trim(),
+                                        }),
+                                    });
+                                    if (!saveRes.ok) {
+                                        const saveErr = await saveRes.json().catch(() => ({}));
+                                        popup?.close();
+                                        showToast(saveErr.error || 'Failed to save Last.fm credentials', 'error');
+                                        return;
+                                    }
+
                                     const res = await fetch(`/api/providers/lastfm/authorize?origin=${encodeURIComponent(window.location.origin)}`, { headers: getAuthHeader() });
                                     const data = await res.json().catch(() => ({}));
                                     if (!res.ok || !data.url) {

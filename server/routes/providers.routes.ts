@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomBytes } from 'crypto';
 import { getSystemSetting, setSystemSetting, getUserSetting, setUserSetting } from '../database';
 import { lfmFetch, scrobbleTracks, updateNowPlaying, loveTrack, unloveTrack } from '../services/lastfm.service';
 import {
@@ -55,6 +56,10 @@ async function getMbRedirectUri(req: import('express').Request): Promise<string>
     return override.trim();
   }
   return `${getServerOrigin(req)}/api/providers/musicbrainz/callback`;
+}
+
+function getLastFmCallbackUri(req: import('express').Request): string {
+  return `${getServerOrigin(req)}/api/providers/lastfm/callback`;
 }
 
 // Sanitize a user-supplied app origin (http[s]://host[:port]). Returns null if invalid.
@@ -416,18 +421,16 @@ router.get('/providers/lastfm/authorize', async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
     const apiKey = await getSystemSetting('lastFmApiKey');
-    if (!apiKey) return res.status(400).json({ error: 'Last.fm API key not configured' });
-
-    // Fetch a request token (no signature needed for auth.getToken)
     const sharedSecret = (await getSystemSetting('lastFmSharedSecret')) || '';
-    const tokenRes = await lfmFetch(userId, 'auth.getToken', {}, { apiKey, sharedSecret, sessionKey: '' });
+    if (!apiKey) return res.status(400).json({ error: 'Last.fm API key not configured' });
+    if (!sharedSecret) return res.status(400).json({ error: 'Last.fm Shared Secret not configured' });
 
-    if (!tokenRes.token) {
-      return res.status(502).json({ error: 'Failed to get Last.fm auth token' });
-    }
-
-    // Store the temporary token so the callback can use it
-    await setUserSetting(userId, 'lastFmPendingToken', tokenRes.token);
+    // Web applications should send the user directly to /api/auth and
+    // receive the authorized token on the callback. Keep a one-time state
+    // server-side so the unauthenticated callback can be bound to the right
+    // Aurora user without trusting the callback token alone.
+    const pendingState = randomBytes(16).toString('hex');
+    await setUserSetting(userId, 'lastFmPendingState', pendingState);
 
     // Remember where the user came from so we can redirect back to the frontend
     // after the callback (in dev the backend and frontend run on different ports).
@@ -436,9 +439,8 @@ router.get('/providers/lastfm/authorize', async (req, res) => {
       await setUserSetting(userId, 'lastFmAppOrigin', appOrigin);
     }
 
-    // Encode userId in callback URL so the unauthenticated callback can identify the user
-    const cbUrl = `${getServerOrigin(req)}/api/providers/lastfm/callback?cb_state=${encodeURIComponent(userId)}`;
-    const authUrl = `https://www.last.fm/api/auth/?api_key=${apiKey}&token=${tokenRes.token}&cb=${encodeURIComponent(cbUrl)}`;
+    const cbUrl = `${getLastFmCallbackUri(req)}?cb_user=${encodeURIComponent(userId)}&cb_state=${encodeURIComponent(pendingState)}`;
+    const authUrl = `https://www.last.fm/api/auth/?api_key=${apiKey}&cb=${encodeURIComponent(cbUrl)}`;
     res.json({ url: authUrl });
   } catch (err: any) {
     console.error('[Last.fm] authorize error:', err.message);
@@ -448,12 +450,13 @@ router.get('/providers/lastfm/authorize', async (req, res) => {
 
 router.get('/providers/lastfm/callback', async (req, res) => {
   try {
-    // userId is passed via the callback URL's cb_state param (set in authorize)
-    const userId = req.query.cb_state as string;
+    const userId = req.query.cb_user as string;
+    const callbackState = req.query.cb_state as string;
     const appOrigin = userId ? (await getUserSetting(userId, 'lastFmAppOrigin')) as string | null : null;
     const returnBase = (appOrigin && typeof appOrigin === 'string' && appOrigin.trim()) ? appOrigin.trim() : getServerOrigin(req);
 
-    if (!userId) return res.redirect(`${returnBase}/?lfm_error=missing_state`);
+    if (!userId) return res.redirect(`${returnBase}/?lfm_error=missing_user`);
+    if (!callbackState) return res.redirect(`${returnBase}/?lfm_error=missing_state`);
 
     const { token, error } = req.query;
 
@@ -465,10 +468,10 @@ router.get('/providers/lastfm/callback', async (req, res) => {
       return res.redirect(`${returnBase}/?lfm_error=missing_token`);
     }
 
-    // Verify the token matches what we stored for this user
-    const pendingToken = await getUserSetting(userId, 'lastFmPendingToken');
-    if (!pendingToken || pendingToken !== token) {
-      return res.redirect(`${returnBase}/?lfm_error=token_mismatch`);
+    // Verify the callback belongs to the auth flow we initiated for this user.
+    const pendingState = await getUserSetting(userId, 'lastFmPendingState');
+    if (!pendingState || pendingState !== callbackState) {
+      return res.redirect(`${returnBase}/?lfm_error=state_mismatch`);
     }
 
     const apiKey = await getSystemSetting('lastFmApiKey');
@@ -488,6 +491,7 @@ router.get('/providers/lastfm/callback', async (req, res) => {
     await setUserSetting(userId, 'lastFmSessionKey', sessionRes.session.key);
     await setUserSetting(userId, 'lastFmUsername', sessionRes.session.name || '');
     await setUserSetting(userId, 'lastFmConnected', true);
+    await setUserSetting(userId, 'lastFmPendingState', '');
     await setUserSetting(userId, 'lastFmPendingToken', '');
 
     res.redirect(`${returnBase}/?lfm_connected=1`);
@@ -505,6 +509,7 @@ router.post('/providers/lastfm/disconnect', async (req, res) => {
     await setUserSetting(userId, 'lastFmSessionKey', '');
     await setUserSetting(userId, 'lastFmUsername', '');
     await setUserSetting(userId, 'lastFmConnected', false);
+    await setUserSetting(userId, 'lastFmPendingState', '');
     await setUserSetting(userId, 'lastFmPendingToken', '');
 
     res.json({ status: 'ok' });
@@ -522,12 +527,14 @@ router.get('/providers/lastfm/status', async (req, res) => {
     const username = await getUserSetting(userId, 'lastFmUsername');
     const scrobbleEnabled = await getUserSetting(userId, 'lastFmScrobbleEnabled');
     const hasApiKey = !!(await getSystemSetting('lastFmApiKey'));
+    const callbackUri = getLastFmCallbackUri(req);
 
     res.json({
       connected: connected === true || connected === 'true',
       username: username || null,
       scrobbleEnabled: scrobbleEnabled === true || scrobbleEnabled === 'true',
       hasApiKey,
+      callbackUri,
     });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

@@ -35,13 +35,22 @@ export const MetadataTab: React.FC = () => {
 
     // Effective redirect URI the server will use (override if set, else SERVER_URL default)
     const [mbEffectiveRedirectUri, setMbEffectiveRedirectUri] = useState<string>('');
+    const [lfmCallbackUri, setLfmCallbackUri] = useState<string>('');
     useEffect(() => {
         let cancelled = false;
         (async () => {
             try {
-                const res = await fetch('/api/providers/musicbrainz/status', { headers: getAuthHeader() });
-                const data = await res.json().catch(() => ({}));
-                if (!cancelled && res.ok && data.redirectUri) setMbEffectiveRedirectUri(data.redirectUri);
+                const headers = getAuthHeader();
+                const [mbRes, lfmRes] = await Promise.all([
+                    fetch('/api/providers/musicbrainz/status', { headers }),
+                    fetch('/api/providers/lastfm/status', { headers }),
+                ]);
+                const [mbData, lfmData] = await Promise.all([
+                    mbRes.json().catch(() => ({})),
+                    lfmRes.json().catch(() => ({})),
+                ]);
+                if (!cancelled && mbRes.ok && mbData.redirectUri) setMbEffectiveRedirectUri(mbData.redirectUri);
+                if (!cancelled && lfmRes.ok && lfmData.callbackUri) setLfmCallbackUri(lfmData.callbackUri);
             } catch {}
         })();
         return () => { cancelled = true; };
@@ -115,6 +124,31 @@ export const MetadataTab: React.FC = () => {
                     <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 flex flex-col gap-3 shadow-sm">
                         <input type="text" value={lastFmApiKey} onChange={e => setLastFmApiKey(e.target.value)} placeholder="API Key" className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
                         <input type="password" value={lastFmSharedSecret} onChange={e => setLastFmSharedSecret(e.target.value)} placeholder="Shared Secret" className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
+                        <div className="flex flex-col gap-2 mt-1 bg-[var(--color-bg)]/40 border border-[var(--glass-border)] rounded-xl p-3">
+                            <div className="flex items-center justify-between gap-3">
+                                <label className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Callback URL</label>
+                                <button
+                                    type="button"
+                                    onClick={async () => {
+                                        if (!lfmCallbackUri) return;
+                                        try {
+                                            await navigator.clipboard.writeText(lfmCallbackUri);
+                                            showToast('Copied Last.fm callback URL', 'success');
+                                        } catch {
+                                            showToast('Failed to copy', 'error');
+                                        }
+                                    }}
+                                    className="text-xs text-[var(--color-primary)] hover:underline disabled:opacity-50"
+                                    disabled={!lfmCallbackUri}
+                                >Copy</button>
+                            </div>
+                            <p className="text-xs text-[var(--color-text-muted)]">
+                                Register this exact URL as the callback URL in your Last.fm API account. Aurora appends one-time auth parameters automatically during connect.
+                            </p>
+                            <code className="block text-xs px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--glass-border)] text-[var(--color-text-primary)] break-all">
+                                {lfmCallbackUri || 'Loading…'}
+                            </code>
+                        </div>
                         <div className="flex items-center gap-3">
                             <button onClick={() => testLastFm(lastFmApiKey)} disabled={lastFmStatus === 'testing' || !lastFmApiKey} className="btn btn-ghost btn-sm whitespace-nowrap disabled:opacity-50">{lastFmStatus === 'testing' ? 'Testing...' : 'Test Connection'}</button>
                             {lastFmStatus === 'success' && <span className="text-green-500 font-semibold text-xs">✓ {lastFmMessage}</span>}

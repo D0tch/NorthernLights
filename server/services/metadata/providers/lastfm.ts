@@ -175,16 +175,17 @@ export async function testLastFm(apiKey: string, sharedSecret: string): Promise<
 
   try {
     // Step 1: Validate API Key and fetch an unauthorized token
-    const tokenParams = new URLSearchParams({
+    const tokenParams: Record<string, string> = {
       method: 'auth.getToken',
       api_key: apiKey.trim(),
       format: 'json'
-    });
+    };
+    tokenParams.api_sig = buildTestSignature(tokenParams, sharedSecret.trim());
 
     const tokenRes = await fetchWithRetry(LASTFM_API, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: tokenParams.toString()
+      body: new URLSearchParams(tokenParams).toString()
     });
     
     let tokenJson = await tokenRes.json().catch(() => ({}));
