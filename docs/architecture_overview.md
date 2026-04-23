@@ -3,63 +3,167 @@
 ```mermaid
 graph TD
     UI[React UI] --> Store[Zustand Store]
-    Store --> FE_API[Frontend Library API]
-    FE_API --> BE_API[Node.js + Express API]
-    BE_API --> PostgreSQL[(PostgreSQL + pgvector)]
-    BE_API --> FS[Host File System]
-    BE_API --> Scanner[Three-Phase Scanner]
-    Scanner --> Walk[Phase 1: Directory Walk]
-    Scanner --> Metadata[Phase 2: Metadata Extraction]
+    Store --> FEAPI[Frontend API layer]
+    FEAPI --> API[Express API]
+    API --> DB[(PostgreSQL + pgvector)]
+    API --> FS[Host File System]
+    API --> Scanner[Three-Phase Scanner]
+    Scanner --> Walk[Phase 1: Walk]
+    Scanner --> Metadata[Phase 2: Metadata]
     Scanner --> Analysis[Phase 3: Audio Analysis]
     Analysis --> Workers[Worker Thread Pool]
-    Workers --> Python[Python ML Engine]
-    Python --> ML[MusiCNN + EffNet]
-    FS --> Stream[HTTP Streaming /api/stream]
-    Stream --> Audio[HTML5 Audio Engine]
+    Workers --> TSX[Persistent tsx analyzer workers]
+    TSX --> FFmpeg[ffmpeg decode + seek]
+    TSX --> Essentia[Essentia.js feature extraction]
+    API --> Hub[LLM Hub Pipeline]
+    Hub --> Compiler[Concept Compiler]
+    Compiler --> Pools[Named Candidate Pools]
+    Pools --> Selector[Constrained Diversity Selector]
+    API --> Stream[HLS / Media Streaming]
+    Stream --> Audio[PlaybackManager / CastManager]
     Store --> Audio
-    BE_API --> LLM[LLM Hub Integration]
-    BE_API --> Chromecast[Google Cast SDK]
 ```
 
-### 1. UI Layer
-- **React + TypeScript**: Modular components using Tailwind CSS for responsive styling.
-- **Glassmorphism System**: Frosted glass aesthetics with persistent theme context (Light/Dark).
-- **React Router**: UUID-based entity navigation with browser history support.
+## 1. UI Layer
 
-### 2. State & Audio Engine
-- **Zustand Store**: Unified state management for library metadata, playback queue, and session settings.
-- **PlaybackManager**: Singleton wrapper around `HTMLAudioElement` providing gapless transitions and global playback control.
-- **CastManager**: Google Cast (Chromecast) integration for audio streaming to cast devices.
+- **React + TypeScript**
+  - Modular UI with Tailwind and shared button classes from `src/index.css`.
+- **Zustand**
+  - Central store for playback state, library state, and listener settings.
+- **PlaybackManager / CastManager**
+  - Route playback to local audio or Chromecast while preserving queue identity and playback controls.
 
-### 3. Backend Infrastructure
-- **Node.js + Express**: Manages local file scanning, ID3/Vorbis/ASF metadata extraction, audio serving, and LLM integration.
-- **PostgreSQL + pgvector**: Persistent storage for library tracks, mapped directories, playback history, and **1288-dimensional** feature vectors (**8D acoustic** + **1280D Discogs-EffNet** neural embeddings) for similarity search.
-- **HTTP Streaming**: Efficient server-side streaming via `Range` headers to support large HQ audio files (FLAC, MP3, WAV, M4A, etc.).
-- **Container Orchestration**: Manages the PostgreSQL container via the integrated `containerControl` service.
+## 2. Backend Infrastructure
 
-### 4. Three-Phase Scanner Architecture
-The library scanner operates in three distinct phases for transparency and reliability:
+- **Express**
+  - Route modules under `server/routes/` handle auth, library, playback, settings, hub, playlists, entities, and media.
+- **PostgreSQL + pgvector**
+  - Stores tracks, entities, settings, listening state, playlists, and feature vectors.
+- **Filesystem-backed library**
+  - Local music folders are scanned and streamed directly from disk.
 
-1. **Walk Phase**: Recursive directory traversal collecting audio file paths.
-2. **Metadata Phase**: Parallel tag extraction using `music-metadata`. Stores track info (title, artist, album, genre, duration) in PostgreSQL.
-3. **Analysis Phase**: Audio feature extraction via high-performance worker threads:
-   - **Worker Thread Pool**: CPU-intensive analysis offloaded from the main event loop.
-   - **Python ML Engine**: Uses Python 3 with TensorFlow-based models for advanced feature extraction.
-   - **Smart Seeking**: ffmpeg seeks to the ~35% mark (typically the core of the track) to extract representative features.
+## 3. Three-Phase Scanner
 
-### 5. Audio Analysis Pipeline
-- **ffmpeg**: Decodes a 15-second segment from the 35% seek point to raw PCM.
-- **MusiCNN (8D Acoustic)**: Extracting Energy, Brightness, Percussiveness, Instrumentalness, Acousticness, Danceability, Pitch Salience, and Tempo.
-- **Discogs-EffNet (1280D Embedding)**: Neural embeddings for high-fidelity instrument and production texture identification.
-- **L2 Normalization**: Embeddings are L2-normalized to ensure compatibility with **Cosine Distance** search.
+Aurora’s scanner separates library ingestion into discrete phases:
 
-### 6. Recommendation Engine
-- **pgvector + HNSW**: Fast approximate nearest neighbor search on **1280D** vectors (EffNet) and **8D** vectors (Acoustic).
-- **EffNet Imputation**: For LLM-generated concepts, the engine synthesizes a 1280D embedding centroid by averaging the embeddings of the closest acoustic neighbors.
-- **Genre Penalty**: Real-time re-ranking using an exponential penalty based on "Hop Cost" within the MBDB genre tree.
-- **Two-Pool Query**: Balances **Pool A (Genre-Constrained)** and **Pool B (Serendipity/Texture-based)** discovery.
+1. **Walk**
+   - Collects file paths recursively.
+2. **Metadata**
+   - Extracts tags with `music-metadata`.
+   - Makes tracks visible quickly.
+3. **Analysis**
+   - Runs in worker-managed `tsx` child processes.
+   - `ffmpeg` seeks to about 35% into the track and decodes a short representative segment.
+   - Essentia.js extracts the recommendation features used by the engine.
 
-### 7. File System Integration
-- **Directory Mapping**: Users provide absolute server paths to ingest local music folders.
-- **Non-ASCII Support**: Robust handling of special characters (Danish `øæ`, apostrophes, etc.) via raw Buffer path management.
-- **Worker Isolation**: Long-running scanning and analysis tasks are isolated to prevent API performance degradation.
+This keeps the main server responsive during large library analysis runs.
+
+## 4. Audio Analysis Pipeline
+
+- **Worker manager**
+  - `server/workers/audioAnalysis.worker.ts`
+- **Analyzer child**
+  - `server/workers/analyzeTrack.ts`
+- **Feature extraction**
+  - 8D acoustic semantic vector
+  - 13D MFCC/timbre feature set
+- **Non-ASCII path handling**
+  - Temporary symlinks in `/tmp/am-*` avoid decode issues with problematic filenames
+
+## 5. Recommendation Architecture
+
+Aurora now uses a library-relative recommendation engine rather than a simple genre-vs-serendipity split.
+
+### 5.1 Library Profile
+
+The backend computes a cached local-library profile:
+
+- analyzed coverage
+- artist entropy
+- vector percentiles
+- per-genre health
+
+This lets the engine interpret LLM concepts in the context of the actual local collection.
+
+### 5.2 Concept Compiler
+
+Raw LLM concepts are compiled into local plans by `llmConceptCompiler.service.ts`:
+
+- resolve target genre paths
+- score path specificity
+- measure local genre health
+- expand into adjacent supported paths
+- adapt target vectors into local percentile space
+- sanitize conflicts with banned genres
+- reject or regenerate weak broad-only concepts
+
+### 5.3 Named Candidate Pools
+
+The recommender builds explicit pools:
+
+- `core`
+- `adjacent`
+- `root`
+- `acoustic`
+- `discovery`
+- `bridge`
+
+These pools are measured independently and combined only after deduplication and viability checks.
+
+### 5.4 Recovery Ladder
+
+Weak concepts recover in a fixed order:
+
+1. `exact-path`
+2. `adjacent-path`
+3. `same-root`
+4. `acoustic-similarity`
+5. `mood-bridge`
+6. `discovery-backfill`
+
+This makes sparse-library behavior deterministic and debuggable.
+
+### 5.5 Final Selector
+
+Playlist selection is constrained rather than top-N:
+
+- no duplicate songs
+- artist caps
+- album penalties
+- genre-root penalties
+- acoustic-cluster penalties
+- pairwise similarity penalties
+- pool-balance targets
+- controlled randomness
+
+When reranking collapses despite healthy admissible candidates, the engine falls back to direct admissible selection instead of dropping the playlist.
+
+## 6. Hub Lifecycle
+
+- `GET /api/hub`
+  - Fetch existing saved Hub playlists
+- `POST /api/hub/regenerate`
+  - Generate fresh concepts and playlists
+- `POST /api/hub/generate-custom`
+  - Build a playlist from a single natural-language prompt
+
+Each generated playlist now emits diagnostics including:
+
+- compiled targets
+- genre health
+- pool sizes
+- relaxation level
+- anchor state
+- pool mix
+- diversity score
+
+## 7. Streaming Architecture
+
+- **Browser playback**
+  - HLS playlist generation and local prebuffering via `PlaybackManager`
+- **Chromecast**
+  - Custom CAF receiver with AAC-in-HLS reliability path
+- **Server**
+  - FFmpeg-backed HLS session generation in `hlsStream.service.ts`
+
+This keeps one playback architecture for local and cast scenarios while allowing transport-specific behavior where needed.

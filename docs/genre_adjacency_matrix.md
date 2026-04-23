@@ -1,50 +1,138 @@
 # Genre Adjacency Matrix — Dynamic Hop-Cost System
 
-## System Overview
-This system prevents mathematically similar but culturally jarring track transitions by computing genre "hop costs" on-the-fly using the MusicBrainz hierarchical taxonomy stored in PostgreSQL.
+Aurora uses the MusicBrainz hierarchy to keep recommendation jumps musically plausible without making playlists brittle. Genre is guidance, not a hard prison, and it is only one layer inside a larger library-relative recommendation system.
 
-## 1. Hop Cost Tiers (LCA-Based)
-Hop costs are calculated by comparing the Lowest Common Ancestor depth of two genre paths in dot-notation (e.g., `Electronic.House.Deep House`).
+## 1. Hop Cost Model
 
-| Relationship | Common Levels | Hop Cost | Multiplier (at weight=0.5, curve=1.25) |
-|---|---|---|---|
-| Deep siblings | ≥ 3 | 0.05 | 1.05× |
-| Tier 2 cousins | 2 | 0.20 | 1.12× |
-| Share root only | 1 | 0.50 | 1.28× |
-| Alien hops | 0 | 2.0 | 2.28× |
+Genre distance is computed from the Lowest Common Ancestor of two hierarchical paths, for example:
 
-## 2. Categorization Pipeline (3-Step)
+- `electronic.edm.house.progressive house`
+- `rock.alternative rock.indie rock`
 
-### Step 1: Direct SQL Match
-Rapid resolution against the `subgenre_mappings` table:
-- Checks for exact matches, aliases, and parent fallbacks.
-- Fuzzy matching handles minor typos or variations in tagging.
+The deeper the shared ancestor, the cheaper the jump.
 
-### Step 2: Vocabulary-Guided LLM Batch
-Unmapped tags are batched to the LLM with a 300-genre vocabulary constraint derived from the MBDB hierarchy. The LLM acts as a classification oracle, ensuring new tags align with the existing tree.
+| Relationship | Shared Depth | Typical Hop Cost |
+|---|---:|---:|
+| Deep siblings | 3+ | `0.05` |
+| Cousins | 2 | `0.20` |
+| Same root only | 1 | `0.50` |
+| Unrelated roots | 0 | `2.0` |
 
-### Step 3: KNN Fallback
-Tracks without metadata are recovered via acoustic similarity in the vector space:
-- **Dual-Vector KNN**: Combines 8D MusiCNN (structure/mood) and 1280D EffNet (timbre/profile).
-- **Consolidated scoring**: Weights the specialized 1280D embedding more heavily for electronic/synthetic genres.
+These costs are not stored as a static matrix. They are computed from the hierarchy at query time.
 
-## 3. Application Logic
+## 2. Penalty Formula
 
-### 3.1 Exponential Penalty Formula
-The genre penalty scales the acoustic distance using an exponential model:
+Genre-aware re-ranking scales vector distance with an exponential hop-cost penalty:
 
-```typescript
+```ts
 const combined = distance * Math.pow(1 + hopCost, weight * penaltyCurve);
 ```
 
-- **`penaltyCurve`**: Controls the steepness (0.5 to 2.0). High values make genre jumps nearly impossible unless the track is a perfect acoustic match.
-- **`weight`**: The `genreBlendWeight` set by the user (0.0 to 1.0).
+Where:
 
-### 3.2 Hard Genre Veto (banned_genres)
-The LLM can declare `banned_genres` for each Hub playlist. The veto checks against the **full hierarchical path**. Banning "dance" automatically catches the entire `electronic.dance.*` subtree.
+- `distance` is the vector similarity distance
+- `weight` is derived from `llmGenreCohesion`
+- `penaltyCurve` is derived from `genrePenaltyCurve`
 
-### 3.3 EffNet Imputation Safeguard
-For playlists generated from pure 8D structural seeds, the engine synthesizes an **EffNet Centroid** by averaging the embeddings of the 20 nearest 8D neighbors. A "Relative Cliff" check aborts imputation if the neighbourhood is too sparse, preventing "profile poisoning."
+Backend mapping:
 
-## 4. Infinity Mode
-Infinity Mode applies the same hop-cost logic to ensure that "Continuous Discovery" stays within a cohesive cultural vibe while slowly drifting across the 1280D landscape.
+```ts
+const weight = (llmGenreCohesion ?? 50) / 100;
+const penaltyCurve = 0.5 + ((genrePenaltyCurve ?? 50) / 100) * 1.5;
+```
+
+Higher cohesion and higher penalty curve make cross-genre moves more expensive.
+
+## 3. Taxonomy Resolution Pipeline
+
+Aurora resolves local metadata into MusicBrainz paths with a three-step categorization system.
+
+### 3.1 Direct SQL Match
+
+Fast resolution through `genre_tree_paths` and alias lookups:
+
+- exact path match
+- alias match
+- standalone genre with parent fallback
+- standalone alias
+- fuzzy tree match
+- fuzzy alias match
+
+### 3.2 Vocabulary-Guided LLM Classification
+
+Unmapped local genres are batched through the LLM with a bounded hierarchy vocabulary:
+
+- if the library has fewer than 300 mapped genres, use the real local vocabulary
+- otherwise use the top 300 hierarchy entries
+
+This keeps the LLM grounded in the actual taxonomy instead of inventing free-form genre strings.
+
+### 3.3 KNN Fallback
+
+If metadata is weak or missing, the system can recover by vector similarity:
+
+- full 21D similarity when both 8D and MFCC/timbre data are present
+- 8D fallback when only the acoustic vector is available
+
+## 4. How Genre Adjacency Is Used in LLM Playlists
+
+The LLM playlist system no longer relies on a simple two-pool model. Genre adjacency is now used in several stages:
+
+1. **Concept compilation**
+   - resolves target paths
+   - measures primary genre health
+   - expands into adjacent library-supported paths according to `llmAdjacentReach`
+
+2. **Named pool construction**
+   - `core`
+   - `adjacent`
+   - `root`
+   - `acoustic`
+   - `discovery`
+   - `bridge`
+
+3. **Recovery ladder**
+   - `exact-path`
+   - `adjacent-path`
+   - `same-root`
+   - `acoustic-similarity`
+   - `mood-bridge`
+   - `discovery-backfill`
+
+4. **Final re-ranking**
+   - hop-cost penalties still shape ranking while genre anchoring is active
+   - later recovery levels intentionally reduce or remove anchor pressure
+
+## 5. Banned Genre Handling
+
+Each LLM concept can include `banned_genres`.
+
+Aurora applies those bans against full hierarchical paths:
+
+- banning `dance` excludes the whole `dance.*` subtree
+- banning `rock` excludes `rock.*`
+
+The compiler now also sanitizes target and adjacent paths that directly conflict with banned genres before candidate generation starts.
+
+User setting:
+
+- `llmVetoMode = hard`
+  - banned genres are absolute exclusions
+- `llmVetoMode = adaptive`
+  - bans stay hard during normal generation, but can become strong penalties in late recovery when a playlist would otherwise fail
+
+## 6. EffNet / Timbre Recovery
+
+When a concept starts from 8D mood structure and lacks a strong high-dimensional timbre anchor, Aurora can synthesize a timbre centroid from nearby library tracks.
+
+Safeguards:
+
+- minimum seed count
+- distance threshold / relative cliff checks
+- no imputation when the neighborhood is too sparse or unstable
+
+This keeps weak concepts from fabricating misleading timbre centroids.
+
+## 7. Infinity Mode
+
+Infinity Mode uses the same hop-cost and hierarchy logic, but in a track-to-track continuous-discovery context instead of a finite LLM playlist context. The goal is gradual drift through related areas of the library rather than a single compiled concept with explicit recovery stages.

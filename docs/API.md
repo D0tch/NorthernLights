@@ -409,11 +409,20 @@ Get all server and user configuration settings.
     "discoveryLevel": 50,
     "llmModelName": "gpt-4",
     "llmBaseUrl": "https://api.openai.com/v1",
-    "genreStrictness": 50,
-    "artistAmnesiaLimit": 200,
     "llmPlaylistDiversity": 50,
-    "genreBlendWeight": 50,
-Get all configuration settings. System keys require **Admin** role for modification.
+    "llmVetoMode": "hard",
+    "llmGenreCohesion": 50,
+    "llmDiscoveryBias": 45,
+    "llmArtistSpread": 70,
+    "genrePenaltyCurve": 50,
+    "llmRecoveryStrength": 50,
+    "llmAdjacentReach": 50,
+    "llmTracksPerPlaylist": 10,
+    "llmPlaylistCount": 3
+  }
+  ```
+
+Returns a merged view of server-wide settings and user-specific settings. System keys require **Admin** role for modification.
 
 **Valid System Keys**:
 - `audioAnalysisCpu`: `Background`, `Balanced`, `Performance`, `Intensive`, `Maximum`.
@@ -424,9 +433,22 @@ Get all configuration settings. System keys require **Admin** role for modificat
 - `geniusApiKey`, `lastFmApiKey`: Provider credentials.
 
 **Valid User Keys**:
-- `discoveryLevel`: `0-100` (Pool A vs Pool B balance).
-- `genreStrictness`: `0-100` (Penalty curve for genre distance).
-- `artistAmnesiaLimit`: Number of recent tracks to avoid repeating.
+- Legacy recommendation keys:
+  - `discoveryLevel`
+  - `genreStrictness`
+  - `artistAmnesiaLimit`
+- Current LLM playlist keys:
+  - `llmPlaylistDiversity`: `0-100`
+  - `llmVetoMode`: `hard | adaptive`
+  - `llmGenreCohesion`: `0-100`
+  - `llmDiscoveryBias`: `0-100`
+  - `llmArtistSpread`: `0-100`
+  - `genrePenaltyCurve`: `0-100`
+  - `llmRecoveryStrength`: `0-100`
+  - `llmAdjacentReach`: `0-100`
+  - `llmTracksPerPlaylist`: integer
+  - `llmPlaylistCount`: integer
+  - `lastFmScrobbleEnabled`: boolean
 
 ### [POST] `/api/settings/health/llm`
 Test LLM connection.
@@ -451,7 +473,7 @@ Manually trigger genre matrix regeneration (admin only).
 ## 🤖 Hub & AI Features
 
 ### [GET] `/api/hub`
-Get the user's AI-generated hub collections.
+Get the user's saved AI-generated Hub playlists.
 - **Example Response**:
   ```json
   {
@@ -466,13 +488,27 @@ Get the user's AI-generated hub collections.
   }
   ```
 
+Notes:
+- This is a fetch-only endpoint.
+- It returns saved playlists for the authenticated user.
+- It does **not** trigger concept generation or LLM calls.
+
 ### [POST] `/api/hub/regenerate`
-Trigger regeneration of LLM playlists for the user.
-- **Query Params**: `force` (optional, regenerate even if recent)
+Trigger regeneration of LLM playlists for the authenticated user.
+- **Body**: `{ "force": true }` is optional and bypasses the normal recent-playlist freshness guard.
 - **Example Response**:
   ```json
   { "generated": 3 }
   ```
+
+Generation flow:
+- removes stale LLM playlists for the user
+- builds time-of-day and listening-history context
+- requests concepts from the LLM
+- compiles each concept into a library-relative plan
+- builds named candidate pools (`core`, `adjacent`, `root`, `acoustic`, `discovery`, `bridge`)
+- recovers through the relaxation ladder when the local library is sparse
+- saves the resulting playlists
 
 ### [POST] `/api/hub/generate-custom`
 Generate a new playlist concept from a natural language prompt.

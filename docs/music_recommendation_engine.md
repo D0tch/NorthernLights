@@ -1,67 +1,122 @@
 # Smart Music Recommendation Engine
 
-The recommendation engine utilizes a hybrid multi-vector architecture designed for high-fidelity similarity search and complex, context-aware playlist generation.
+The recommendation engine is now built around a **library-relative** model: every playlist concept is interpreted in the context of the actual local library rather than as a genre-absolute request. That allows the same system to recover gracefully on a 500-track library, a 22k-track library, or a very skewed personal collection.
 
 ## 1. Core Architecture
-- **8D/10D Acoustic Vectors**: Representing high-level rhythmic and stylistic features (Energy, Danceability, etc.).
-- **1280D Discogs-EffNet Embeddings**: High-fidelity neural embeddings for instrument, timbre, and production fingerprinting.
-- **Two-Pool Logic**: A balance between strict genre-based filtering and serendipitous embedding-based discovery.
-- **pgvector + HNSW**: Native PostgreSQL vector search with HNSW (Hierarchical Navigable Small World) indexing for ultra-fast, approximate nearest neighbor retrieval.
+- **8D Acoustic Vectors**: High-level rhythmic and stylistic features stored as `acoustic_vector_8d`.
+- **1280D Discogs-EffNet Embeddings**: High-fidelity timbre / production embeddings stored as `embedding_vector`.
+- **Library Profile Layer**: Cached local-library diagnostics including analyzed coverage, artist entropy, vector percentiles, and per-genre health.
+- **MusicBrainz Genre Tree**: Hierarchical path resolution and hop-cost math for genre-aware search and veto logic.
+- **pgvector + HNSW**: Native PostgreSQL ANN search across both the 8D and 1280D spaces.
 
-## 2. Database Schema (PostgreSQL)
+## 2. Database / Feature Schema
 
-The system is fully migrated to **PostgreSQL v15+** with the **pgvector** extension. All feature data is stored in the `track_features` table:
+All similarity data lives in `track_features`:
 
-- `track_id`: Primary key linking to the `tracks` table.
-- `acoustic_vector_8d`: `VECTOR(8)` — Acoustic semantic features. Optimized for Euclidean distance (`<->`).
-- `embedding_vector`: `VECTOR(1280)` — Discogs-EffNet embeddings. Optimized for Cosine distance (`<=>`).
-- `is_simulated`: Boolean flag for tracks using fallback/simulated features.
+- `track_id`: FK to `tracks`
+- `acoustic_vector_8d`: `VECTOR(8)` using Euclidean distance (`<->`)
+- `embedding_vector`: `VECTOR(1280)` using cosine distance (`<=>`)
+- `is_simulated`: fallback-analysis marker
 
-### 8D Acoustic Semantic Features
-The base acoustic profile consists of 8 dimensions (normalized to `[0, 1]`):
+The 8D acoustic vector is:
+
 `[energy, brightness, percussiveness, pitch_salience, instrumentalness, acousticness, danceability, tempo]`
 
-### 1280D Discogs-EffNet Embeddings
-This is the primary engine for "sonic fingerprinting." It captures deep acoustic signatures of instruments and production styles, allowing the engine to find tracks with similar "vibes" even across disparate genres.
+The 1280D embedding is used for fine-grained timbre / production similarity.
 
-## 3. The Two-Pool Query Model
+## 3. Library-Relative LLM Pipeline
 
-To ensure a balance between accuracy and serendipity, the engine uses a **Common Table Expression (CTE)** query that pulls tracks from two distinct pools:
+Hub playlist generation now follows these phases:
 
-### Pool A: Genre-Constrained (Precision)
-- **Filters**: Strictly follows the hierarchical genre path (e.g., `modern_ambient.drone`).
-- **Distance**: Calculated using the **8D Acoustic Vector**.
-- **Role**: Ensures that the core of the playlist stays true to the requested genre.
+### 3.1 Concept Compilation
+Raw LLM concepts are passed through `llmConceptCompiler.service.ts`, which:
+- resolves `target_genres` to MusicBrainz paths
+- removes paths that directly conflict with `banned_genres`
+- picks a primary path using **specificity + local health + target order**
+- expands into nearby locally-supported genre paths
+- adapts the 8D target vector to local library percentiles
+- generates a bridge vector toward the library mainstream
+- scores concept quality and can reject broad, generic concepts for regeneration
 
-### Pool B: Serendipity (Discovery)
-- **Filters**: Genre-blind; searches the entire library.
-- **Distance**: A hybrid score: `(8D Acoustic Distance) + (1280D EffNet Distance * multiplier)`.
-- **Role**: Discovers tracks that "feel" right for the concept but might be cross-genre (e.g., finding a Jazz track that fits an "Ambient Electronic" vibe).
+### 3.2 Named Candidate Pools
+The engine fetches several explicit pools instead of relying on the older two-pool model:
 
-## 4. Discovery Mechanisms
+- `core`: exact target paths
+- `adjacent`: nearby genre paths allowed by hop cost and local health
+- `root`: same-root fallback
+- `acoustic`: best vector/EffNet matches regardless of genre
+- `discovery`: lower-played / long-unheard candidates
+- `bridge`: tracks that sit between the concept vector and the local mainstream
 
-### EffNet Imputation (Centroid Synthesis)
-Since the LLM (Large Language Model) only generates an 8D acoustic target, the engine **imputes** a 1280D target centroid for high-fidelity search:
-1. Identify the 20 closest 8D acoustic neighbors.
-2. Perform a **Relative Cliff Check** to ensure the neighborhood isn't poisoned or too sparse.
-3. Average and L2-normalize the 1280D embeddings of those neighbors to synthesize a target centroid.
+### 3.3 Relaxation Ladder
+Pools are enabled in a fixed order:
 
-### Genre Penalty (Re-ranking)
-After the SQL fetch, tracks are re-ranked based on their distance from the "Anchor Genre":
-```typescript
-const combinedScore = distance * Math.pow(1 + hopCost, blendWeight * penaltyCurve);
+`exact-path` → `adjacent-path` → `same-root` → `acoustic-similarity` → `mood-bridge` → `discovery-backfill`
+
+The ladder stops at the first stage that yields enough distinct songs and artists **after** banned-genre filters and cross-playlist exclusions are applied.
+
+### 3.4 Re-ranking and Recovery
+The main re-rank score is still based on hop-cost-aware distance:
+
+```ts
+combined = distance * Math.pow(1 + hopCost, genreWeight * penaltyCurve)
 ```
-- **Hop Cost**: Calculated via the MusicBrainz-based hierarchical genre tree.
-- **Veto Logic**: Absolute exclusion of `banned_genres` provided by the LLM.
 
-## 5. Infinity Mode
-Infinity Mode leverages a **Weighted Decay Centroid** to keep the music flowing based on your recent listening:
+But the modern engine also includes:
+- hard or adaptive banned-genre handling (`llmVetoMode`)
+- multi-root-safe reranking for concepts like `jazz + soul`
+- anchor fallback when strict anchored rerank overconstrains a still-healthy admissible pool
+- direct admissible-set fallback when rerank stages collapse unexpectedly
 
-1. **Centroid**: Computes a moving average of the last 10 tracks, weighted toward more recent plays.
-2. **Momentum**: Tracks energy/danceability trends to either maintain the "energy" or gradually transition to a new mood.
-3. **Relaxation**: If the search pool is too small, the engine automatically broadens its genre-strictness and distance thresholds until suitable matches are found.
+## 4. EffNet Imputation
 
-## 6. Deduplication & Anti-Repetition
-- **Normalized Title Matching**: Prevents the same song from appearing multiple times (e.g., from an album and its "Deluxe" edition).
-- **Same-Artist Spacing**: Penalizes tracks from the same artist if they appear too frequently in a sequence.
-- **Cross-Playlist Sync**: In the "Hub," tracks are deduplicated across current concepts to ensure variety.
+Because the LLM only supplies an 8D target vector, the engine imputes a 1280D embedding target:
+
+1. Find the nearest 20 tracks in 8D space
+2. Abort if the neighborhood fails a relative-cliff / sparsity check
+3. Average and L2-normalize their `embedding_vector` values
+
+This gives the high-dimensional search a timbre-aware target even though the LLM never emitted one directly.
+
+## 5. Final Selector
+
+The final playlist is not built by naive top-N selection. The selector now optimizes for:
+
+- same-song deduplication (MBID or normalized artist/title)
+- cross-playlist deduplication
+- artist spread
+- album spread
+- genre-root spread
+- pool-balance targets
+- acoustic-cluster variety
+- novelty / discovery bonuses
+- controlled randomness
+
+Every playlist also emits diagnostics:
+- pool sizes
+- relaxation level reached
+- selected pool mix
+- distinct artists / albums / roots / pools / clusters
+- mean pairwise acoustic distance
+- final diversity score
+
+## 6. Quality / Sanitization Passes
+
+To stop bad concepts from turning into weak playlists, the pipeline now includes:
+
+- **concept-quality gating** for broad generic genre plans
+- **target / adjacent conflict cleanup** against banned genres
+- **long-playlist quality floors** that trigger a second-pass refill when 20-track playlists come back with poor artist spread or low diversity
+
+## 7. Infinity Mode
+
+Infinity Mode remains separate from the LLM Hub flow, but it reuses the same family of ideas:
+
+1. weighted-decay centroid over recent tracks
+2. genre-aware penalty model
+3. gradual relaxation when the immediate search pool is too small
+
+## 8. Deduplication & Anti-Repetition
+- normalized title matching blocks duplicate song variants
+- artist repetition is capped, then relaxed only if the pool is truly sparse
+- LLM playlists are deduplicated against each other during a generation pass
