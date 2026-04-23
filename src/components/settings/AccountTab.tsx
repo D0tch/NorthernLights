@@ -37,12 +37,28 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
 
     const showToast = (msg: string, type: 'success' | 'error' | 'info') => addToast(msg, type);
 
-    // Surface Last.fm OAuth callback status from the redirect back to the app
+    // Surface Last.fm OAuth callback status from the redirect back to the app.
+    // If we're running inside the OAuth popup, notify the opener tab via
+    // BroadcastChannel and close ourselves. Otherwise behave as before
+    // (user may have had popups blocked and fell back to same-tab redirect).
     useEffect(() => {
         const params = new URLSearchParams(window.location.search);
         const connected = params.get('lfm_connected');
         const error = params.get('lfm_error');
         if (!connected && !error) return;
+
+        const inPopup = !!window.opener && window.opener !== window;
+        try {
+            const channel = new BroadcastChannel('oauth');
+            channel.postMessage({ provider: 'lastfm', ok: !!connected, error: error || null });
+            channel.close();
+        } catch {}
+
+        if (inPopup) {
+            try { window.close(); } catch {}
+            return;
+        }
+
         if (connected) {
             addToast('Last.fm connected successfully', 'success');
             loadSettings();
@@ -54,6 +70,25 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
         const query = params.toString();
         const cleanUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`;
         window.history.replaceState({}, '', cleanUrl);
+    }, [addToast, loadSettings]);
+
+    // Listen for OAuth completion broadcast from the popup.
+    useEffect(() => {
+        let channel: BroadcastChannel | null = null;
+        try {
+            channel = new BroadcastChannel('oauth');
+            channel.onmessage = (e) => {
+                const msg = e.data;
+                if (!msg || msg.provider !== 'lastfm') return;
+                if (msg.ok) {
+                    addToast('Last.fm connected successfully', 'success');
+                    loadSettings();
+                } else {
+                    addToast(`Last.fm authorization failed: ${msg.error || 'unknown'}`, 'error');
+                }
+            };
+        } catch {}
+        return () => { try { channel?.close(); } catch {} };
     }, [addToast, loadSettings]);
 
     return (
@@ -157,18 +192,26 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                         <p className="text-sm text-[var(--color-text-secondary)]">Not connected.</p>
                         <button
                             onClick={async () => {
+                                // Open the popup synchronously so browsers don't treat it as
+                                // a programmatic pop-up (which they block). Navigate it once
+                                // the authorize URL comes back from the server.
+                                const popup = window.open('about:blank', 'lastfm-auth', 'popup=yes,width=640,height=740');
                                 try {
-                                    // Fetch the authorize URL and redirect — the endpoint returns
-                                    // JSON `{url}`, so a plain window.location.href to it would
-                                    // just show JSON instead of navigating to Last.fm.
                                     const res = await fetch(`/api/providers/lastfm/authorize?origin=${encodeURIComponent(window.location.origin)}`, { headers: getAuthHeader() });
                                     const data = await res.json().catch(() => ({}));
                                     if (!res.ok || !data.url) {
+                                        popup?.close();
                                         showToast(data.error || 'Failed to start authorization', 'error');
                                         return;
                                     }
-                                    window.location.href = data.url;
+                                    if (popup && !popup.closed) {
+                                        popup.location.href = data.url;
+                                    } else {
+                                        // Popup was blocked — fall back to in-tab navigation
+                                        window.location.href = data.url;
+                                    }
                                 } catch (e: any) {
+                                    popup?.close();
                                     showToast(e?.message || 'Network error', 'error');
                                 }
                             }}
