@@ -344,7 +344,11 @@ export const Hub: React.FC = () => {
   };
 
   const aiPlaylists = collections.filter((c) => c.isLlmGenerated);
-  const otherCollections = collections.filter((c) => !c.isLlmGenerated);
+  const systemCollections = collections.filter(
+    (c) =>
+      !c.isLlmGenerated &&
+      ['engine_upnext', 'engine_jumpback', 'engine_vault'].includes(c.id || '')
+  );
 
   // Derive top 6 genres by track count
   const topGenres = useMemo(() => {
@@ -436,13 +440,13 @@ export const Hub: React.FC = () => {
         </section>
       )}
 
-      {otherCollections.length > 0 && (
+      {systemCollections.length > 0 && (
         <section>
           <h2 className="text-lg font-semibold text-[var(--color-text-secondary)] mb-4">
             Discover
           </h2>
           <div className="flex flex-col gap-4">
-            {otherCollections.map((collection) => (
+            {systemCollections.map((collection) => (
               <DiscoverCard
                 key={collection.id}
                 collection={collection}

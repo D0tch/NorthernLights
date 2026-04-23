@@ -80,7 +80,10 @@ const PlaylistCard: React.FC<{
             {playlist.tracks.length} {playlist.tracks.length === 1 ? 'track' : 'tracks'}
           </p>
           {playlist.isLlmGenerated && (
-            <span className="rounded-full border border-[var(--color-primary)]/30 bg-[var(--color-primary)]/15 px-2 py-px text-[10px] font-semibold uppercase tracking-wider text-[var(--color-primary)]">
+            <span
+              className="rounded-full bg-[var(--color-primary)]/15 border border-transparent px-2 py-px text-[10px] font-semibold uppercase tracking-wider text-[var(--color-primary)]"
+              style={{ borderColor: 'color-mix(in srgb, var(--color-primary) 30%, transparent)' }}
+            >
               AI
             </span>
           )}
