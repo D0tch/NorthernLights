@@ -58,7 +58,11 @@ const hydratePlaylistTracks = (
   const existingById = new Map(existingTracks.map((track) => [track.id, track]));
 
   return trackIds
-    .map((trackId) => libraryById.get(trackId) || existingById.get(trackId))
+    .map((trackId) => {
+      const existingTrack = existingById.get(trackId);
+      const libraryTrack = libraryById.get(trackId);
+      return libraryTrack ? { ...existingTrack, ...libraryTrack, playlistAddedAt: existingTrack?.playlistAddedAt } : existingTrack;
+    })
     .filter((track): track is TrackInfo => Boolean(track?.id && track?.path))
     .map((track) => ({
       ...track,
@@ -159,6 +163,9 @@ export interface PlayerState {
   lastFmScrobbleEnabled: boolean;
   lastFmConnected: boolean;
   lastFmUsername: string;
+  listenBrainzScrobbleEnabled: boolean;
+  listenBrainzConnected: boolean;
+  listenBrainzUsername: string;
   geniusApiKey: string;
   musicBrainzEnabled: boolean;
   musicBrainzClientId: string;
@@ -280,6 +287,9 @@ export interface PlayerState {
   setLastFmScrobbleEnabled: (enabled: boolean) => void;
   setLastFmConnected: (connected: boolean) => void;
   setLastFmUsername: (username: string) => void;
+  setListenBrainzScrobbleEnabled: (enabled: boolean) => void;
+  setListenBrainzConnected: (connected: boolean) => void;
+  setListenBrainzUsername: (username: string) => void;
   setGeniusApiKey: (key: string) => void;
   setMusicBrainzEnabled: (enabled: boolean) => void;
   setMusicBrainzClientId: (id: string) => void;
@@ -352,25 +362,37 @@ export const usePlayerStore = create<PlayerState>()(
         onEnded: () => {
           // Scrobble the completed track if eligible
           const state = get();
-          const { lastFmConnected, lastFmScrobbleEnabled, _scrobbleEligible, _scrobbleStartAt } = state;
-          if (lastFmConnected && lastFmScrobbleEnabled && _scrobbleEligible && _scrobbleStartAt) {
-            const currentTrack = state.currentIndex !== null ? state.playlist[state.currentIndex] : null;
-            if (currentTrack?.artist && currentTrack?.title) {
-              const authHeaders = (get() as any).getAuthHeader();
+          const {
+            lastFmConnected, lastFmScrobbleEnabled,
+            listenBrainzConnected, listenBrainzScrobbleEnabled,
+            _scrobbleEligible, _scrobbleStartAt,
+          } = state;
+          const currentTrack = state.currentIndex !== null ? state.playlist[state.currentIndex] : null;
+          if (_scrobbleEligible && _scrobbleStartAt && currentTrack?.artist && currentTrack?.title) {
+            const authHeaders = (get() as any).getAuthHeader();
+            const payload = {
+              tracks: [{
+                artist: currentTrack.artist,
+                track: currentTrack.title,
+                album: currentTrack.album || '',
+                albumArtist: currentTrack.albumArtist || '',
+                duration: Math.round(state.duration),
+                timestamp: Math.floor(_scrobbleStartAt / 1000),
+                mbid: currentTrack.mbTrackId || '',
+              }],
+            };
+            if (lastFmConnected && lastFmScrobbleEnabled) {
               fetch('/api/providers/lastfm/scrobble', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...authHeaders },
-                body: JSON.stringify({
-                  tracks: [{
-                    artist: currentTrack.artist,
-                    track: currentTrack.title,
-                    album: currentTrack.album || '',
-                    albumArtist: currentTrack.albumArtist || '',
-                    duration: Math.round(state.duration),
-                    timestamp: Math.floor(_scrobbleStartAt / 1000),
-                    mbid: currentTrack.mbTrackId || '',
-                  }]
-                })
+                body: JSON.stringify(payload),
+              }).catch(() => {});
+            }
+            if (listenBrainzConnected && listenBrainzScrobbleEnabled) {
+              fetch('/api/providers/listenbrainz/scrobble', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...authHeaders },
+                body: JSON.stringify(payload),
               }).catch(() => {});
             }
           }
@@ -548,6 +570,9 @@ export const usePlayerStore = create<PlayerState>()(
         lastFmScrobbleEnabled: false as boolean,
         lastFmConnected: false as boolean,
         lastFmUsername: '',
+        listenBrainzScrobbleEnabled: false as boolean,
+        listenBrainzConnected: false as boolean,
+        listenBrainzUsername: '',
         geniusApiKey: '',
         musicBrainzEnabled: false as boolean,
         musicBrainzClientId: '',
@@ -750,6 +775,9 @@ export const usePlayerStore = create<PlayerState>()(
                 lastFmScrobbleEnabled: data.lastFmScrobbleEnabled ?? false,
                 lastFmConnected: data.lastFmConnected ?? false,
                 lastFmUsername: data.lastFmUsername || '',
+                listenBrainzScrobbleEnabled: data.listenBrainzScrobbleEnabled ?? false,
+                listenBrainzConnected: data.listenBrainzConnected ?? false,
+                listenBrainzUsername: data.listenBrainzUsername || '',
                 geniusApiKey: data.geniusApiKey || '',
                 musicBrainzEnabled: data.musicBrainzEnabled ?? false,
                 musicBrainzClientId: data.musicBrainzClientId || '',
@@ -808,6 +836,7 @@ export const usePlayerStore = create<PlayerState>()(
                 lastFmApiKey: state.lastFmApiKey,
                 lastFmSharedSecret: state.lastFmSharedSecret,
                 lastFmScrobbleEnabled: state.lastFmScrobbleEnabled,
+                listenBrainzScrobbleEnabled: state.listenBrainzScrobbleEnabled,
                 geniusApiKey: state.geniusApiKey,
                 musicBrainzEnabled: state.musicBrainzEnabled,
                 musicBrainzClientId: state.musicBrainzClientId,
@@ -964,7 +993,7 @@ export const usePlayerStore = create<PlayerState>()(
                     const mappedTracks = pl.tracks.map((t: any) => {
                        // Prefer library track (up-to-date art, etc.), fall back to API data
                        const fullTrack = library.find((lt: TrackInfo) => lt.id === t.id);
-                       const track = fullTrack || t;
+                       const track = fullTrack ? { ...t, ...fullTrack, playlistAddedAt: t.playlistAddedAt } : t;
                        if (!track.path) return null;
                        const quality = (get().streamingQuality === 'auto' ? '128k' : get().streamingQuality);
                        return {
@@ -1379,22 +1408,32 @@ export const usePlayerStore = create<PlayerState>()(
             // Telemetry: record successful playback and push to session history
             get().recordPlay(track.id);
 
-            // Send "now playing" to Last.fm if connected
+            // Send "now playing" to scrobble providers if connected
             const state = get();
-            if (state.lastFmConnected && state.lastFmScrobbleEnabled && track.artist && track.title) {
+            if (track.artist && track.title) {
               const authHeaders = (get() as any).getAuthHeader();
-              fetch('/api/providers/lastfm/now-playing', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...authHeaders },
-                body: JSON.stringify({
-                  artist: track.artist,
-                  track: track.title,
-                  album: track.album || '',
-                  albumArtist: track.albumArtist || '',
-                  duration: track.duration ? Math.round(track.duration) : undefined,
-                  mbid: track.mbTrackId || '',
-                })
-              }).catch(() => {});
+              const nowPlayingBody = JSON.stringify({
+                artist: track.artist,
+                track: track.title,
+                album: track.album || '',
+                albumArtist: track.albumArtist || '',
+                duration: track.duration ? Math.round(track.duration) : undefined,
+                mbid: track.mbTrackId || '',
+              });
+              if (state.lastFmConnected && state.lastFmScrobbleEnabled) {
+                fetch('/api/providers/lastfm/now-playing', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', ...authHeaders },
+                  body: nowPlayingBody,
+                }).catch(() => {});
+              }
+              if (state.listenBrainzConnected && state.listenBrainzScrobbleEnabled) {
+                fetch('/api/providers/listenbrainz/now-playing', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', ...authHeaders },
+                  body: nowPlayingBody,
+                }).catch(() => {});
+              }
             }
 
             // Pre-fetch infinite track if bounds are reached
@@ -1497,6 +1536,9 @@ export const usePlayerStore = create<PlayerState>()(
         setLastFmScrobbleEnabled: (enabled: boolean) => set({ lastFmScrobbleEnabled: enabled }),
         setLastFmConnected: (connected: boolean) => set({ lastFmConnected: connected }),
         setLastFmUsername: (username: string) => set({ lastFmUsername: username }),
+        setListenBrainzScrobbleEnabled: (enabled: boolean) => set({ listenBrainzScrobbleEnabled: enabled }),
+        setListenBrainzConnected: (connected: boolean) => set({ listenBrainzConnected: connected }),
+        setListenBrainzUsername: (username: string) => set({ listenBrainzUsername: username }),
         setGeniusApiKey: (key: string) => set({ geniusApiKey: key }),
         setMusicBrainzEnabled: (enabled: boolean) => set({ musicBrainzEnabled: enabled }),
         setMusicBrainzClientId: (id: string) => set({ musicBrainzClientId: id }),
@@ -1567,6 +1609,9 @@ export const usePlayerStore = create<PlayerState>()(
         lastFmScrobbleEnabled: state.lastFmScrobbleEnabled,
         lastFmConnected: state.lastFmConnected,
         lastFmUsername: state.lastFmUsername,
+        listenBrainzScrobbleEnabled: state.listenBrainzScrobbleEnabled,
+        listenBrainzConnected: state.listenBrainzConnected,
+        listenBrainzUsername: state.listenBrainzUsername,
         geniusApiKey: state.geniusApiKey,
         musicBrainzEnabled: state.musicBrainzEnabled,
         musicBrainzClientId: state.musicBrainzClientId,

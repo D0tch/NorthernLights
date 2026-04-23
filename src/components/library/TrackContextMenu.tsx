@@ -454,9 +454,6 @@ export const TrackContextMenu: React.FC = () => {
                     className="fixed bottom-0 left-0 right-0 z-[9999] transition-transform duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
                     style={{ transform: isVisible ? 'translateY(0)' : 'translateY(100%)' }}
                 >
-                    <div className="flex justify-center pt-3 pb-1 bg-[var(--glass-bg)] rounded-t-2xl border-t border-x border-[var(--glass-border)]">
-                        <div className="w-10 h-1 rounded-full bg-[var(--color-border)]" />
-                    </div>
                     {inner}
                     <div className="h-[env(safe-area-inset-bottom,0px)] bg-[var(--glass-bg)] border-x border-[var(--glass-border)]" />
                 </div>

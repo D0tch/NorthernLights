@@ -262,9 +262,17 @@ export async function initDB(): Promise<Pool> {
           playlist_id TEXT REFERENCES playlists(id) ON DELETE CASCADE,
           track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE,
           sort_order INTEGER NOT NULL,
+          added_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           PRIMARY KEY (playlist_id, track_id)
         );
         CREATE INDEX IF NOT EXISTS playlist_tracks_track_id_idx ON playlist_tracks(track_id);
+
+        DO $$
+        BEGIN
+          ALTER TABLE playlist_tracks ADD COLUMN IF NOT EXISTS added_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+        EXCEPTION
+          WHEN OTHERS THEN null;
+        END $$;
 
         CREATE TABLE IF NOT EXISTS subgenre_mappings (
           sub_genre TEXT PRIMARY KEY,
@@ -632,6 +640,7 @@ function mapTrackRow(row: any) {
     genreId: row.genre_id,
     genres: row.genres ? JSON.parse(row.genres) : [],
     rawUrls: row.raw_urls ? JSON.parse(row.raw_urls) : [],
+    playlistAddedAt: row.playlist_added_at ? new Date(row.playlist_added_at).getTime() : undefined,
   };
 }
 
@@ -1322,9 +1331,17 @@ export async function createPlaylist(id: string, title: string, description: str
 
 export async function addTracksToPlaylist(playlistId: string, trackIds: string[]) {
   const db = await initDB();
-  // Clear existing tracks for a clean overwrite or handle deduplication depending on logic.
-  // We'll wipe and re-insert for LLM generated ones, or append for user playlists.
-  // For simplicity here, we clear and reinsert.
+  const existingRes = await db.query(
+    `SELECT track_id, added_at FROM playlist_tracks WHERE playlist_id = $1`,
+    [playlistId]
+  );
+  const existingAddedAt = new Map<string, string>(
+    existingRes.rows.map((row: any) => [
+      row.track_id,
+      row.added_at instanceof Date ? row.added_at.toISOString() : new Date(row.added_at).toISOString(),
+    ])
+  );
+
   await db.query(`DELETE FROM playlist_tracks WHERE playlist_id = $1`, [playlistId]);
   
   if (trackIds.length > 0) {
@@ -1333,12 +1350,12 @@ export async function addTracksToPlaylist(playlistId: string, trackIds: string[]
     let paramCount = 1;
 
     for (let i = 0; i < trackIds.length; i++) {
-      placeholders.push(`($${paramCount++}, $${paramCount++}, $${paramCount++})`);
-      values.push(playlistId, trackIds[i], i);
+      placeholders.push(`($${paramCount++}, $${paramCount++}, $${paramCount++}, COALESCE($${paramCount++}::timestamptz, NOW()))`);
+      values.push(playlistId, trackIds[i], i, existingAddedAt.get(trackIds[i]) || null);
     }
 
     await db.query(`
-      INSERT INTO playlist_tracks (playlist_id, track_id, sort_order)
+      INSERT INTO playlist_tracks (playlist_id, track_id, sort_order, added_at)
       VALUES ${placeholders.join(', ')}
     `, values);
   }
@@ -1396,7 +1413,7 @@ export async function getPlaylists(userId: string | null = null) {
 export async function getPlaylistTracks(playlistId: string) {
   const db = await initDB();
   const res = await db.query(`
-    SELECT t.* FROM tracks t
+    SELECT t.*, pt.added_at AS playlist_added_at FROM tracks t
     JOIN playlist_tracks pt ON t.id = pt.track_id
     WHERE pt.playlist_id = $1
     ORDER BY pt.sort_order ASC

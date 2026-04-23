@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useProviderConnectionTest } from '../../hooks/useProviderConnectionTest';
 import { useToast } from '../../hooks/useToast';
@@ -22,16 +22,33 @@ export const MetadataTab: React.FC = () => {
     const setMusicBrainzClientSecret = usePlayerStore(state => state.setMusicBrainzClientSecret);
     const musicBrainzConnected = usePlayerStore(state => state.musicBrainzConnected);
     const setMusicBrainzConnected = usePlayerStore(state => state.setMusicBrainzConnected);
-    const authToken = usePlayerStore(state => state.authToken);
-    
     const providerArtistImage = usePlayerStore(state => state.providerArtistImage);
     const providerArtistBio = usePlayerStore(state => state.providerArtistBio);
     const providerAlbumArt = usePlayerStore(state => state.providerAlbumArt);
     const setSettings = usePlayerStore(state => state.setSettings);
     const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
-    
+    const loadSettings = usePlayerStore(state => state.loadSettings);
     const { addToast } = useToast();
     const showToast = useCallback((msg: string, type: 'success' | 'error' | 'info') => addToast(msg, type), [addToast]);
+
+    // Surface MusicBrainz OAuth callback status from the redirect back to the app
+    useEffect(() => {
+        const params = new URLSearchParams(window.location.search);
+        const connected = params.get('mb_connected');
+        const error = params.get('mb_error');
+        if (!connected && !error) return;
+        if (connected) {
+            showToast('MusicBrainz connected successfully', 'success');
+            loadSettings();
+        } else if (error) {
+            showToast(`MusicBrainz authorization failed: ${error}`, 'error');
+        }
+        params.delete('mb_connected');
+        params.delete('mb_error');
+        const query = params.toString();
+        const cleanUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`;
+        window.history.replaceState({}, '', cleanUrl);
+    }, [loadSettings, showToast]);
 
     const {
         lastFmStatus,
@@ -131,16 +148,50 @@ export const MetadataTab: React.FC = () => {
                                     {musicBrainzConnected ? (
                                         <div className="ml-auto flex items-center gap-3">
                                             <span className="text-green-500 font-semibold text-xs drop-shadow-sm">✓ Connected</span>
-                                            <button onClick={async () => { await fetch('/api/providers/musicbrainz/disconnect', { method: 'POST' }); setMusicBrainzConnected(false); }} className="btn btn-danger btn-sm">Remove access</button>
+                                            <button onClick={async () => {
+                                                try {
+                                                    const authHeaders = getAuthHeader();
+                                                    await fetch('/api/providers/musicbrainz/disconnect', { method: 'POST', headers: authHeaders });
+                                                    setMusicBrainzConnected(false);
+                                                    showToast('MusicBrainz disconnected', 'info');
+                                                } catch (e: any) {
+                                                    showToast(e?.message || 'Failed to disconnect', 'error');
+                                                }
+                                            }} className="btn btn-danger btn-sm">Remove access</button>
                                         </div>
                                     ) : (
-                                        <button onClick={async () => { 
-                                            try { 
-                                                const tokenParam = authToken ? `?token=${authToken}` : ''; 
-                                                window.location.href = `/api/providers/musicbrainz/authorize${tokenParam}`; 
-                                            } catch (e: any) { 
-                                                showToast(e?.message || 'Network error', 'error'); 
-                                            } 
+                                        <button onClick={async () => {
+                                            try {
+                                                const authHeaders = (usePlayerStore.getState() as any).getAuthHeader?.() || {};
+                                                // Persist credentials server-side before the OAuth hop — the
+                                                // authorize route reads Client ID/Secret from system settings.
+                                                const saveRes = await fetch('/api/settings', {
+                                                    method: 'POST',
+                                                    headers: { 'Content-Type': 'application/json', ...authHeaders },
+                                                    body: JSON.stringify({
+                                                        musicBrainzEnabled: true,
+                                                        musicBrainzClientId,
+                                                        musicBrainzClientSecret,
+                                                    }),
+                                                });
+                                                if (!saveRes.ok) {
+                                                    const err = await saveRes.json().catch(() => ({}));
+                                                    showToast(err.error || 'Failed to save credentials', 'error');
+                                                    return;
+                                                }
+                                                // Fetch the authorize URL and redirect — the endpoint returns
+                                                // JSON `{url}`, so a plain window.location.href to it would
+                                                // just show JSON instead of navigating to MusicBrainz.
+                                                const res = await fetch('/api/providers/musicbrainz/authorize', { headers: authHeaders });
+                                                const data = await res.json().catch(() => ({}));
+                                                if (!res.ok || !data.url) {
+                                                    showToast(data.error || 'Failed to start authorization', 'error');
+                                                    return;
+                                                }
+                                                window.location.href = data.url;
+                                            } catch (e: any) {
+                                                showToast(e?.message || 'Network error', 'error');
+                                            }
                                         }} disabled={!musicBrainzClientId || !musicBrainzClientSecret} className="btn btn-primary btn-sm disabled:opacity-50 ml-auto">Authorize Application</button>
                                     )}
                                 </div>

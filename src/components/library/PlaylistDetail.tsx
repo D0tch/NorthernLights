@@ -1,5 +1,5 @@
-import React, { useCallback, useMemo, useState } from 'react';
-import { useNavigate, useParams, Link } from 'react-router-dom';
+import React, { memo, useCallback, useDeferredValue, useMemo, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   DndContext,
   closestCenter,
@@ -46,6 +46,15 @@ function formatDuration(totalSeconds: number): string {
   return `${minutes} min`;
 }
 
+function formatPlaylistAddedDate(timestamp?: number): string {
+  if (!timestamp || !Number.isFinite(timestamp)) return '--';
+  return new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+  }).format(timestamp);
+}
+
 function reorderTracks(tracks: TrackInfo[], fromIndex: number, toIndex: number): TrackInfo[] {
   const nextTracks = [...tracks];
   const [moved] = nextTracks.splice(fromIndex, 1);
@@ -54,19 +63,13 @@ function reorderTracks(tracks: TrackInfo[], fromIndex: number, toIndex: number):
   return nextTracks;
 }
 
-function buildBackdropTiles(artUrls: string[], totalTracks: number): Array<string | null> {
-  // Generate up to 150 tiles to ensure the grid can stretch across large ultra-wide monitors
-  const count = Math.max(24, Math.min(150, totalTracks > 0 ? totalTracks * 3 : 24));
-  
+function buildBackdropTiles(artUrls: string[]): Array<string | null> {
+  const count = artUrls.length > 0 ? 30 : 18;
   if (artUrls.length === 0) {
     return Array.from({ length: count }, () => null);
   }
 
-  return Array.from({ length: count }, (_, index) => {
-    // Pseudo-random offset using prime numbers to break repeating patterns across ANY column count
-    const offsetIndex = (index * 7) + Math.floor(index / 3) * 5;
-    return artUrls[offsetIndex % artUrls.length];
-  });
+  return Array.from({ length: count }, (_, index) => artUrls[(index * 5 + Math.floor(index / 4)) % artUrls.length]);
 }
 
 interface PlaylistTrackRowProps {
@@ -74,31 +77,28 @@ interface PlaylistTrackRowProps {
   track: TrackInfo;
   index: number;
   totalTracks: number;
+  getArtistLink: (artistName: string, track: TrackInfo) => string | null;
   onPlay: (index: number) => void;
   onMove: (fromIndex: number, toIndex: number) => void;
-  onContextMenu: (track: TrackInfo, x: number, y: number, playlistId: string, index: number) => void;
+  onContextMenu: (track: TrackInfo, x: number, y: number, playlistId: string, playlistTrackIndex: number) => void;
   playlistId: string;
 }
 
-const PlaylistTrackRow: React.FC<PlaylistTrackRowProps> = ({
+const PlaylistTrackRow = memo(({
   id,
   track,
   index,
   totalTracks,
+  getArtistLink,
   onPlay,
   onMove,
   onContextMenu,
   playlistId,
-}) => {
+}: PlaylistTrackRowProps) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
-  const artistsStore = usePlayerStore(state => state.artists);
-
-  const getArtistLink = (artistName: string): string | null => {
-    const entity = artistsStore.find((a: any) => a.name?.toLowerCase() === artistName.toLowerCase());
-    if (entity) return `/library/artist/${entity.id}`;
-    if (track?.artistId) return `/library/artist/${track.artistId}`;
-    return null;
-  };
+  const artistNames = Array.isArray(track.artists) && track.artists.length > 0
+    ? track.artists
+    : parseArtists(track.artist || track.albumArtist || '');
 
   return (
     <div
@@ -106,68 +106,98 @@ const PlaylistTrackRow: React.FC<PlaylistTrackRowProps> = ({
       style={{
         transform: CSS.Transform.toString(transform),
         transition,
-        opacity: isDragging ? 0.6 : 1,
-        zIndex: isDragging ? 20 : 1,
+        opacity: isDragging ? 0.55 : 1,
+        zIndex: isDragging ? 10 : 1,
       }}
-      className="grid grid-cols-[30px_1fr_80px] md:grid-cols-[40px_1fr_160px] gap-2 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 items-center transition-all duration-200 hover:bg-black/5 dark:hover:bg-white/5 focus-visible:bg-black/5 dark:focus-visible:bg-white/5 rounded-lg my-0.5 group"
+      className="grid grid-cols-[28px_44px_minmax(0,1fr)_56px_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-all duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
     >
-      <div 
-        className="text-center md:text-left text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums cursor-pointer"
+      <div
+        className="text-center md:text-left text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums"
         onClick={() => onPlay(index)}
       >
         {index + 1}
       </div>
 
-      <div 
-        className="flex items-center gap-3 min-w-0 cursor-pointer"
-        onClick={() => onPlay(index)}
-      >
-        <AlbumArt
-          artUrl={track.artUrl}
-          artist={track.artist}
-          album={track.album}
-          className="hidden md:block h-10 w-10 shrink-0 rounded-md object-cover shadow-sm border border-black/10 dark:border-white/10"
-        />
-        <div className="min-w-0">
-          <span className="block truncate text-sm md:text-base font-medium text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)] transition-colors">
-            {track.title || track.path.split(/[\\/]/).pop()}
-          </span>
-          {((track.artists && Array.isArray(track.artists) && track.artists.length > 0) || (track.artist || track.albumArtist)) ? (
-              <span className="block text-xs text-[var(--color-text-muted)] mt-0.5 truncate">
-                  {(Array.isArray(track.artists) && track.artists.length > 0 ? track.artists : parseArtists(track.artist || track.albumArtist || '')).map((a, j) => {
-                      const link = getArtistLink(a);
-                      return (
-                          <React.Fragment key={a + j}>
-                              {j > 0 && ' · '}
-                              {link ? (
-                                  <Link
-                                      to={link}
-                                      onClick={(e) => e.stopPropagation()}
-                                      className="hover:text-[var(--color-primary)] transition-colors no-underline text-inherit"
-                                  >{a}</Link>
-                              ) : (
-                                  <span>{a}</span>
-                              )}
-                          </React.Fragment>
-                      );
-                  })}
-              </span>
-          ) : (
-              <span className="block text-xs text-[var(--color-text-muted)] mt-0.5 truncate">
-                  Unknown Artist
-              </span>
-          )}
-        </div>
+      <div className="w-11 h-11 md:w-13 md:h-13 shrink-0 overflow-hidden rounded-lg md:rounded-xl border border-black/10 dark:border-white/10 bg-black/10 dark:bg-white/10">
+        {track.artUrl ? (
+          <img src={track.artUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center">
+            <Disc3 className="h-5 w-5 text-[var(--color-text-muted)] opacity-40" />
+          </div>
+        )}
+      </div>
+
+      <div className="min-w-0" onClick={() => onPlay(index)}>
+        <span className="block truncate text-sm md:text-base font-medium text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)] transition-colors">
+          {track.title || track.path.split(/[\\/]/).pop()}
+        </span>
+        <span className="block text-xs text-[var(--color-text-muted)] mt-0.5 truncate">
+          {artistNames.length > 0 ? artistNames.map((artistName, artistIndex) => {
+            const artistLink = getArtistLink(artistName, track);
+            return (
+              <React.Fragment key={`${artistName}-${artistIndex}`}>
+                {artistIndex > 0 && ' · '}
+                {artistLink ? (
+                  <Link
+                    to={artistLink}
+                    onClick={(event) => event.stopPropagation()}
+                    className="hover:text-[var(--color-primary)] transition-colors no-underline text-inherit"
+                  >
+                    {artistName}
+                  </Link>
+                ) : (
+                  <span>{artistName}</span>
+                )}
+              </React.Fragment>
+            );
+          }) : 'Unknown Artist'}
+        </span>
+      </div>
+
+      <div className="hidden md:block min-w-0">
+        <span className="block truncate text-sm text-[var(--color-text-secondary)]">
+          {track.album || '--'}
+        </span>
+      </div>
+
+      <div className="hidden md:block text-sm text-[var(--color-text-muted)] tabular-nums">
+        {formatPlaylistAddedDate(track.playlistAddedAt)}
+      </div>
+
+      <div className="text-[var(--color-text-muted)] flex flex-row items-center justify-end md:justify-start md:gap-2">
+        <span className="w-12 text-right md:text-left hidden md:inline text-sm tabular-nums">
+          {formatTime(track.duration, '--:--')}
+        </span>
+        <span className="w-12 text-right text-sm tabular-nums md:hidden">
+          {formatTime(track.duration, '--:--')}
+        </span>
       </div>
 
       <div className="text-[var(--color-text-muted)] flex flex-row items-center justify-end md:gap-2">
-        <span className="w-12 text-right hidden md:inline text-sm tabular-nums mr-2">
-          {formatTime(track.duration, '--:--')}
-        </span>
-
         <div className="flex flex-col md:hidden mr-1">
-          <button onClick={(e) => { e.stopPropagation(); if (index > 0) onMove(index, index - 1); }} disabled={index === 0} className="p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30"><ChevronUp size={14} /></button>
-          <button onClick={(e) => { e.stopPropagation(); if (index < totalTracks - 1) onMove(index, index + 1); }} disabled={index === totalTracks - 1} className="p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30"><ChevronDown size={14} /></button>
+          <button
+            aria-label="Move up"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (index > 0) onMove(index, index - 1);
+            }}
+            disabled={index === 0}
+            className="p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30"
+          >
+            <ChevronUp size={14} />
+          </button>
+          <button
+            aria-label="Move down"
+            onClick={(event) => {
+              event.stopPropagation();
+              if (index < totalTracks - 1) onMove(index, index + 1);
+            }}
+            disabled={index === totalTracks - 1}
+            className="p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30"
+          >
+            <ChevronDown size={14} />
+          </button>
         </div>
 
         <div className="opacity-100 md:opacity-0 md:group-hover:opacity-100 flex items-center transition-opacity">
@@ -194,7 +224,9 @@ const PlaylistTrackRow: React.FC<PlaylistTrackRowProps> = ({
       </div>
     </div>
   );
-};
+});
+
+PlaylistTrackRow.displayName = 'PlaylistTrackRow';
 
 export const PlaylistDetail: React.FC = () => {
   const { playlistId } = useParams<{ playlistId: string }>();
@@ -203,6 +235,7 @@ export const PlaylistDetail: React.FC = () => {
 
   const playlists = usePlayerStore((state) => state.playlists);
   const library = usePlayerStore((state) => state.library);
+  const artists = usePlayerStore((state) => state.artists);
   const currentUser = usePlayerStore((state) => state.currentUser);
   const setPlaylist = usePlayerStore((state) => state.setPlaylist);
   const playNext = usePlayerStore((state) => state.playNext);
@@ -215,41 +248,46 @@ export const PlaylistDetail: React.FC = () => {
     [playlists, playlistId]
   );
 
-  const { artUrls, bgColor } = useDominantColor(playlist?.tracks || []);
-  
-  const allArtUrls = useMemo(() => {
-    if (!playlist) return [];
-    return Array.from(new Set(playlist.tracks.map((t) => t.artUrl).filter(Boolean) as string[]));
-  }, [playlist]);
+  const playlistTracks = playlist?.tracks || [];
+  const deferredPlaylistTracks = useDeferredValue(playlistTracks);
+  const { bgColor } = useDominantColor(playlistTracks);
+
+  const heroArtUrls = useMemo(
+    () => Array.from(new Set(playlistTracks.map((track) => track.artUrl).filter(Boolean) as string[])).slice(0, 8),
+    [playlistTracks]
+  );
 
   const backdropTiles = useMemo(
-    () => buildBackdropTiles(allArtUrls, playlist?.tracks?.length || 0),
-    [allArtUrls, playlist?.tracks?.length]
+    () => buildBackdropTiles(heroArtUrls),
+    [heroArtUrls]
   );
 
   const sortableItems = useMemo(
-    () => (playlist?.tracks || []).map((t, idx) => `${t.id}-${idx}`),
-    [playlist]
+    () => playlistTracks.map((track, index) => `${track.id}-${index}`),
+    [playlistTracks]
   );
 
   const totalDuration = useMemo(
-    () => (playlist?.tracks || []).reduce((sum, track) => sum + (track.duration || 0), 0),
-    [playlist]
+    () => playlistTracks.reduce((sum, track) => sum + (track.duration || 0), 0),
+    [playlistTracks]
   );
 
   const artistCount = useMemo(() => {
-    if (!playlist) return 0;
-    return new Set(
-      playlist.tracks
-        .flatMap((track) => (track.artist || track.albumArtist ? [track.artist || track.albumArtist || ''] : []))
-        .map((artist) => artist.toLowerCase())
-        .filter(Boolean)
-    ).size;
-  }, [playlist]);
+    const seen = new Set<string>();
+    for (const track of playlistTracks) {
+      const names = Array.isArray(track.artists) && track.artists.length > 0
+        ? track.artists
+        : parseArtists(track.artist || track.albumArtist || '');
+      for (const name of names) {
+        if (name) seen.add(name.toLowerCase());
+      }
+    }
+    return seen.size;
+  }, [playlistTracks]);
 
   const suggestionEntries = useMemo(
-    () => getSuggestedPlaylistTracks(library, playlist?.tracks || [], 8),
-    [library, playlist]
+    () => getSuggestedPlaylistTracks(library, deferredPlaylistTracks, 8),
+    [library, deferredPlaylistTracks]
   );
 
   const [saveLabel, setSaveLabel] = useState<string | null>(null);
@@ -259,6 +297,13 @@ export const PlaylistDetail: React.FC = () => {
     setSaveLabel(label);
     setIsSaving(saving);
   }, []);
+
+  const getArtistLink = useCallback((artistName: string, track: TrackInfo): string | null => {
+    const entity = artists.find((entry) => entry.name?.toLowerCase() === artistName.toLowerCase());
+    if (entity) return `/library/artist/${entity.id}`;
+    if (track.artistId) return `/library/artist/${track.artistId}`;
+    return null;
+  }, [artists]);
 
   const persistTracks = useCallback(
     async (nextTracks: TrackInfo[], pendingLabel: string, successMessage: string) => {
@@ -279,71 +324,52 @@ export const PlaylistDetail: React.FC = () => {
     [addToast, playlist, replaceTracksInUserPlaylist, setSavingState]
   );
 
-  const handlePlayFromIndex = useCallback(
-    (startIndex: number) => {
-      if (!playlist || playlist.tracks.length === 0) return;
-      void setPlaylist(playlist.tracks, startIndex);
-    },
-    [playlist, setPlaylist]
-  );
+  const handlePlayFromIndex = useCallback((startIndex: number) => {
+    if (playlistTracks.length === 0) return;
+    void setPlaylist(playlistTracks, startIndex);
+  }, [playlistTracks, setPlaylist]);
 
-  const handleRemoveTrack = useCallback(
-    (index: number) => {
-      if (!playlist) return;
-      const nextTracks = playlist.tracks.filter((_, trackIndex) => trackIndex !== index);
-      void persistTracks(nextTracks, 'Removing track...', 'Playlist updated');
-    },
-    [persistTracks, playlist]
-  );
-
-  const handleMoveTrack = useCallback(
-    (fromIndex: number, toIndex: number) => {
-      if (!playlist || fromIndex === toIndex) return;
-      const nextTracks = reorderTracks(playlist.tracks, fromIndex, toIndex);
-      void persistTracks(nextTracks, 'Saving order...', 'Order saved');
-    },
-    [persistTracks, playlist]
-  );
+  const handleMoveTrack = useCallback((fromIndex: number, toIndex: number) => {
+    if (fromIndex === toIndex) return;
+    const nextTracks = reorderTracks(playlistTracks, fromIndex, toIndex);
+    void persistTracks(nextTracks, 'Saving order...', 'Order saved');
+  }, [persistTracks, playlistTracks]);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(PointerSensor, { activationConstraint: { distance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
 
-  const handleDragEnd = useCallback(
-    (event: DragEndEvent) => {
-      if (!playlist) return;
-      const { active, over } = event;
-      if (!over || active.id === over.id) return;
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
 
-      const fromIndex = sortableItems.indexOf(active.id as string);
-      const toIndex = sortableItems.indexOf(over.id as string);
-      if (fromIndex === -1 || toIndex === -1) return;
+    const activeId = active.id as string;
+    const overId = over.id as string;
+    const fromIndex = sortableItems.indexOf(activeId);
+    const toIndex = sortableItems.indexOf(overId);
 
-      const nextTracks = reorderTracks(playlist.tracks, fromIndex, toIndex);
+    if (fromIndex !== -1 && toIndex !== -1) {
+      const nextTracks = reorderTracks(playlistTracks, fromIndex, toIndex);
       void persistTracks(nextTracks, 'Saving order...', 'Order saved');
-    },
-    [persistTracks, playlist, sortableItems]
-  );
+    }
+  }, [persistTracks, playlistTracks, sortableItems]);
 
-  const handleAddSuggestion = useCallback(
-    async (track: TrackInfo) => {
-      if (!playlist) return;
+  const handleAddSuggestion = useCallback(async (track: TrackInfo) => {
+    if (!playlist) return;
 
-      setSavingState('Adding track...', true);
-      try {
-        await addTracksToUserPlaylist(playlist.id, [track.id]);
-        setSavingState('Track added', false);
-        window.setTimeout(() => {
-          setSaveLabel((current) => (current === 'Track added' ? null : current));
-        }, 1200);
-      } catch {
-        setSavingState(null, false);
-        addToast('Failed to add track to playlist.', 'error');
-      }
-    },
-    [addToast, addTracksToUserPlaylist, playlist, setSavingState]
-  );
+    setSavingState('Adding track...', true);
+    try {
+      await addTracksToUserPlaylist(playlist.id, [track.id]);
+      setSavingState('Track added', false);
+      window.setTimeout(() => {
+        setSaveLabel((current) => (current === 'Track added' ? null : current));
+      }, 1200);
+    } catch {
+      setSavingState(null, false);
+      addToast('Failed to add track to playlist.', 'error');
+    }
+  }, [addToast, addTracksToUserPlaylist, playlist, setSavingState]);
 
   if (!playlistId) {
     return <div className="page-container">Playlist not found.</div>;
@@ -353,72 +379,59 @@ export const PlaylistDetail: React.FC = () => {
     return (
       <div className="page-container">
         <BackButton onClick={() => navigate('/playlists')}>Back to Playlists</BackButton>
-        <div className="rounded-[2rem] border border-[var(--glass-border)] bg-[var(--glass-bg)] p-8 text-center text-[var(--color-text-secondary)] shadow-[0_30px_90px_rgba(0,0,0,0.08)] backdrop-blur-2xl">
-          Playlist not found.
-        </div>
+        <div className="text-[var(--color-text-muted)]">Playlist not found.</div>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col overflow-hidden p-4 md:p-8 lg:p-12 flex-1 relative">
-      <div className="pointer-events-none fixed inset-0 overflow-hidden z-0">
-        {/* Solid base */}
-        <div className="absolute inset-0 bg-[var(--color-bg)]" />
-        
-        {/* Colorful gradient glow behind the mosaic */}
+    <div className="page-container relative overflow-x-hidden">
+      <div className="pointer-events-none absolute left-1/2 top-0 h-[32rem] md:h-[44rem] w-screen -translate-x-1/2 overflow-hidden z-0">
         <div
           className="absolute inset-0"
           style={{
-            background: `radial-gradient(ellipse at top, color-mix(in srgb, ${bgColor} 20%, transparent) 0%, transparent 60%)`
+            background: `radial-gradient(circle at top, color-mix(in srgb, ${bgColor} 18%, transparent) 0%, transparent 64%)`,
           }}
         />
-
-        {/* The Mosaic with a CSS mask to slowly fade it out downwards */}
         <div
-          className="absolute inset-0"
+          className="absolute left-1/2 top-[-4%] grid w-[165vw] md:w-[138vw] lg:w-[118vw] grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-3 opacity-20 md:opacity-25"
           style={{
-            WebkitMaskImage: 'linear-gradient(to bottom, black 0%, transparent 50%)',
-            maskImage: 'linear-gradient(to bottom, black 0%, transparent 50%)',
+            transform: 'translateX(-50%) rotate(-18deg) scale(1.1)',
+            WebkitMaskImage: 'linear-gradient(to bottom, rgba(0,0,0,0.98) 0%, rgba(0,0,0,0.88) 10%, rgba(0,0,0,0.56) 18%, rgba(0,0,0,0.26) 24%, rgba(0,0,0,0.10) 30%, rgba(0,0,0,0.03) 36%, transparent 42%)',
+            maskImage: 'linear-gradient(to bottom, rgba(0,0,0,0.98) 0%, rgba(0,0,0,0.88) 10%, rgba(0,0,0,0.56) 18%, rgba(0,0,0,0.26) 24%, rgba(0,0,0,0.10) 30%, rgba(0,0,0,0.03) 36%, transparent 42%)',
           }}
         >
-          <div
-            className="absolute left-1/2 top-[-20vh] grid w-[250vw] sm:w-[200vw] md:w-[150vw] lg:w-[120vw] grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 xl:grid-cols-10 gap-3 sm:gap-4 md:gap-5 opacity-25 dark:opacity-20 blur-[2px]"
-            style={{ transform: 'translateX(-50%) perspective(1000px) rotateX(35deg) rotateY(-5deg) rotateZ(-15deg) scale(1.4)' }}
-          >
-            {backdropTiles.map((tile, index) => (
-              <div
-                key={`${tile || 'empty'}-${index}`}
-                className="aspect-square overflow-hidden rounded-[1.9rem] border border-white/10 bg-black/5 shadow-[0_30px_80px_rgba(0,0,0,0.18)] dark:bg-white/5"
-              >
-                {tile ? (
-                  <img src={tile} alt="" className="h-full w-full object-cover" />
-                ) : (
-                  <div className="flex h-full w-full items-center justify-center">
-                    <Disc3 className="h-10 w-10 text-[var(--color-text-muted)] opacity-40" />
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
+          {backdropTiles.map((tile, index) => (
+            <div
+              key={`${tile || 'empty'}-${index}`}
+              className="aspect-square overflow-hidden rounded-[1.4rem] border border-white/10 bg-black/5 shadow-xl dark:bg-white/5"
+            >
+              {tile ? (
+                <img src={tile} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+              ) : (
+                <div className="flex h-full w-full items-center justify-center">
+                  <Disc3 className="h-8 w-8 text-[var(--color-text-muted)] opacity-30" />
+                </div>
+              )}
+            </div>
+          ))}
         </div>
-
-        {/* Additional gradient safety net at the bottom */}
-        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent via-40% to-[var(--color-bg)] to-70%" />
+        <div className="absolute inset-0 bg-gradient-to-b from-[var(--color-bg)]/14 via-transparent via-10% to-transparent" />
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent via-18% to-[var(--color-bg)]/82" />
+        <div className="absolute bottom-0 left-0 w-full h-44 md:h-56 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)]/94 via-46% to-transparent" />
+        <div className="absolute bottom-0 left-0 w-full h-24 md:h-32 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.08)_0%,transparent_72%)] dark:bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.05)_0%,transparent_72%)]" />
       </div>
 
-      <div className="relative z-10 flex flex-col flex-1 min-h-0">
-        <div className="shrink-0 mb-6">
-          <BackButton onClick={() => navigate('/playlists')}>Back to Playlists</BackButton>
-        </div>
+      <div className="relative z-10">
+        <BackButton onClick={() => navigate('/playlists')}>Back to Playlists</BackButton>
 
-        <div className="shrink-0 flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
+        <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
           <div className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden backdrop-blur-xl bg-black/10 dark:bg-white/5">
             <div className="grid h-full w-full grid-cols-2 gap-0.5">
-              {(artUrls.length > 0 ? artUrls.slice(0, 4) : [null, null, null, null]).map((artUrl, index) => (
+              {(heroArtUrls.length > 0 ? heroArtUrls.slice(0, 4) : [null, null, null, null]).map((artUrl, index) => (
                 <div key={`${artUrl || 'fallback'}-${index}`} className="overflow-hidden bg-black/10 dark:bg-white/10">
                   {artUrl ? (
-                    <img src={artUrl} alt="" className="h-full w-full object-cover" />
+                    <img src={artUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
                   ) : (
                     <div className="flex h-full w-full items-center justify-center">
                       <Disc3 className="h-8 w-8 text-[var(--color-text-muted)] opacity-40" />
@@ -433,19 +446,21 @@ export const PlaylistDetail: React.FC = () => {
             <div className="font-semibold text-sm tracking-wider uppercase text-[var(--color-primary)]">
               {playlist.isLlmGenerated ? 'AI Curated Playlist' : `Playlist by ${currentUser?.username || 'You'}`}
             </div>
-            
+
             <h1 className="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight my-2 leading-tight text-[var(--color-text-primary)] line-clamp-2" title={playlist.title}>
               {playlist.title}
             </h1>
 
             <h2 className="text-xl text-[var(--color-text-secondary)] flex flex-wrap justify-center md:justify-start items-center gap-2 mb-2 w-full truncate">
               <span className="shrink-0 text-sm md:text-xl text-[var(--color-text-muted)]">
-                {playlist.tracks.length} track{playlist.tracks.length !== 1 ? 's' : ''}
+                {playlistTracks.length} track{playlistTracks.length !== 1 ? 's' : ''}
                 {totalDuration > 0 && (
                   <span className="inline-flex items-center gap-1 ml-1">
                     • <Clock className="w-3.5 h-3.5 inline" /> {formatDuration(totalDuration)}
                   </span>
                 )}
+                {artistCount > 0 && <span className="ml-1"> • {artistCount} artist{artistCount !== 1 ? 's' : ''}</span>}
+                {playlist.pinned && <span className="ml-1"> • <Pin className="w-3.5 h-3.5 inline" /> pinned</span>}
               </span>
             </h2>
 
@@ -453,27 +468,39 @@ export const PlaylistDetail: React.FC = () => {
               {playlist.description || 'Reorder the sequence, trim the weak links, and grow this playlist with nearby tracks from your library.'}
             </p>
 
-            <div className="mt-2 flex justify-center md:justify-start w-full md:w-auto gap-3">
+            <div className="mt-2 flex flex-wrap justify-center md:justify-start items-center gap-3 w-full md:w-auto">
               <button
                 onClick={() => handlePlayFromIndex(0)}
-                disabled={playlist.tracks.length === 0}
-                className="flex items-center justify-center gap-2 px-8 py-3.5 bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white font-bold text-sm tracking-widest uppercase rounded-full shadow-[0_4px_24px_rgba(16,185,129,0.3)] hover:shadow-[0_8px_32px_rgba(16,185,129,0.4)] hover:scale-105 active:scale-95 motion-reduce:transition-none motion-reduce:hover:scale-100 transition-all duration-300 w-full md:w-auto disabled:opacity-50 disabled:pointer-events-none"
+                disabled={playlistTracks.length === 0}
+                className="btn btn-primary btn-lg"
               >
-                <Play size={18} fill="currentColor" className="ml-1" />
-                PLAY PLAYLIST
+                <span className="inline-flex items-center gap-2">
+                  <Play size={18} fill="currentColor" />
+                  Play Playlist
+                </span>
               </button>
+              {saveLabel && (
+                <div className="inline-flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
+                  {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4 text-[var(--color-primary)]" />}
+                  <span>{saveLabel}</span>
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        <div className="mt-4 overflow-y-auto overflow-x-hidden flex-1 min-h-0 hide-scrollbar pb-6">
-          <div className="grid grid-cols-[30px_1fr_80px] md:grid-cols-[40px_1fr_160px] px-2 md:px-4 py-3 border-b border-black/5 dark:border-white/10 font-semibold text-xs uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
+        <div className="mb-8">
+          <div className="grid grid-cols-[28px_44px_minmax(0,1fr)_56px_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-3 border-b border-black/5 dark:border-white/10 font-semibold text-xs uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
             <div className="text-center md:text-left">#</div>
+            <div aria-hidden="true" />
             <div>Title</div>
-            <div className="text-right hidden md:block mr-2">Time</div>
+            <div className="hidden md:block">Album</div>
+            <div className="hidden md:block">Date Added</div>
+            <div className="text-right md:text-left">Time</div>
+            <div aria-hidden="true" />
           </div>
 
-          {playlist.tracks.length === 0 ? (
+          {playlistTracks.length === 0 ? (
             <div className="px-6 py-12 text-center text-[var(--color-text-secondary)] border-b border-black/5 dark:border-white/5">
               Add tracks from the library to start shaping this playlist.
             </div>
@@ -481,15 +508,17 @@ export const PlaylistDetail: React.FC = () => {
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
               <SortableContext items={sortableItems} strategy={verticalListSortingStrategy}>
                 <div className="space-y-0.5">
-                  {playlist.tracks.map((track, index) => {
+                  {playlistTracks.map((track, index) => {
                     const itemId = sortableItems[index];
+
                     return (
                       <PlaylistTrackRow
                         key={itemId}
                         id={itemId}
                         track={track}
                         index={index}
-                        totalTracks={playlist.tracks.length}
+                        totalTracks={playlistTracks.length}
+                        getArtistLink={getArtistLink}
                         onPlay={handlePlayFromIndex}
                         onMove={handleMoveTrack}
                         onContextMenu={openContextMenu}
@@ -501,57 +530,67 @@ export const PlaylistDetail: React.FC = () => {
               </SortableContext>
             </DndContext>
           )}
+        </div>
 
-          {suggestionEntries.length > 0 && (
-            <div className="mt-12 w-full overflow-hidden">
-              <div className="mb-5 flex flex-wrap items-end justify-between gap-3 px-2 md:px-4">
-                <div className="min-w-0">
-                  <h3 className="font-semibold text-xl tracking-wide text-[var(--color-text-secondary)]">Suggested Tracks</h3>
-                  <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
-                    Nearby picks from your library based on the artists, albums, and genre clusters already in this playlist.
-                  </p>
-                </div>
-                <div className="rounded-full border border-[var(--glass-border)] bg-black/5 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-[var(--color-text-muted)] dark:bg-white/5 shrink-0">
-                  {suggestionEntries.length} suggestions
-                </div>
+        {suggestionEntries.length > 0 && (
+          <div className="pt-2">
+            <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+              <div className="min-w-0">
+                <h3 className="font-semibold text-xl tracking-wide text-[var(--color-text-secondary)]">Suggested Tracks</h3>
+                <p className="mt-1 text-sm text-[var(--color-text-secondary)]">
+                  Nearby picks from your library based on the artists, albums, and genre clusters already in this playlist.
+                </p>
               </div>
-
-              <div className="grid gap-3 sm:gap-4 lg:grid-cols-2 px-2 md:px-4">
-                {suggestionEntries.map(({ track, reason }) => (
-                  <article
-                    key={track.id}
-                    className="flex flex-row items-center gap-3 sm:gap-4 rounded-xl border border-black/5 dark:border-white/5 bg-black/5 p-3 sm:p-4 transition-colors hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10 min-w-0 overflow-hidden"
-                  >
-                    <AlbumArt
-                      artUrl={track.artUrl}
-                      artist={track.artist}
-                      album={track.album}
-                      className="h-12 w-12 sm:h-14 sm:w-14 rounded-md sm:rounded-lg border border-black/10 dark:border-white/10 object-cover shadow-sm shrink-0"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm sm:text-base font-semibold text-[var(--color-text-primary)]">
-                        {track.title || track.path.split(/[\\/]/).pop()}
-                      </div>
-                      <div className="truncate text-xs sm:text-sm text-[var(--color-text-secondary)] mt-0.5">
-                        {track.artist || track.albumArtist || 'Unknown Artist'}
-                      </div>
-                      <p className="mt-1 sm:mt-1.5 text-[11px] sm:text-xs leading-relaxed text-[var(--color-text-muted)] line-clamp-1 sm:line-clamp-2">{reason}</p>
-                    </div>
-                    <div className="flex gap-2 sm:flex-col shrink-0">
-                      <button
-                        onClick={() => void handleAddSuggestion(track)}
-                        className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-black/10 hover:bg-black/20 dark:bg-white/10 dark:hover:bg-white/20 text-[var(--color-text-primary)] font-medium text-xs rounded-lg transition-colors"
-                      >
-                        <Plus className="h-3.5 w-3.5" />
-                        Add
-                      </button>
-                    </div>
-                  </article>
-                ))}
+              <div className="rounded-full border border-[var(--glass-border)] bg-black/5 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-[var(--color-text-muted)] dark:bg-white/5 shrink-0">
+                {suggestionEntries.length} suggestions
               </div>
             </div>
-          )}
-        </div>
+
+            <div className="space-y-3">
+              {suggestionEntries.map(({ track, reason }) => (
+                <div
+                  key={track.id}
+                  className="flex items-center gap-3 rounded-2xl border border-black/5 dark:border-white/10 bg-black/[0.03] dark:bg-white/[0.03] px-3 py-3"
+                >
+                  <AlbumArt
+                    artUrl={track.artUrl}
+                    artist={track.artist}
+                    album={track.album}
+                    className="w-14 h-14 rounded-xl shrink-0"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm md:text-base font-medium text-[var(--color-text-primary)]">
+                      {track.title || track.path.split(/[\\/]/).pop()}
+                    </div>
+                    <div className="truncate text-xs md:text-sm text-[var(--color-text-secondary)]">
+                      {track.artist || track.albumArtist || 'Unknown Artist'}
+                    </div>
+                    <div className="truncate text-xs text-[var(--color-text-muted)] mt-1">
+                      {reason}
+                    </div>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <button
+                      onClick={() => playNext(track)}
+                      className="btn btn-ghost btn-sm hidden sm:inline-flex"
+                    >
+                      Play Next
+                    </button>
+                    <button
+                      onClick={() => void handleAddSuggestion(track)}
+                      className="btn btn-primary btn-sm"
+                    >
+                      <span className="inline-flex items-center gap-1.5">
+                        <Plus className="w-3.5 h-3.5" />
+                        Add
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -363,7 +363,7 @@ export const GlobalSearch: React.FC = () => {
                     flex items-center rounded-full border backdrop-blur-md transition-all duration-300 overflow-hidden
                     ${isExpanded && !isMobile
                         ? 'w-64 sm:w-80 bg-[var(--glass-bg)] border-[var(--color-primary)] shadow-[0_0_12px_rgba(34,201,131,0.2)]'
-                        : 'w-[104px] bg-black/5 dark:bg-white/[0.06] border-[var(--color-border)] hover:bg-black/10 dark:hover:bg-white/[0.12] hover:border-[var(--glass-border-hover)] cursor-pointer'
+                        : 'w-[104px] bg-black/10 dark:bg-white/10 border-black/10 dark:border-white/15 hover:bg-black/15 dark:hover:bg-white/15 hover:border-[var(--glass-border-hover)] cursor-pointer'
                     }
                 `}
                 onClick={!isExpanded || isMobile ? handleExpand : undefined}
@@ -415,15 +415,9 @@ export const GlobalSearch: React.FC = () => {
     // ── mobile full-screen overlay portal ────────────────────────────────────
     const mobileOverlay = isMobile && isExpanded &&
         createPortal(
-            <div
-                className="fixed inset-0 z-[200] flex flex-col"
-                style={{ background: 'var(--color-bg, #0f0f0f)' }}
-            >
+            <div className="fixed inset-0 z-[200] flex flex-col bg-[var(--color-bg)]">
                 {/* Header bar */}
-                <div
-                    className="flex items-center gap-3 px-4 py-3 border-b"
-                    style={{ borderColor: 'var(--color-border)' }}
-                >
+                <div className="flex items-center gap-3 px-4 py-3 border-b border-black/10 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl">
                     <button
                         aria-label="Close search"
                         onClick={handleClose}
@@ -433,10 +427,7 @@ export const GlobalSearch: React.FC = () => {
                     </button>
 
                     {/* Input */}
-                    <div
-                        className="flex-1 flex items-center gap-2 rounded-full px-4 py-2"
-                        style={{ background: 'var(--glass-bg)', border: '1px solid var(--color-primary)', boxShadow: '0 0 12px rgba(34,201,131,0.15)' }}
-                    >
+                    <div className="flex-1 flex items-center gap-2 rounded-full px-4 py-2 bg-black/5 dark:bg-white/10 border border-[var(--color-primary)]/60 shadow-[0_0_12px_rgba(34,201,131,0.15)] focus-within:border-[var(--color-primary)] focus-within:shadow-[0_0_16px_rgba(34,201,131,0.25)] transition-all">
                         <SearchIcon size={16} className="text-[var(--color-text-muted)] flex-shrink-0" />
                         <input
                             ref={mobileInputRef}
@@ -450,7 +441,7 @@ export const GlobalSearch: React.FC = () => {
                         {hasQuery && (
                             <button
                                 onClick={() => setQuery('')}
-                                className="text-[var(--color-text-muted)] active:scale-90 transition-transform"
+                                className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] active:scale-90 transition-transform"
                             >
                                 <X size={16} />
                             </button>

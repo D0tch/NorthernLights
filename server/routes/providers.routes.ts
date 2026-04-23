@@ -1,6 +1,11 @@
 import { Router } from 'express';
 import { getSystemSetting, setSystemSetting, getUserSetting, setUserSetting } from '../database';
 import { lfmFetch, scrobbleTracks, updateNowPlaying, loveTrack, unloveTrack } from '../services/lastfm.service';
+import {
+  validateToken as validateLbToken,
+  scrobbleTracks as lbScrobbleTracks,
+  updateNowPlaying as lbUpdateNowPlaying,
+} from '../services/listenbrainz.service';
 import { requireAuth, requireAdmin } from '../middleware/auth';
 import { mbFetch, checkMbEnabled, refreshMbToken } from '../services/musicbrainz.service';
 import {
@@ -562,6 +567,112 @@ router.post('/providers/lastfm/test', async (req, res) => {
     }
   } catch (err: any) {
     res.status(502).json({ status: 'error', error: err.message || 'Network error' });
+  }
+});
+
+// ─── ListenBrainz Routes (per-user token-based scrobbling) ──────────
+
+router.post('/providers/listenbrainz/connect', async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+    const { token } = req.body || {};
+    if (!token || typeof token !== 'string') {
+      return res.status(400).json({ error: 'Missing token' });
+    }
+
+    const result = await validateLbToken(token.trim());
+    if (!result.valid) {
+      return res.status(400).json({ error: result.message || 'Invalid ListenBrainz token' });
+    }
+
+    await setUserSetting(userId, 'listenBrainzUserToken', token.trim());
+    await setUserSetting(userId, 'listenBrainzUsername', result.username || '');
+    await setUserSetting(userId, 'listenBrainzConnected', true);
+
+    res.json({ status: 'ok', username: result.username || null });
+  } catch (err: any) {
+    console.error('[ListenBrainz] connect error:', err.message);
+    res.status(502).json({ error: err.message || 'Network error' });
+  }
+});
+
+router.post('/providers/listenbrainz/disconnect', async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+    await setUserSetting(userId, 'listenBrainzUserToken', '');
+    await setUserSetting(userId, 'listenBrainzUsername', '');
+    await setUserSetting(userId, 'listenBrainzConnected', false);
+
+    res.json({ status: 'ok' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/providers/listenbrainz/status', async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+    const connected = await getUserSetting(userId, 'listenBrainzConnected');
+    const username = await getUserSetting(userId, 'listenBrainzUsername');
+    const scrobbleEnabled = await getUserSetting(userId, 'listenBrainzScrobbleEnabled');
+
+    res.json({
+      connected: connected === true || connected === 'true',
+      username: username || null,
+      scrobbleEnabled: scrobbleEnabled === true || scrobbleEnabled === 'true',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/providers/listenbrainz/scrobble', async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+    const connected = await getUserSetting(userId, 'listenBrainzConnected');
+    if (connected !== true && connected !== 'true') {
+      return res.status(400).json({ error: 'ListenBrainz not connected' });
+    }
+
+    const { tracks } = req.body;
+    if (!tracks || !Array.isArray(tracks) || tracks.length === 0) {
+      return res.status(400).json({ error: 'Missing tracks array' });
+    }
+
+    const result = await lbScrobbleTracks(userId, tracks);
+    res.json(result);
+  } catch (err: any) {
+    console.error('[ListenBrainz] scrobble error:', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
+router.post('/providers/listenbrainz/now-playing', async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+    const connected = await getUserSetting(userId, 'listenBrainzConnected');
+    if (connected !== true && connected !== 'true') {
+      return res.status(400).json({ error: 'ListenBrainz not connected' });
+    }
+
+    const { artist, track, album, duration, trackNumber, mbid } = req.body;
+    if (!artist || !track) return res.status(400).json({ error: 'Missing artist or track' });
+
+    const result = await lbUpdateNowPlaying(userId, { artist, track, album, duration, trackNumber, mbid });
+    res.json(result);
+  } catch (err: any) {
+    console.error('[ListenBrainz] now-playing error:', err.message);
+    res.status(502).json({ error: err.message });
   }
 });
 

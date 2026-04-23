@@ -62,6 +62,7 @@ export interface TrackInfo {
   url?: string;
   rawUrl?: string;
   artUrl?: string;
+  playlistAddedAt?: number;
   _pictureData?: { data: string; format: string };
   _format?: string;
   isInfinity?: boolean;
