@@ -1,15 +1,17 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { TrackInfo } from '../../utils/fileSystem';
 import { trackMatchesArtist } from '../../utils/artistUtils';
 import { useArtistData } from '../../hooks/useArtistData';
+import { useArtistTopTracks } from '../../hooks/useArtistTopTracks';
 import { AlbumArt } from '../AlbumArt';
 import { AlbumCard, AlbumCardSkeleton } from './AlbumCard';
 import { BackButton } from './BackButton';
 import { FadedHeroImage } from './FadedHeroImage';
 import { ArtistInitial } from './ArtistInitial';
-import { ExternalLink, Globe, Users, Mic2, Calendar, Sparkles, Music2, Clock, BookOpen } from 'lucide-react';
+import { ExternalLink, Globe, Users, Mic2, Calendar, Sparkles, Music2, Clock, BookOpen, Play, Headphones, Link2 } from 'lucide-react';
+import { ContextMenuFrame, ContextMenuHeader, ContextMenuLink, ContextMenuList, ContextMenuPortal } from '../ContextMenu';
 
 // ─── Link label helpers ───────────────────────────────────────────────────────
 
@@ -89,6 +91,29 @@ function formatDuration(totalSeconds: number): string {
   return `${m}m`;
 }
 
+function normalizePopularTitle(value: string | undefined | null): string {
+  return (value || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/\.[a-z0-9]{2,5}$/i, '')
+    .replace(/\s*\[[^\]]*(remaster|remastered|version|edit|mono|stereo|explicit|clean)[^\]]*\]/gi, '')
+    .replace(/\s*\([^)]*(remaster|remastered|version|edit|mono|stereo|explicit|clean)[^)]*\)/gi, '')
+    .replace(/\s+(feat\.?|featuring|ft\.?)\s+.+$/i, '')
+    .replace(/&/g, 'and')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function formatCompactCount(raw?: string): string | null {
+  if (!raw) return null;
+  const value = parseInt(raw, 10);
+  if (!Number.isFinite(value)) return null;
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, '')}K`;
+  return value.toLocaleString();
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export const ArtistDetail: React.FC = () => {
@@ -107,8 +132,14 @@ export const ArtistDetail: React.FC = () => {
         return track?.mbArtistId || null;
     }, [library, artistId]);
 
-    const { imageUrl, bio, disambiguation, area, type, lifeSpan, links, genres, listeners, members, isLoading: artistLoading } = useArtistData(artistName, mbArtistId);
+    const { imageUrl, bio, disambiguation, area, type, lifeSpan, links, genres, communityTags, listeners, members, isLoading: artistLoading } = useArtistData(artistName, mbArtistId);
+    const { tracks: externalTopTracks } = useArtistTopTracks(artistName, {
+        enabled: !!artistName,
+        limit: 30,
+    });
     const [bioExpanded, setBioExpanded] = useState(false);
+    const [linksMenuOpen, setLinksMenuOpen] = useState(false);
+    const linksButtonRef = useRef<HTMLButtonElement>(null);
 
     // Tracks where this artist is the PRIMARY / album artist
     const primaryTracks = useMemo(() => {
@@ -211,6 +242,40 @@ export const ArtistDetail: React.FC = () => {
     const releaseGroups = useMemo(() => buildReleaseGroups(primaryTracks), [primaryTracks]);
     const featuredGroups = useMemo(() => buildReleaseGroups(featuredTracks), [featuredTracks]);
 
+    const popularLibraryTracks = useMemo(() => {
+        if (externalTopTracks.length === 0) return [];
+        const localTracks = [...primaryTracks, ...featuredTracks];
+        const byExactTitle = new Map<string, TrackInfo[]>();
+        const byLooseTitle = new Map<string, TrackInfo[]>();
+
+        for (const track of localTracks) {
+            const displayTitle = track.title || track.path.split(/[\\/]/).pop() || '';
+            const exactKey = normalizePopularTitle(displayTitle);
+            const looseKey = normalizePopularTitle(displayTitle.replace(/\s*[-–—]\s*(remaster|remastered|version|edit|mono|stereo).*/i, ''));
+            if (!exactKey) continue;
+            byExactTitle.set(exactKey, [...(byExactTitle.get(exactKey) || []), track]);
+            byLooseTitle.set(looseKey, [...(byLooseTitle.get(looseKey) || []), track]);
+        }
+
+        const seen = new Set<string>();
+        return externalTopTracks.flatMap((topTrack, rank) => {
+            const key = normalizePopularTitle(topTrack.name);
+            const candidates = byExactTitle.get(key) || byLooseTitle.get(key) || [];
+            const track = candidates
+                .filter(candidate => !seen.has(candidate.id))
+                .sort((a, b) => (b.playCount || 0) - (a.playCount || 0) || (a.album || '').localeCompare(b.album || ''))[0];
+
+            if (!track) return [];
+            seen.add(track.id);
+            return [{
+                track,
+                rank: rank + 1,
+                playcount: topTrack.playcount,
+                listeners: topTrack.listeners,
+            }];
+        }).slice(0, 5);
+    }, [externalTopTracks, primaryTracks, featuredTracks]);
+
     const hasAnyContent = primaryTracks.length > 0 || featuredTracks.length > 0;
 
     if (!artistName || !hasAnyContent) return (
@@ -243,61 +308,6 @@ export const ArtistDetail: React.FC = () => {
                             {artistName}
                         </h1>
 
-                        {/* MusicBrainz metadata badges */}
-                        {(disambiguation || type || area || lifeSpan?.begin || listeners) && (
-                            <div className="flex flex-wrap items-center gap-2 mb-3">
-                                {disambiguation && (
-                                    <span className="text-sm text-[var(--color-text-muted)] italic">{disambiguation}</span>
-                                )}
-                                {type && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--color-primary)]/10 text-[var(--color-primary)] border border-[var(--color-primary)]/20">
-                                        {type === 'Group' ? <Users className="w-3 h-3" /> : type === 'Person' ? <Mic2 className="w-3 h-3" /> : <Globe className="w-3 h-3" />}
-                                        {type}
-                                    </span>
-                                )}
-                                {area && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
-                                        <Globe className="w-3 h-3" />
-                                        {area}
-                                    </span>
-                                )}
-                                {lifeSpan?.begin && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
-                                        <Calendar className="w-3 h-3" />
-                                        {lifeSpan.begin}{lifeSpan.end ? ` – ${lifeSpan.end}` : ' – present'}
-                                    </span>
-                                )}
-                                {listeners && (
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--color-bg-tertiary)] text-[var(--color-text-secondary)] border border-[var(--color-border)]">
-                                        <Users className="w-3 h-3" />
-                                        {formatListeners(listeners)}
-                                    </span>
-                                )}
-                            </div>
-                        )}
-
-                        {/* Local library stats */}
-                        {libraryStats.totalTracks > 0 && (
-                            <div className="flex items-center gap-3 mb-3 text-xs text-[var(--color-text-muted)]">
-                                <span className="inline-flex items-center gap-1">
-                                    <Music2 className="w-3 h-3" />
-                                    {libraryStats.totalTracks} track{libraryStats.totalTracks !== 1 ? 's' : ''}
-                                </span>
-                                {libraryStats.totalAlbums > 0 && (
-                                    <span className="inline-flex items-center gap-1">
-                                        <BookOpen className="w-3 h-3" />
-                                        {libraryStats.totalAlbums} album{libraryStats.totalAlbums !== 1 ? 's' : ''}
-                                    </span>
-                                )}
-                                {libraryStats.totalDuration > 60 && (
-                                    <span className="inline-flex items-center gap-1">
-                                        <Clock className="w-3 h-3" />
-                                        {formatDuration(libraryStats.totalDuration)}
-                                    </span>
-                                )}
-                            </div>
-                        )}
-
                         {/* Band members */}
                         {members && members.length > 0 && (
                             <div className="flex flex-wrap items-center gap-1 mb-3">
@@ -310,16 +320,117 @@ export const ArtistDetail: React.FC = () => {
                             </div>
                         )}
 
-                        {/* Genre tags */}
-                        {genres && genres.length > 0 && (
-                            <div className="flex flex-wrap gap-1.5 mb-3">
-                                {genres.slice(0, 8).map(g => (
-                                    <span key={g} className="px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--color-surface-variant)] text-[var(--color-text-muted)] border border-[var(--glass-border)]">
-                                        {g}
+                        {/* MusicBrainz metadata */}
+                        {(disambiguation || type || area || lifeSpan?.begin) && (
+                            <div className="flex flex-wrap items-center gap-3 mb-3 text-xs text-[var(--color-text-muted)]">
+                                {disambiguation && (
+                                    <span className="text-sm text-[var(--color-text-muted)] italic">{disambiguation}</span>
+                                )}
+                                {type && (
+                                    <span className="inline-flex items-center gap-1">
+                                        {type === 'Group' ? <Users className="w-3 h-3" /> : type === 'Person' ? <Mic2 className="w-3 h-3" /> : <Globe className="w-3 h-3" />}
+                                        {type}
                                     </span>
-                                ))}
+                                )}
+                                {area && (
+                                    <span className="inline-flex items-center gap-1">
+                                        <Globe className="w-3 h-3" />
+                                        {area}
+                                    </span>
+                                )}
+                                {lifeSpan?.begin && (
+                                    <span className="inline-flex items-center gap-1">
+                                        <Calendar className="w-3 h-3" />
+                                        {lifeSpan.begin}{lifeSpan.end ? ` – ${lifeSpan.end}` : ' – present'}
+                                    </span>
+                                )}
                             </div>
                         )}
+
+                        {/* Local library stats */}
+                        {(libraryStats.totalTracks > 0 || listeners) && (
+                            <div className="flex items-center gap-3 mb-3 text-xs text-[var(--color-text-muted)]">
+                                {libraryStats.totalTracks > 0 && (
+                                    <span className="inline-flex items-center gap-1">
+                                        <Music2 className="w-3 h-3" />
+                                        {libraryStats.totalTracks} track{libraryStats.totalTracks !== 1 ? 's' : ''}
+                                    </span>
+                                )}
+                                {libraryStats.totalAlbums > 0 && (
+                                    <span className="inline-flex items-center gap-1">
+                                        <BookOpen className="w-3 h-3" />
+                                        {libraryStats.totalAlbums} album{libraryStats.totalAlbums !== 1 ? 's' : ''}
+                                    </span>
+                                )}
+                                {libraryStats.totalDuration > 60 && (
+                                    <span className="inline-flex items-center gap-1">
+                                        <Clock className="w-3 h-3" />
+                                        {formatDuration(libraryStats.totalDuration)}
+                                    </span>
+                                )}
+                                {listeners && (
+                                    <span className="inline-flex items-center gap-1">
+                                        <Headphones className="w-3 h-3" />
+                                        {formatListeners(listeners)}
+                                    </span>
+                                )}
+                            </div>
+                        )}
+
+                        <div className="mt-4 mb-4 flex flex-wrap items-center gap-3">
+                            <button
+                                type="button"
+                                disabled
+                                title="Artist radio is not ready yet"
+                                className="flex items-center justify-center gap-2 px-8 py-3.5 bg-[var(--color-primary)] text-white font-bold text-sm tracking-widest uppercase rounded-full shadow-[0_4px_24px_rgba(16,185,129,0.22)] opacity-55 cursor-not-allowed w-full sm:w-auto"
+                            >
+                                <Play size={18} fill="currentColor" className="ml-1" />
+                                Play artist radio
+                            </button>
+
+                            <button
+                                ref={linksButtonRef}
+                                type="button"
+                                onClick={() => setLinksMenuOpen(open => !open)}
+                                disabled={allLinks.length === 0}
+                                aria-label="Artist links"
+                                aria-haspopup="menu"
+                                aria-expanded={linksMenuOpen}
+                                title={allLinks.length > 0 ? 'Artist links' : 'No artist links available'}
+                                className="absolute right-0 top-0 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] text-[var(--color-text-secondary)] shadow-[var(--shadow-sm)] transition-all hover:border-[var(--glass-border-hover)] hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none md:static md:z-auto md:h-12 md:w-12"
+                            >
+                                <Link2 className="w-5 h-5" />
+                            </button>
+
+                            <ContextMenuPortal
+                                open={linksMenuOpen && allLinks.length > 0}
+                                onClose={() => setLinksMenuOpen(false)}
+                                anchorRef={linksButtonRef}
+                                desktopWidth={248}
+                                desktopHeight={320}
+                            >
+                                {({ isMobile }) => (
+                                    <ContextMenuFrame isMobile={isMobile}>
+                                        <ContextMenuHeader
+                                            title="Artist links"
+                                            subtitle={`${allLinks.length} ${allLinks.length === 1 ? 'link' : 'links'}`}
+                                        />
+                                        <ContextMenuList className="max-h-64 overflow-y-auto">
+                                            {allLinks.map((link, i) => (
+                                                <ContextMenuLink
+                                                    key={`${link.url}-${i}`}
+                                                    href={link.url}
+                                                    icon={<ExternalLink className="h-[15px] w-[15px]" />}
+                                                    label={getLinkLabel(link.url, link.type)}
+                                                    secondary={link.type || undefined}
+                                                    onClick={() => setLinksMenuOpen(false)}
+                                                />
+                                            ))}
+                                        </ContextMenuList>
+                                    </ContextMenuFrame>
+                                )}
+                            </ContextMenuPortal>
+                        </div>
 
                         {bio && (
                             <div className="mt-1">
@@ -342,25 +453,91 @@ export const ArtistDetail: React.FC = () => {
                             </div>
                         )}
 
-                        {/* External links (file tags + MusicBrainz, deduplicated) */}
-                        {allLinks.length > 0 && (
-                            <div className="flex flex-wrap gap-2 mt-3">
-                                {allLinks.slice(0, 10).map((link, i) => (
-                                    <a
-                                        key={i}
-                                        href={link.url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-primary)] bg-[var(--color-surface-variant)] hover:bg-[var(--color-primary)]/10 border border-[var(--glass-border)] hover:border-[var(--glass-border-hover)] transition-colors motion-reduce:transition-none"
-                                    >
-                                        <ExternalLink className="w-3 h-3" />
-                                        {getLinkLabel(link.url, link.type)}
-                                    </a>
-                                ))}
+                        {(genres?.length || communityTags?.length) && (
+                            <div className="mt-4 space-y-2">
+                                {/* Genre tags */}
+                                {genres && genres.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {genres.slice(0, 8).map(g => (
+                                            <span key={g} className="px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--color-surface-variant)] text-[var(--color-text-muted)] border border-[var(--glass-border)]">
+                                                {g}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {/* Community tags from Last.fm + MusicBrainz */}
+                                {communityTags && communityTags.length > 0 && (
+                                    <div className="flex flex-wrap gap-1.5">
+                                        {communityTags.slice(0, 10).map(tag => (
+                                            <span
+                                                key={tag.name}
+                                                title={`From ${tag.providers.map(provider => provider === 'lastfm' ? 'Last.fm' : 'MusicBrainz').join(' + ')}${tag.count > 0 ? ` · ${tag.count}` : ''}`}
+                                                className="px-2.5 py-1 rounded-full text-[11px] font-semibold uppercase tracking-[0.16em] bg-emerald-500/10 text-[var(--color-primary)] border border-emerald-500/20"
+                                            >
+                                                {tag.name}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         )}
+
                     </div>
                 </div>
+
+                {popularLibraryTracks.length > 0 && (
+                    <section className="mb-12">
+                        <div className="flex items-center justify-between gap-4 mb-4 md:mb-6 border-b border-[var(--glass-border)] pb-2">
+                            <h3 className="font-semibold text-xl tracking-wide text-[var(--color-text-secondary)] flex items-center gap-2">
+                                <Sparkles className="w-4 h-4 text-[var(--color-primary)] opacity-70" />
+                                Popular in your library
+                            </h3>
+                            <button
+                                onClick={() => setPlaylist(popularLibraryTracks.map(entry => entry.track), 0)}
+                                className="btn btn-primary btn-sm"
+                            >
+                                <Play className="w-3.5 h-3.5" fill="currentColor" />
+                                Play Top 5
+                            </button>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+                            {popularLibraryTracks.map(({ track, rank, playcount, listeners }, index) => (
+                                <button
+                                    key={track.id}
+                                    onClick={() => setPlaylist(popularLibraryTracks.map(entry => entry.track), index)}
+                                    className="group relative overflow-hidden rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-bg)] p-3 text-left hover:border-[var(--glass-border-hover)] hover:bg-[var(--glass-bg-hover)] transition-all"
+                                >
+                                    <div className="flex md:block items-center gap-3">
+                                        <div className="relative w-14 h-14 md:w-full md:h-auto md:aspect-square shrink-0 overflow-hidden rounded-xl border border-black/10 dark:border-white/10 bg-black/10 dark:bg-white/10 mb-0 md:mb-3">
+                                            <AlbumArt artUrl={track.artUrl} artist={track.artist} className="w-full h-full object-cover" />
+                                            <div className="absolute inset-0 bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                                <Play className="w-6 h-6 text-white" fill="currentColor" />
+                                            </div>
+                                            <span className="absolute left-2 top-2 inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-black/55 px-2 text-xs font-bold text-white backdrop-blur-sm">
+                                                {rank}
+                                            </span>
+                                        </div>
+                                        <div className="min-w-0">
+                                            <div className="font-semibold text-sm text-[var(--color-text-primary)] truncate group-hover:text-[var(--color-primary)] transition-colors">
+                                                {track.title || track.path.split(/[\\/]/).pop()}
+                                            </div>
+                                            <div className="text-xs text-[var(--color-text-muted)] truncate mt-0.5">
+                                                {track.album || 'Unknown Album'}
+                                            </div>
+                                            {(playcount || listeners) && (
+                                                <div className="mt-2 flex items-center gap-1 text-[11px] text-[var(--color-text-muted)]">
+                                                    <Headphones className="w-3 h-3" />
+                                                    {formatCompactCount(playcount) || formatCompactCount(listeners)} Last.fm {playcount ? 'plays' : 'listeners'}
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </button>
+                            ))}
+                        </div>
+                    </section>
+                )}
 
                 {/* Primary Releases */}
             {[
@@ -380,6 +557,7 @@ export const ArtistDetail: React.FC = () => {
                                 artUrl={album.artUrl}
                                 subtitle={`${album.tracks.length} track${album.tracks.length !== 1 ? 's' : ''}`}
                                 linkTo={album.albumId ? `/library/album/${album.albumId}` : undefined}
+                                linkState={{ backLabel: 'Back to Artist' }}
                                 onPlay={() => setPlaylist(album.tracks, 0)}
                             />
                         ))}
@@ -412,6 +590,7 @@ export const ArtistDetail: React.FC = () => {
                                 artUrl={album.artUrl}
                                 subtitle={album.artist}
                                 linkTo={album.albumId ? `/library/album/${album.albumId}` : undefined}
+                                linkState={{ backLabel: 'Back to Artist' }}
                                 onPlay={() => setPlaylist(album.tracks, 0)}
                             />
                         ))}

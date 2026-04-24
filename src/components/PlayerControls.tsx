@@ -4,6 +4,7 @@ import { useVolumeSync } from '../hooks/useVolumeSync';
 import { Infinity, Cast, FileText } from 'lucide-react';
 import { castManager } from '../utils/CastManager';
 import { LyricsPanel } from './LyricsPanel';
+import { LoveButton } from './LoveButton';
 import {
   IconPrev,
   IconPlay,
@@ -163,6 +164,13 @@ export const PlayerControls: React.FC = () => {
           >
             <FileText size={18} />
           </button>
+        )}
+        {currentTrack && (
+          <LoveButton
+            track={currentTrack}
+            size={18}
+            className="w-9 h-9 hover:bg-black/5 dark:hover:bg-white/10"
+          />
         )}
         {showLyrics && currentTrack && (
           <div className="absolute bottom-full left-0 mb-3 w-64 bg-[var(--glass-bg)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-2xl p-4 shadow-2xl z-50">

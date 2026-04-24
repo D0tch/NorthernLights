@@ -30,6 +30,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { AlbumArt } from '../AlbumArt';
+import { LoveButton } from '../LoveButton';
 import { BackButton } from './BackButton';
 import { useDominantColor } from '../../hooks/useDominantColor';
 import { useToast } from '../../hooks/useToast';
@@ -141,6 +142,7 @@ const PlaylistTrackRow = memo(({
                 {artistLink ? (
                   <Link
                     to={artistLink}
+                    state={{ backLabel: 'Back to Playlist' }}
                     onClick={(event) => event.stopPropagation()}
                     className="hover:text-[var(--color-primary)] transition-colors no-underline text-inherit"
                   >
@@ -201,6 +203,7 @@ const PlaylistTrackRow = memo(({
         </div>
 
         <div className="opacity-100 md:opacity-0 md:group-hover:opacity-100 flex items-center transition-opacity">
+          <LoveButton track={track} size={16} className="p-1.5" />
           <button
             {...attributes}
             {...listeners}

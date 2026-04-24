@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { AlbumArt } from '../AlbumArt';
@@ -6,8 +6,10 @@ import { parseArtists } from '../../utils/artistUtils';
 import { formatTime } from '../../utils/formatTime';
 import { BackButton } from './BackButton';
 import { useAlbumData } from '../../hooks/useAlbumData';
+import { LoveButton } from '../LoveButton';
+import { ContextMenuFrame, ContextMenuHeader, ContextMenuLink, ContextMenuList, ContextMenuPortal } from '../ContextMenu';
 
-import { MoreHorizontal, Play, Clock, ExternalLink, Headphones, BarChart2 } from 'lucide-react';
+import { MoreHorizontal, Play, Clock, ExternalLink, Headphones, BarChart2, Link2, Music2, Calendar, Gauge } from 'lucide-react';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -82,6 +84,8 @@ export const AlbumDetail: React.FC = () => {
     const artists = usePlayerStore(state => state.artists);
     const setPlaylist = usePlayerStore(state => state.setPlaylist);
     const openContextMenu = usePlayerStore(state => state.openContextMenu);
+    const [linksMenuOpen, setLinksMenuOpen] = useState(false);
+    const linksButtonRef = useRef<HTMLButtonElement>(null);
 
     const albumInfo = useMemo(() => albums.find(a => a.id === albumId), [albums, albumId]);
 
@@ -236,7 +240,7 @@ export const AlbumDetail: React.FC = () => {
     const handlePlayTrack = (index: number) => setPlaylist(sortedTracks, index);
 
     return (
-        <div className="flex flex-col overflow-hidden p-4 md:p-8 lg:p-12 flex-1">
+        <div className="relative flex flex-col overflow-hidden p-4 md:p-8 lg:p-12 flex-1">
 
             <div className="shrink-0 mb-6"><BackButton onClick={() => navigate(-1)} /></div>
 
@@ -250,8 +254,7 @@ export const AlbumDetail: React.FC = () => {
 
                     <h1 className="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight my-2 leading-tight text-[var(--color-text-primary)] line-clamp-2" title={albumTitle}>{albumTitle}</h1>
 
-                    <h2 className="text-xl text-[var(--color-text-secondary)] flex flex-wrap justify-center md:justify-start items-center gap-2 mb-2 w-full truncate">
-                        <span className="truncate">
+                    <div className="text-base md:text-xl text-[var(--color-text-secondary)] flex flex-wrap justify-center md:justify-start items-center gap-2 mb-3 w-full">
                         {headerArtists.map((a, i) => {
                             const link = getArtistLink(a);
                             return (
@@ -260,6 +263,7 @@ export const AlbumDetail: React.FC = () => {
                                     {link ? (
                                         <Link
                                             to={link}
+                                            state={{ backLabel: 'Back to Album' }}
                                             className="hover:text-[var(--color-primary)] transition-colors no-underline text-inherit"
                                         >{a}</Link>
                                     ) : (
@@ -268,87 +272,50 @@ export const AlbumDetail: React.FC = () => {
                                 </React.Fragment>
                             );
                         })}
-                        </span>
-                        <span className="hidden md:inline shrink-0"> • </span>
-                        <span className="shrink-0 text-sm md:text-xl text-[var(--color-text-muted)]">
+                    </div>
+
+                    <div className="flex flex-wrap justify-center md:justify-start gap-3 mb-3 text-xs text-[var(--color-text-muted)]">
+                        <span className="inline-flex items-center gap-1">
+                            <Music2 className="w-3 h-3" />
                             {albumTracks.length} track{albumTracks.length !== 1 ? 's' : ''}
-                            {albumYear && ` • ${albumYear}`}
-                            {totalDuration > 0 && (
-                                <span className="inline-flex items-center gap-1 ml-1">
-                                    • <Clock className="w-3.5 h-3.5 inline" /> {formatDuration(totalDuration)}
-                                </span>
-                            )}
                         </span>
-                    </h2>
-
-                    {/* Genre tags */}
-                    {allGenres.length > 0 && (
-                        <div className="flex flex-wrap justify-center md:justify-start gap-1.5 mt-1 mb-3">
-                            {allGenres.map(g => (
-                                <span key={g} className="inline-block text-xs font-semibold uppercase tracking-widest px-3 py-1 rounded-full border border-[var(--glass-border)] bg-[var(--color-surface-variant)] text-[var(--color-primary)] backdrop-blur-sm">
-                                    {g}
-                                </span>
-                            ))}
-                        </div>
-                    )}
-
-                    {/* Quality badge */}
-                    {qualityLabel && (
-                        <div className="mb-3">
-                            <span className="text-xs font-medium px-2 py-0.5 rounded-full bg-[var(--color-surface-variant)] text-[var(--color-text-muted)] border border-[var(--glass-border)]">
+                        {albumYear && (
+                            <span className="inline-flex items-center gap-1">
+                                <Calendar className="w-3 h-3" />
+                                {albumYear}
+                            </span>
+                        )}
+                        {totalDuration > 0 && (
+                            <span className="inline-flex items-center gap-1">
+                                <Clock className="w-3 h-3" />
+                                {formatDuration(totalDuration)}
+                            </span>
+                        )}
+                        {qualityLabel && (
+                            <span className="inline-flex items-center gap-1">
+                                <Gauge className="w-3 h-3" />
                                 {qualityLabel}
                             </span>
-                        </div>
-                    )}
-
-                    {/* Last.fm listener / playcount stats */}
-                    {(lfmListeners || lfmPlaycount) && (
-                        <div className="flex flex-wrap justify-center md:justify-start gap-3 mb-3 text-sm text-[var(--color-text-muted)]">
+                        )}
+                        {(lfmListeners || lfmPlaycount) && (
+                            <>
                             {lfmListeners && (
                                 <span className="inline-flex items-center gap-1">
-                                    <Headphones className="w-3.5 h-3.5" />
+                                    <Headphones className="w-3 h-3" />
                                     {formatCount(lfmListeners)} listeners
                                 </span>
                             )}
                             {lfmPlaycount && (
                                 <span className="inline-flex items-center gap-1">
-                                    <BarChart2 className="w-3.5 h-3.5" />
+                                    <BarChart2 className="w-3 h-3" />
                                     {formatCount(lfmPlaycount)} plays
                                 </span>
                             )}
-                        </div>
-                    )}
+                            </>
+                        )}
+                    </div>
 
-                    {/* Last.fm tags (supplemental genres) */}
-                    {lfmTags && lfmTags.length > 0 && (
-                        <div className="flex flex-wrap justify-center md:justify-start gap-1.5 mb-3">
-                            {lfmTags.slice(0, 5).map(tag => (
-                                <span key={tag} className="inline-block text-xs font-semibold uppercase tracking-widest px-3 py-1 rounded-full border border-[var(--glass-border)] bg-[var(--color-surface-variant)] text-[var(--color-text-secondary)] backdrop-blur-sm">
-                                    {tag}
-                                </span>
-                            ))}
-                        </div>
-                    )}
-
-                    {/* File-embedded links */}
-                    {fileLinks.length > 0 && (
-                        <div className="flex flex-wrap justify-center md:justify-start gap-2 mb-3">
-                            {fileLinks.slice(0, 8).map((link, i) => (
-                                <a
-                                    key={i}
-                                    href={link.url}
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs text-[var(--color-text-muted)] hover:text-[var(--color-primary)] bg-[var(--color-surface-variant)] hover:bg-[var(--color-primary)]/10 border border-[var(--glass-border)] hover:border-[var(--glass-border-hover)] transition-colors motion-reduce:transition-none"
-                                >
-                                    <ExternalLink className="w-3 h-3" />
-                                    {getLinkLabel(link.url, link.type)}
-                                </a>
-                            ))}
-                        </div>
-                    )}
-
-                    <div className="mt-2 flex justify-center md:justify-start w-full md:w-auto">
+                    <div className="mt-2 flex flex-wrap justify-center md:justify-start gap-3 w-full md:w-auto">
                         <button
                             onClick={handlePlayAll}
                             className="flex items-center justify-center gap-2 px-8 py-3.5 bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white font-bold text-sm tracking-widest uppercase rounded-full shadow-[0_4px_24px_rgba(16,185,129,0.3)] hover:shadow-[0_8px_32px_rgba(16,185,129,0.4)] hover:scale-105 active:scale-95 motion-reduce:transition-none motion-reduce:hover:scale-100 transition-all duration-300 w-full md:w-auto"
@@ -356,6 +323,49 @@ export const AlbumDetail: React.FC = () => {
                             <Play size={18} fill="currentColor" className="ml-1" />
                             PLAY {releaseType.toUpperCase()}
                         </button>
+
+                        <button
+                            ref={linksButtonRef}
+                            type="button"
+                            onClick={() => setLinksMenuOpen(open => !open)}
+                            disabled={fileLinks.length === 0}
+                            aria-label="Album links"
+                            aria-haspopup="menu"
+                            aria-expanded={linksMenuOpen}
+                            title={fileLinks.length > 0 ? 'Album links' : 'No album links available'}
+                            className="absolute right-4 top-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] text-[var(--color-text-secondary)] shadow-[var(--shadow-sm)] transition-all hover:border-[var(--glass-border-hover)] hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none md:static md:z-auto md:h-12 md:w-12"
+                        >
+                            <Link2 className="w-5 h-5" />
+                        </button>
+
+                        <ContextMenuPortal
+                            open={linksMenuOpen && fileLinks.length > 0}
+                            onClose={() => setLinksMenuOpen(false)}
+                            anchorRef={linksButtonRef}
+                            desktopWidth={248}
+                            desktopHeight={320}
+                        >
+                            {({ isMobile }) => (
+                                <ContextMenuFrame isMobile={isMobile}>
+                                    <ContextMenuHeader
+                                        title="Album links"
+                                        subtitle={`${fileLinks.length} ${fileLinks.length === 1 ? 'link' : 'links'}`}
+                                    />
+                                    <ContextMenuList className="max-h-64 overflow-y-auto">
+                                        {fileLinks.map((link, i) => (
+                                            <ContextMenuLink
+                                                key={`${link.url}-${i}`}
+                                                href={link.url}
+                                                icon={<ExternalLink className="h-[15px] w-[15px]" />}
+                                                label={getLinkLabel(link.url, link.type)}
+                                                secondary={link.type || undefined}
+                                                onClick={() => setLinksMenuOpen(false)}
+                                            />
+                                        ))}
+                                    </ContextMenuList>
+                                </ContextMenuFrame>
+                            )}
+                        </ContextMenuPortal>
                     </div>
                 </div>
             </div>
@@ -364,6 +374,30 @@ export const AlbumDetail: React.FC = () => {
                 <p className="shrink-0 text-sm text-[var(--color-text-secondary)] leading-relaxed mb-4 mt-2 line-clamp-3 max-w-3xl">
                     {lfmDescription}
                 </p>
+            )}
+
+            {(allGenres.length > 0 || (lfmTags && lfmTags.length > 0)) && (
+                <div className="shrink-0 mb-4 space-y-2">
+                    {allGenres.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                            {allGenres.map(g => (
+                                <span key={g} className="inline-block text-xs font-semibold uppercase tracking-widest px-3 py-1 rounded-full border border-[var(--glass-border)] bg-[var(--color-surface-variant)] text-[var(--color-primary)] backdrop-blur-sm">
+                                    {g}
+                                </span>
+                            ))}
+                        </div>
+                    )}
+
+                    {lfmTags && lfmTags.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5">
+                            {lfmTags.slice(0, 5).map(tag => (
+                                <span key={tag} className="inline-block text-xs font-semibold uppercase tracking-widest px-3 py-1 rounded-full border border-[var(--glass-border)] bg-[var(--color-surface-variant)] text-[var(--color-text-secondary)] backdrop-blur-sm">
+                                    {tag}
+                                </span>
+                            ))}
+                        </div>
+                    )}
+                </div>
             )}
 
             <div className="mt-4 overflow-y-auto flex-1 min-h-0 hide-scrollbar pb-6">
@@ -414,6 +448,7 @@ export const AlbumDetail: React.FC = () => {
                                                         {link ? (
                                                             <Link
                                                                 to={link}
+                                                                state={{ backLabel: 'Back to Album' }}
                                                                 onClick={(e) => e.stopPropagation()}
                                                                 className="hover:text-[var(--color-primary)] transition-colors no-underline text-inherit"
                                                             >{a}</Link>
@@ -427,6 +462,11 @@ export const AlbumDetail: React.FC = () => {
                                     )}
                                 </div>
                                 <div className="text-[var(--color-text-muted)] text-right group-hover:text-[var(--color-text-primary)] transition-colors flex flex-row items-center justify-end md:gap-3">
+                                    <LoveButton
+                                        track={track}
+                                        size={16}
+                                        className="p-1.5 opacity-50 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
+                                    />
                                     <span className="w-12 text-right hidden md:inline text-sm tabular-nums">
                                         {formatTime(track.duration, '--:--')}
                                     </span>

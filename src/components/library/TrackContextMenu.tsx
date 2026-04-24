@@ -6,20 +6,18 @@ import {
     Play, Plus, ListPlus, Check,
     ChevronRight, ChevronLeft,
     Search, X, Disc3, Mic2, ListMinus,
+    Heart,
 } from 'lucide-react';
+import {
+    ContextMenuButton,
+    ContextMenuDivider,
+    ContextMenuFrame,
+    ContextMenuHeader,
+    ContextMenuList,
+    useIsMobile,
+} from '../ContextMenu';
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
-
-function useIsMobile(breakpoint = 640) {
-    const [isMobile, setIsMobile] = useState(() => window.innerWidth < breakpoint);
-    useEffect(() => {
-        const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
-        const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-        mq.addEventListener('change', handler);
-        return () => mq.removeEventListener('change', handler);
-    }, [breakpoint]);
-    return isMobile;
-}
 
 // Normalise track.artists → string[]
 function getArtistNames(track: any): string[] {
@@ -150,33 +148,6 @@ const FilterableListPanel: React.FC<FilterableListPanelProps> = ({
     );
 };
 
-// ─── Shared small helpers ─────────────────────────────────────────────────────
-
-const Divider = () => <div className="h-px bg-[var(--glass-border)] my-1.5 mx-3" />;
-
-const MenuButton: React.FC<{
-    icon: React.ReactNode;
-    label: string;
-    onClick: () => void;
-    trailingIcon?: React.ReactNode;
-    danger?: boolean;
-}> = ({ icon, label, onClick, trailingIcon, danger }) => (
-    <button
-        onClick={onClick}
-        className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm transition-colors active:bg-white/10
-            ${danger
-                ? 'text-rose-500 hover:bg-rose-500/10'
-                : 'text-[var(--color-text-primary)] hover:bg-white/5'
-            }`}
-    >
-        <span className={`flex-shrink-0 ${danger ? 'text-rose-500' : 'text-[var(--color-text-secondary)]'}`}>{icon}</span>
-        <span className="flex-1 text-left">{label}</span>
-        {trailingIcon && (
-            <span className="text-[var(--color-text-muted)] flex-shrink-0">{trailingIcon}</span>
-        )}
-    </button>
-);
-
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export const TrackContextMenu: React.FC = () => {
@@ -184,7 +155,7 @@ export const TrackContextMenu: React.FC = () => {
         contextMenu, closeContextMenu,
         playlists, artists: artistEntities,
         addTracksToUserPlaylist, replaceTracksInUserPlaylist,
-        playNext, setPlaylist,
+        playNext, setPlaylist, toggleTrackLove,
     } = usePlayerStore();
 
     const navigate  = useNavigate();
@@ -247,12 +218,21 @@ export const TrackContextMenu: React.FC = () => {
 
     // ── actions ───────────────────────────────────────────────────────────────
     const done = (msg: string) => {
+        nav.reset();
         setAddedStatus(msg);
         setTimeout(() => closeContextMenu(), 900);
     };
 
     const handlePlayNow  = () => { setPlaylist([track], 0); closeContextMenu(); };
     const handlePlayNext = () => { playNext(track); done('Added to queue'); };
+    const handleToggleLove = async () => {
+        try {
+            await toggleTrackLove(track);
+            done(track.isLoved ? 'Removed favorite' : 'Loved track');
+        } catch {
+            setAddedStatus(null);
+        }
+    };
 
     const handleAddToPlaylist = async (playlistId: string) => {
         try { await addTracksToUserPlaylist(playlistId, [track.id]); done('Added to playlist'); }
@@ -301,62 +281,56 @@ export const TrackContextMenu: React.FC = () => {
 
     // ── inner shell — contains main + all sub-panels stacked absolutely ───────
     const inner = (
-        <div
+        <ContextMenuFrame
             ref={menuRef}
-            className={`
-                relative overflow-hidden
-                bg-[var(--glass-bg)] backdrop-blur-3xl
-                border border-[var(--glass-border)] rounded-2xl shadow-2xl
-                ${isMobile ? 'w-full rounded-b-none' : 'w-[248px]'}
-            `}
-            onContextMenu={e => e.preventDefault()}
+            isMobile={isMobile}
         >
-            {/* ── MAIN PANEL ── slides left when a sub-panel is active ──────── */}
+            {/* ── MAIN PANEL ── fades out when a sub-panel is active ───────── */}
             <div
                 style={{
-                    transition: 'transform 0.28s cubic-bezier(0.4,0,0.2,1), opacity 0.28s',
-                    transform: subPanelOpen ? 'translateX(-18px)' : 'translateX(0)',
+                    transition: 'opacity 0.2s',
                     opacity:   subPanelOpen ? 0 : 1,
                     pointerEvents: subPanelOpen ? 'none' : 'auto',
                 }}
             >
                 {/* Track header */}
-                <div className="px-4 py-3 border-b border-[var(--glass-border)]">
-                    <div className="text-sm font-semibold text-[var(--color-text-primary)] truncate">
-                        {track.title}
-                    </div>
-                    <div className="text-xs text-[var(--color-text-muted)] truncate mt-0.5">
-                        {artistNames.join(', ') || track.artist}
-                    </div>
-                </div>
+                <ContextMenuHeader
+                    title={track.title}
+                    subtitle={artistNames.join(', ') || track.artist}
+                />
 
                 {addedStatus ? (
                     <div className="p-5 flex items-center justify-center gap-2 text-[var(--color-primary)] text-sm font-medium">
                         <Check size={16} /> {addedStatus}
                     </div>
                 ) : (
-                    <div className="py-1.5">
-                        <MenuButton icon={<Play size={15} />} label="Play Now"  onClick={handlePlayNow}  />
-                        <MenuButton icon={<Plus size={15} />} label="Play Next" onClick={handlePlayNext} />
+                    <ContextMenuList>
+                        <ContextMenuButton icon={<Play size={15} />} label="Play Now"  onClick={handlePlayNow}  />
+                        <ContextMenuButton icon={<Plus size={15} />} label="Play Next" onClick={handlePlayNext} />
+                        <ContextMenuButton
+                            icon={<Heart size={15} fill={track.isLoved ? 'currentColor' : 'none'} />}
+                            label={track.isLoved ? 'Remove Favorite' : 'Love Track'}
+                            onClick={() => void handleToggleLove()}
+                        />
 
                         {/* Go to Album */}
                         {track.albumId && (
                             <>
-                                <Divider />
-                                <MenuButton icon={<Disc3 size={15} />} label="Go to Album" onClick={handleGoToAlbum} />
+                                <ContextMenuDivider />
+                                <ContextMenuButton icon={<Disc3 size={15} />} label="Go to Album" onClick={handleGoToAlbum} />
                             </>
                         )}
 
                         {/* Go to Artist — direct if single, sub-panel if multiple */}
                         {artistNames.length === 1 && (
-                            <MenuButton
+                            <ContextMenuButton
                                 icon={<Mic2 size={15} />}
                                 label="Go to Artist"
                                 onClick={() => handleGoToArtist(artistNames[0])}
                             />
                         )}
                         {multiArtist && (
-                            <MenuButton
+                            <ContextMenuButton
                                 icon={<Mic2 size={15} />}
                                 label="Go to Artist"
                                 onClick={() => nav.push('artists')}
@@ -367,8 +341,8 @@ export const TrackContextMenu: React.FC = () => {
                         {/* Add to Playlist */}
                         {playlists.length > 0 && (
                             <>
-                                <Divider />
-                                <MenuButton
+                                <ContextMenuDivider />
+                                <ContextMenuButton
                                     icon={<ListPlus size={15} />}
                                     label="Add to Playlist"
                                     onClick={() => nav.push('playlists')}
@@ -380,8 +354,8 @@ export const TrackContextMenu: React.FC = () => {
                         {/* Remove from Playlist — only when opened from within a playlist */}
                         {contextPlaylistId && playlistTrackIndex !== undefined && (
                             <>
-                                <Divider />
-                                <MenuButton
+                                <ContextMenuDivider />
+                                <ContextMenuButton
                                     icon={<ListMinus size={15} />}
                                     label="Remove from Playlist"
                                     onClick={() => void handleRemoveFromPlaylist()}
@@ -389,7 +363,7 @@ export const TrackContextMenu: React.FC = () => {
                                 />
                             </>
                         )}
-                    </div>
+                    </ContextMenuList>
                 )}
             </div>
 
@@ -433,7 +407,7 @@ export const TrackContextMenu: React.FC = () => {
              * Then add a MenuButton in the main panel:
              *     <MenuButton ... onClick={() => nav.push('my-panel')} trailingIcon={<ChevronRight size={15} />} />
              */}
-        </div>
+        </ContextMenuFrame>
     );
 
     // ── MOBILE: bottom-sheet ──────────────────────────────────────────────────

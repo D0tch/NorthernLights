@@ -9,8 +9,17 @@ interface ArtistData {
     lifeSpan?: { begin?: string; end?: string };
     links?: { url: string; type: string }[];
     genres?: string[];
+    communityTags?: { name: string; count: number; providers: Array<'lastfm' | 'musicbrainz'> }[];
     listeners?: string;
     members?: string[];
+}
+
+export interface ArtistTopTrackData {
+    name: string;
+    playcount?: string;
+    listeners?: string;
+    mbid?: string;
+    url?: string;
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -54,6 +63,14 @@ export const fetchArtistData = async (artistName: string, mbArtistId?: string | 
     }
 
     return data;
+};
+
+export const fetchArtistTopTracks = async (artistName: string, limit: number = 25): Promise<ArtistTopTrackData[]> => {
+    if (!artistName) return [];
+
+    const params = new URLSearchParams({ name: artistName, limit: String(limit) });
+    const data = await serverFetch<{ tracks: ArtistTopTrackData[] }>(`/api/providers/external/artist-top-tracks?${params}`);
+    return data?.tracks || [];
 };
 
 interface AlbumData {

@@ -31,6 +31,7 @@ export interface TrackInfo {
   album?: string;
   genre?: string;
   duration?: number;
+  playCount?: number;
   trackNumber?: number;
   discNumber?: number;
   year?: number;
@@ -63,6 +64,7 @@ export interface TrackInfo {
   rawUrl?: string;
   artUrl?: string;
   playlistAddedAt?: number;
+  isLoved?: boolean;
   _pictureData?: { data: string; format: string };
   _format?: string;
   isInfinity?: boolean;

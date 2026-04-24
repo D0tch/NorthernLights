@@ -10,6 +10,7 @@ interface ArtistDataState {
   lifeSpan: { begin?: string; end?: string } | undefined;
   links: { url: string; type: string }[] | undefined;
   genres: string[] | undefined;
+  communityTags: { name: string; count: number; providers: Array<'lastfm' | 'musicbrainz'> }[] | undefined;
   listeners: string | undefined;
   members: string[] | undefined;
   isLoading: boolean;
@@ -27,6 +28,7 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
   const [lifeSpan, setLifeSpan] = useState<{ begin?: string; end?: string } | undefined>();
   const [links, setLinks] = useState<{ url: string; type: string }[] | undefined>();
   const [genres, setGenres] = useState<string[] | undefined>();
+  const [communityTags, setCommunityTags] = useState<{ name: string; count: number; providers: Array<'lastfm' | 'musicbrainz'> }[] | undefined>();
   const [listeners, setListeners] = useState<string | undefined>();
   const [members, setMembers] = useState<string[] | undefined>();
   const [isLoading, setIsLoading] = useState(false);
@@ -53,6 +55,7 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
       setLifeSpan(undefined);
       setLinks(undefined);
       setGenres(undefined);
+      setCommunityTags(undefined);
       setListeners(undefined);
       setMembers(undefined);
       setError(undefined);
@@ -72,6 +75,7 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
             setLifeSpan(data.lifeSpan);
             setLinks(data.links);
             setGenres(data.genres);
+            setCommunityTags(data.communityTags);
             setListeners(data.listeners);
             setMembers(data.members);
             setError(undefined);
@@ -94,5 +98,5 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
     };
   }, [artistName, mbArtistId, enabled, debounceMs, lastFetchedName]);
 
-  return { imageUrl, bio, disambiguation, area, type, lifeSpan, links, genres, listeners, members, isLoading, error };
+  return { imageUrl, bio, disambiguation, area, type, lifeSpan, links, genres, communityTags, listeners, members, isLoading, error };
 };

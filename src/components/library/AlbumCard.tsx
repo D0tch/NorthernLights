@@ -11,6 +11,7 @@ interface AlbumCardProps {
     onPlay: (e: React.MouseEvent) => void;
     onOpen?: () => void;
     linkTo?: string;
+    linkState?: unknown;
 }
 
 export const AlbumCardSkeleton: React.FC = () => (
@@ -23,7 +24,7 @@ export const AlbumCardSkeleton: React.FC = () => (
     </div>
 );
 
-export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl, subtitle, onPlay, onOpen, linkTo }) => {
+export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl, subtitle, onPlay, onOpen, linkTo, linkState }) => {
     return (
         <div
             className="group flex flex-col relative cursor-pointer"
@@ -41,6 +42,7 @@ export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl
             {linkTo && (
                 <Link 
                     to={linkTo} 
+                    state={linkState}
                     className="absolute inset-0 z-10 rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
                     aria-label={`View album: ${title}`}
                 />
@@ -98,4 +100,3 @@ export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl
 });
 
 AlbumCard.displayName = 'AlbumCard';
-

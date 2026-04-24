@@ -214,6 +214,7 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                                         subtitle={album.artist}
                                         onPlay={(e) => { if (explicitTracks.length) setPlaylist(explicitTracks, 0); }}
                                         linkTo={albumId ? `/library/album/${albumId}` : undefined}
+                                        linkState={{ backLabel: 'Back to Library' }}
                                     />
                                 );
                             })}
@@ -228,7 +229,7 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                                 const entity = artistEntities.find((a: any) => a.name?.toLowerCase() === artistName.toLowerCase());
                                 if (!entity) return <ArtistCard key={artistName} artist={artistName} />;
                                 return (
-                                    <Link key={artistName} to={`/library/artist/${entity.id}`} className="no-underline">
+                                    <Link key={artistName} to={`/library/artist/${entity.id}`} state={{ backLabel: 'Back to Library' }} className="no-underline">
                                         <ArtistCard artist={artistName} />
                                     </Link>
                                 );
@@ -247,7 +248,7 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                                     const entity = genreEntities.find((g: any) => g.name?.toLowerCase() === genreName.toLowerCase());
                                     if (!entity) return <GenreCard key={genreName} genre={genreName} />;
                                     return (
-                                        <Link key={genreName} to={`/library/genre/${entity.id}`} className="no-underline">
+                                        <Link key={genreName} to={`/library/genre/${entity.id}`} state={{ backLabel: 'Back to Library' }} className="no-underline">
                                             <GenreCard genre={genreName} />
                                         </Link>
                                     );

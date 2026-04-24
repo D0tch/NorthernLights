@@ -5,6 +5,7 @@ import ProgressBar from './ProgressBar';
 import { useSwipe } from '../hooks/useSwipe';
 import { castManager } from '../utils/CastManager';
 import { LyricsPanel } from './LyricsPanel';
+import { LoveButton } from './LoveButton';
 
 interface MobileNowPlayingProps {
   onClose: () => void;
@@ -74,7 +75,11 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
           <X size={18} />
         </button>
         <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Now Playing</span>
-        <div className="w-9" /> {/* spacer */}
+        {currentTrack ? (
+          <LoveButton track={currentTrack} size={20} className="w-9 h-9 bg-white/10" />
+        ) : (
+          <div className="w-9" />
+        )}
       </div>
 
       {/* Scrollable content */}

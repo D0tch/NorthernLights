@@ -210,6 +210,27 @@ const App: React.FC = () => {
     }
   }, [isOnline, addToast]);
 
+  // Surface MusicBrainz OAuth callback status from the redirect back to the app.
+  // Lives at App level (not MetadataTab) so the outcome is visible regardless
+  // of which route the user lands on after the redirect.
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('mb_connected');
+    const error = params.get('mb_error');
+    if (!connected && !error) return;
+    if (connected) {
+      addToast('MusicBrainz connected successfully', 'success');
+      usePlayerStore.getState().loadSettings();
+    } else if (error) {
+      addToast(`MusicBrainz authorization failed: ${error}`, 'error');
+    }
+    params.delete('mb_connected');
+    params.delete('mb_error');
+    const query = params.toString();
+    const cleanUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`;
+    window.history.replaceState({}, '', cleanUrl);
+  }, [addToast]);
+
   const handleApplyPwaUpdate = React.useCallback(() => {
     if (playbackState === 'playing') {
       playbackManager.persistContinuitySnapshot();

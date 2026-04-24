@@ -258,6 +258,7 @@ export interface PlayerState {
 
   // Library Actions
   deleteTrackFromLibrary: (trackId: string) => Promise<void>;
+  toggleTrackLove: (track: TrackInfo) => Promise<void>;
 
   // Play Queue Actions
   setPlaylist: (tracks: TrackInfo[], startIndex?: number) => Promise<void>;
@@ -1130,6 +1131,51 @@ export const usePlayerStore = create<PlayerState>()(
           if (uniqueNew.length === 0) return state;
           return { library: [...state.library, ...uniqueNew] };
         }),
+
+        toggleTrackLove: async (track: TrackInfo) => {
+          if (!track?.id) return;
+          const nextLoved = !track.isLoved;
+          const applyLoved = (isLoved: boolean) => set((state: PlayerState) => {
+            const updateTrack = (candidate: TrackInfo) =>
+              candidate.id === track.id ? { ...candidate, isLoved } : candidate;
+            return {
+              library: state.library.map(updateTrack),
+              playlist: state.playlist.map(updateTrack),
+              playlists: state.playlists.map((playlist) => ({
+                ...playlist,
+                tracks: playlist.tracks.map(updateTrack),
+              })),
+              contextMenu: state.contextMenu && state.contextMenu.track.id === track.id
+                ? { ...state.contextMenu, track: { ...state.contextMenu.track, isLoved } }
+                : state.contextMenu,
+            };
+          });
+
+          applyLoved(nextLoved);
+
+          try {
+            const authHeaders = (get() as any).getAuthHeader();
+            const res = await fetch('/api/library/love', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...authHeaders },
+              body: JSON.stringify({ trackId: track.id, loved: nextLoved }),
+            });
+            if (!res.ok) throw new Error(`Love update failed with status ${res.status}`);
+
+            const data = await res.json().catch(() => null);
+            const failedProviders = Array.isArray(data?.providers)
+              ? data.providers.filter((provider: any) => provider.status === 'failed')
+              : [];
+            if (failedProviders.length > 0) {
+              get().addToast('Saved locally; one provider sync failed', 'info');
+            }
+          } catch (error) {
+            applyLoved(!!track.isLoved);
+            get().addToast('Failed to update favorite', 'error');
+            console.error('Failed to update loved track', error);
+            throw error;
+          }
+        },
 
         deleteTrackFromLibrary: async (trackId: string) => {
           // This would ideally hit a DELETE /api/library/:id endpoint

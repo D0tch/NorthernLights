@@ -5,6 +5,7 @@ import { Link } from 'react-router-dom';
 import { GripVertical, ChevronUp, ChevronDown, MoreHorizontal } from 'lucide-react';
 import { formatTime } from '../utils/formatTime';
 import { AlbumArt } from './AlbumArt';
+import { LoveButton } from './LoveButton';
 import type { TrackInfo } from '../utils/fileSystem';
 
 export interface PlaylistItemProps {
@@ -135,6 +136,7 @@ export const PlaylistItem = memo(({
           </div>
           
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+            <LoveButton track={track} size={15} className="p-1" />
             <button
               aria-label="More options"
               onClick={(e) => {

@@ -52,8 +52,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     const tabs = [
         { id: 'My Account', label: 'My Account', category: 'User Settings' },
         { id: 'Appearance', label: 'Appearance', category: 'App Settings' },
-        { id: 'Library', label: 'Library', category: 'App Settings' },
-        { id: 'Metadata', label: 'Metadata', category: 'App Settings' },
+        ...(isAdmin ? [
+            { id: 'Library', label: 'Library', category: 'App Settings' },
+            { id: 'Metadata', label: 'Metadata', category: 'App Settings' },
+        ] : []),
         { id: 'Playback', label: 'Playback', category: 'App Settings' },
         ...(isAdmin ? [
             { id: 'System', label: 'System', category: 'Server Settings' },
@@ -233,8 +235,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                         <div className="max-w-2xl mx-auto w-full relative z-10">
                             {activeTab === 'My Account' && <AccountTab onClose={handleClose} />}
                             {activeTab === 'Appearance' && <AppearanceTab />}
-                            {activeTab === 'Library' && <LibraryTab />}
-                            {activeTab === 'Metadata' && <MetadataTab />}
+                            {isAdmin && activeTab === 'Library' && <LibraryTab />}
+                            {isAdmin && activeTab === 'Metadata' && <MetadataTab />}
                             {activeTab === 'Playback' && <PlaybackTab />}
                             
                             {isAdmin && (

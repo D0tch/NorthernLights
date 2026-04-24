@@ -6,6 +6,7 @@ import { Search as SearchIcon, X, Play, MoreHorizontal, ArrowLeft } from 'lucide
 import { TrackInfo } from '../utils/fileSystem';
 import { AlbumArt } from './AlbumArt';
 import { ArtistInitial } from './library/ArtistInitial';
+import { LoveButton } from './LoveButton';
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -164,6 +165,7 @@ const SearchResults: React.FC<ResultsProps> = ({
                                 >
                                     <MoreHorizontal size={16} />
                                 </button>
+                                <LoveButton track={track} size={15} className="p-2 flex-shrink-0" />
                             </div>
                         ))}
                     </div>
@@ -415,7 +417,7 @@ export const GlobalSearch: React.FC = () => {
     // ── mobile full-screen overlay portal ────────────────────────────────────
     const mobileOverlay = isMobile && isExpanded &&
         createPortal(
-            <div className="fixed inset-0 z-[200] flex flex-col bg-[var(--color-bg)]">
+            <div className="fixed inset-0 z-[200] flex flex-col bg-[var(--color-background)]">
                 {/* Header bar */}
                 <div className="flex items-center gap-3 px-4 py-3 border-b border-black/10 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl">
                     <button
