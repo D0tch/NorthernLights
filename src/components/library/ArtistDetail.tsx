@@ -10,7 +10,8 @@ import { AlbumCard, AlbumCardSkeleton } from './AlbumCard';
 import { BackButton } from './BackButton';
 import { FadedHeroImage } from './FadedHeroImage';
 import { ArtistInitial } from './ArtistInitial';
-import { ExternalLink, Globe, Users, Mic2, Calendar, Sparkles, Music2, Clock, BookOpen, Play, Headphones, Link2 } from 'lucide-react';
+import { formatTime } from '../../utils/formatTime';
+import { ExternalLink, Globe, Users, Mic2, Calendar, Sparkles, Music2, Clock, BookOpen, Play, Headphones, Link2, Disc3 } from 'lucide-react';
 import { ContextMenuFrame, ContextMenuHeader, ContextMenuLink, ContextMenuList, ContextMenuPortal } from '../ContextMenu';
 
 // ─── Link label helpers ───────────────────────────────────────────────────────
@@ -139,6 +140,7 @@ export const ArtistDetail: React.FC = () => {
     });
     const [bioExpanded, setBioExpanded] = useState(false);
     const [linksMenuOpen, setLinksMenuOpen] = useState(false);
+    const [popularExpanded, setPopularExpanded] = useState(false);
     const linksButtonRef = useRef<HTMLButtonElement>(null);
 
     // Tracks where this artist is the PRIMARY / album artist
@@ -273,8 +275,29 @@ export const ArtistDetail: React.FC = () => {
                 playcount: topTrack.playcount,
                 listeners: topTrack.listeners,
             }];
-        }).slice(0, 5);
+        }).slice(0, 10);
     }, [externalTopTracks, primaryTracks, featuredTracks]);
+
+    // Merged, deduplicated tags: communityTags take priority; plain genres fill in unique gaps
+    const mergedTags = useMemo(() => {
+        const result: Array<{ name: string; isCommunity: boolean; providers?: string[]; count?: number }> = [];
+        const seen = new Set<string>();
+        for (const tag of (communityTags || [])) {
+            const key = tag.name.toLowerCase();
+            if (!seen.has(key)) {
+                seen.add(key);
+                result.push({ name: tag.name, isCommunity: true, providers: tag.providers, count: tag.count });
+            }
+        }
+        for (const g of (genres || [])) {
+            const key = g.toLowerCase();
+            if (!seen.has(key)) {
+                seen.add(key);
+                result.push({ name: g, isCommunity: false });
+            }
+        }
+        return result.slice(0, 12);
+    }, [genres, communityTags]);
 
     const hasAnyContent = primaryTracks.length > 0 || featuredTracks.length > 0;
 
@@ -453,33 +476,26 @@ export const ArtistDetail: React.FC = () => {
                             </div>
                         )}
 
-                        {(genres?.length || communityTags?.length) && (
-                            <div className="mt-4 space-y-2">
-                                {/* Genre tags */}
-                                {genres && genres.length > 0 && (
-                                    <div className="flex flex-wrap gap-1.5">
-                                        {genres.slice(0, 8).map(g => (
-                                            <span key={g} className="px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--color-surface-variant)] text-[var(--color-text-muted)] border border-[var(--glass-border)]">
-                                                {g}
-                                            </span>
-                                        ))}
-                                    </div>
-                                )}
-
-                                {/* Community tags from Last.fm + MusicBrainz */}
-                                {communityTags && communityTags.length > 0 && (
-                                    <div className="flex flex-wrap gap-1.5">
-                                        {communityTags.slice(0, 10).map(tag => (
-                                            <span
-                                                key={tag.name}
-                                                title={`From ${tag.providers.map(provider => provider === 'lastfm' ? 'Last.fm' : 'MusicBrainz').join(' + ')}${tag.count > 0 ? ` · ${tag.count}` : ''}`}
-                                                className="px-2.5 py-1 rounded-full text-[11px] font-semibold uppercase tracking-[0.16em] bg-emerald-500/10 text-[var(--color-primary)] border border-emerald-500/20"
-                                            >
-                                                {tag.name}
-                                            </span>
-                                        ))}
-                                    </div>
-                                )}
+                        {mergedTags.length > 0 && (
+                            <div className="mt-4 flex flex-wrap gap-1.5">
+                                {mergedTags.map(tag => (
+                                    tag.isCommunity ? (
+                                        <span
+                                            key={tag.name}
+                                            title={`From ${(tag.providers || []).map(p => p === 'lastfm' ? 'Last.fm' : 'MusicBrainz').join(' + ')}${tag.count ? ` · ${tag.count}` : ''}`}
+                                            className="px-2.5 py-1 rounded-full text-[11px] font-semibold uppercase tracking-[0.16em] bg-emerald-500/10 text-[var(--color-primary)] border border-emerald-500/20"
+                                        >
+                                            {tag.name}
+                                        </span>
+                                    ) : (
+                                        <span
+                                            key={tag.name}
+                                            className="px-2 py-0.5 rounded-full text-xs font-medium bg-[var(--color-surface-variant)] text-[var(--color-text-muted)] border border-[var(--glass-border)]"
+                                        >
+                                            {tag.name}
+                                        </span>
+                                    )
+                                ))}
                             </div>
                         )}
 
@@ -498,44 +514,89 @@ export const ArtistDetail: React.FC = () => {
                                 className="btn btn-primary btn-sm"
                             >
                                 <Play className="w-3.5 h-3.5" fill="currentColor" />
-                                Play Top 5
+                                Play all
                             </button>
                         </div>
-                        <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
-                            {popularLibraryTracks.map(({ track, rank, playcount, listeners }, index) => (
-                                <button
+
+                        {/* Column headers */}
+                        <div className="grid grid-cols-[28px_44px_minmax(0,1fr)_56px_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_140px_92px] gap-2 md:gap-3 px-2 md:px-4 py-3 border-b border-black/5 dark:border-white/10 font-semibold text-xs uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
+                            <div className="text-center md:text-left">#</div>
+                            <div aria-hidden="true" />
+                            <div>Title</div>
+                            <div className="hidden md:block">Album</div>
+                            <div className="hidden md:block">Last.fm plays</div>
+                            <div className="text-right md:text-left">Time</div>
+                        </div>
+
+                        <div className="space-y-0.5">
+                            {popularLibraryTracks.slice(0, popularExpanded ? 10 : 5).map(({ track, rank, playcount, listeners }, index) => (
+                                <div
                                     key={track.id}
                                     onClick={() => setPlaylist(popularLibraryTracks.map(entry => entry.track), index)}
-                                    className="group relative overflow-hidden rounded-2xl border border-[var(--glass-border)] bg-[var(--glass-bg)] p-3 text-left hover:border-[var(--glass-border-hover)] hover:bg-[var(--glass-bg-hover)] transition-all"
+                                    className="grid grid-cols-[28px_44px_minmax(0,1fr)_56px_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_140px_92px] gap-2 md:gap-3 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-all duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
                                 >
-                                    <div className="flex md:block items-center gap-3">
-                                        <div className="relative w-14 h-14 md:w-full md:h-auto md:aspect-square shrink-0 overflow-hidden rounded-xl border border-black/10 dark:border-white/10 bg-black/10 dark:bg-white/10 mb-0 md:mb-3">
-                                            <AlbumArt artUrl={track.artUrl} artist={track.artist} className="w-full h-full object-cover" />
-                                            <div className="absolute inset-0 bg-black/35 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                                <Play className="w-6 h-6 text-white" fill="currentColor" />
-                                            </div>
-                                            <span className="absolute left-2 top-2 inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-black/55 px-2 text-xs font-bold text-white backdrop-blur-sm">
-                                                {rank}
-                                            </span>
-                                        </div>
-                                        <div className="min-w-0">
-                                            <div className="font-semibold text-sm text-[var(--color-text-primary)] truncate group-hover:text-[var(--color-primary)] transition-colors">
-                                                {track.title || track.path.split(/[\\/]/).pop()}
-                                            </div>
-                                            <div className="text-xs text-[var(--color-text-muted)] truncate mt-0.5">
-                                                {track.album || 'Unknown Album'}
-                                            </div>
-                                            {(playcount || listeners) && (
-                                                <div className="mt-2 flex items-center gap-1 text-[11px] text-[var(--color-text-muted)]">
-                                                    <Headphones className="w-3 h-3" />
-                                                    {formatCompactCount(playcount) || formatCompactCount(listeners)} Last.fm {playcount ? 'plays' : 'listeners'}
-                                                </div>
-                                            )}
-                                        </div>
+                                    {/* Rank */}
+                                    <div className="text-center md:text-left text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums">
+                                        {rank}
                                     </div>
-                                </button>
+
+                                    {/* Art */}
+                                    <div className="w-11 h-11 shrink-0 overflow-hidden rounded-lg border border-black/10 dark:border-white/10 bg-black/10 dark:bg-white/10">
+                                        {track.artUrl ? (
+                                            <img src={track.artUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                                        ) : (
+                                            <div className="flex h-full w-full items-center justify-center">
+                                                <Disc3 className="h-5 w-5 text-[var(--color-text-muted)] opacity-40" />
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Title + artist */}
+                                    <div className="min-w-0">
+                                        <span className="block truncate text-sm md:text-base font-medium text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)] transition-colors">
+                                            {track.title || track.path.split(/[\\/]/).pop()}
+                                        </span>
+                                        <span className="block text-xs text-[var(--color-text-muted)] mt-0.5 truncate">
+                                            {track.artist || track.albumArtist || 'Unknown Artist'}
+                                        </span>
+                                    </div>
+
+                                    {/* Album */}
+                                    <div className="hidden md:block min-w-0">
+                                        <span className="block truncate text-sm text-[var(--color-text-secondary)]">
+                                            {track.album || '--'}
+                                        </span>
+                                    </div>
+
+                                    {/* Last.fm plays */}
+                                    <div className="hidden md:flex items-center gap-1 text-sm text-[var(--color-text-muted)] tabular-nums">
+                                        {(playcount || listeners) ? (
+                                            <>
+                                                <Headphones className="w-3.5 h-3.5 shrink-0" />
+                                                <span>{formatCompactCount(playcount) || formatCompactCount(listeners)}</span>
+                                                <span className="text-xs">{playcount ? 'plays' : 'listeners'}</span>
+                                            </>
+                                        ) : '--'}
+                                    </div>
+
+                                    {/* Duration */}
+                                    <div className="text-[var(--color-text-muted)] text-sm tabular-nums text-right md:text-left">
+                                        {formatTime(track.duration, '--:--')}
+                                    </div>
+                                </div>
                             ))}
                         </div>
+
+                        {popularLibraryTracks.length > 5 && (
+                            <button
+                                onClick={() => setPopularExpanded(e => !e)}
+                                className="mt-3 w-full py-2 text-xs font-semibold uppercase tracking-widest text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition-colors"
+                            >
+                                {popularExpanded
+                                    ? 'See less'
+                                    : `See ${popularLibraryTracks.length - 5} more`}
+                            </button>
+                        )}
                     </section>
                 )}
 
