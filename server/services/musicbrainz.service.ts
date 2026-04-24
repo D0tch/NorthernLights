@@ -1,6 +1,7 @@
 import { getSystemSetting } from '../database';
 
 const MB_USER_AGENT = 'AuroraMediaServer/1.0 (https://github.com/aurora-music)';
+const MB_CLIENT_ID = 'aurora-1.0.0beta3';
 
 let mbLastRequest = 0;
 const mbQueue: { fn: () => Promise<any>; resolve: (val: any) => void; reject: (err: any) => void }[] = [];
@@ -82,6 +83,46 @@ export async function mbFetch(url: string): Promise<any> {
         return res.json();
       },
       resolve,
+      reject
+    });
+    processMbQueue();
+  });
+}
+
+export async function submitMbRecordingRating(recordingMbid: string, rating: 0 | 20 | 40 | 60 | 80 | 100): Promise<void> {
+  if (!recordingMbid) return;
+
+  await new Promise<void>((resolve, reject) => {
+    mbQueue.push({
+      fn: async () => {
+        const token = await getMbAccessToken();
+        if (!token) throw new Error('MusicBrainz OAuth token not available');
+
+        const xml = `<?xml version="1.0" encoding="UTF-8"?>
+<metadata xmlns="http://musicbrainz.org/ns/mmd-2.0#">
+  <recording-list>
+    <recording id="${recordingMbid}">
+      <user-rating>${rating}</user-rating>
+    </recording>
+  </recording-list>
+</metadata>`;
+
+        const res = await fetch(`https://musicbrainz.org/ws/2/rating?client=${encodeURIComponent(MB_CLIENT_ID)}`, {
+          method: 'POST',
+          headers: {
+            'User-Agent': MB_USER_AGENT,
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/xml; charset=utf-8',
+          },
+          body: xml,
+        });
+
+        if (!res.ok) {
+          const text = await res.text().catch(() => '');
+          throw new Error(`MusicBrainz rating HTTP ${res.status}${text ? `: ${text}` : ''}`);
+        }
+      },
+      resolve: (_val: any) => resolve(),
       reject
     });
     processMbQueue();

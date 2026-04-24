@@ -3,8 +3,10 @@ import fs from 'fs';
 import path from 'path';
 import { ChildProcessPool } from '../workers/processPool';
 import * as mm from 'music-metadata';
-import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTrackCountWithFeatures, getAllTracks, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getExistingPaths, deleteTracksByIds, purgeOrphanedEntities, purgeOrphanedTracks } from '../database';
+import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getExistingPaths, deleteTracksByIds, purgeOrphanedEntities, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting } from '../database';
 import { genreMatrixService } from '../services/genreMatrix.service';
+import { loveTrack, unloveTrack } from '../services/lastfm.service';
+import { submitMbRecordingRating } from '../services/musicbrainz.service';
 import { scanStatus, scanClients, broadcastScanStatus } from '../state';
 
 const router = Router();
@@ -34,6 +36,59 @@ router.get('/scan/status', (req, res) => {
     clearInterval(heartbeat);
     scanClients.delete(res);
   });
+});
+
+router.post('/love', async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+    const { trackId, loved } = req.body || {};
+    if (!trackId || typeof trackId !== 'string') {
+      return res.status(400).json({ error: 'trackId is required' });
+    }
+    if (typeof loved !== 'boolean') {
+      return res.status(400).json({ error: 'loved must be a boolean' });
+    }
+
+    const track = await getTrackById(trackId);
+    if (!track) return res.status(404).json({ error: 'Track not found' });
+
+    await setTrackLovedForUser(userId, trackId, loved);
+
+    const syncJobs: Array<Promise<{ provider: string; status: 'ok' | 'skipped'; reason?: string }>> = [];
+
+    const lastFmConnected = await getUserSetting(userId, 'lastFmConnected');
+    if ((lastFmConnected === true || lastFmConnected === 'true') && track.artist && track.title) {
+      syncJobs.push(
+        (loved ? loveTrack(userId, track.artist, track.title) : unloveTrack(userId, track.artist, track.title))
+          .then(() => ({ provider: 'lastfm', status: 'ok' as const }))
+      );
+    } else {
+      syncJobs.push(Promise.resolve({ provider: 'lastfm', status: 'skipped' as const, reason: 'not_connected_or_missing_metadata' }));
+    }
+
+    const musicBrainzConnected = await getSystemSetting('musicBrainzConnected');
+    if ((musicBrainzConnected === true || musicBrainzConnected === 'true') && track.mbRecordingId) {
+      syncJobs.push(
+        submitMbRecordingRating(track.mbRecordingId, loved ? 100 : 0)
+          .then(() => ({ provider: 'musicbrainz', status: 'ok' as const }))
+      );
+    } else {
+      syncJobs.push(Promise.resolve({ provider: 'musicbrainz', status: 'skipped' as const, reason: 'not_connected_or_missing_recording_mbid' }));
+    }
+
+    const settled = await Promise.allSettled(syncJobs);
+    const providers = settled.map((result) => {
+      if (result.status === 'fulfilled') return result.value;
+      return { provider: 'unknown', status: 'failed', error: result.reason?.message || 'Provider sync failed' };
+    });
+
+    res.json({ status: 'ok', loved, providers });
+  } catch (error: any) {
+    console.error('[Library] love toggle error:', error.message);
+    res.status(500).json({ error: 'Failed to update loved track' });
+  }
 });
 
 // ─── Phase 1: Recursive directory walk ────────────────────────────────
@@ -761,7 +816,7 @@ router.post('/remove', async (req, res) => {
 // Get entire library
 router.get('/', async (req, res) => {
   try {
-    const tracks = await getAllTracks();
+    const tracks = await getAllTracks(req.user?.userId || null);
     const directories = await getDirectories();
     const artists = await getAllArtists();
     const albums = await getAllAlbums();

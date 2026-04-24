@@ -12,7 +12,7 @@ router.get('/', async (req, res) => {
     const playlists = await getPlaylists(userId);
 
     const populated = await Promise.all(playlists.map(async (pl: any) => {
-      const tracks = await getPlaylistTracks(pl.id);
+      const tracks = await getPlaylistTracks(pl.id, userId);
       return { ...pl, tracks };
     }));
 

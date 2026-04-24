@@ -11,6 +11,7 @@ import { requireAuth, requireAdmin } from '../middleware/auth';
 import { mbFetch, checkMbEnabled, refreshMbToken } from '../services/musicbrainz.service';
 import {
   getArtistData,
+  getArtistTopTracks,
   getAlbumData,
   getAlbumImage,
   getGenreImage,
@@ -257,9 +258,9 @@ router.get('/providers/musicbrainz/callback', async (req, res) => {
 
     const tokenData = await tokenRes.json();
 
-    await setSystemSetting('musicBrainzAccessToken', tokenData.access_token);
-    await setSystemSetting('musicBrainzRefreshToken', tokenData.refresh_token);
-    await setSystemSetting('musicBrainzTokenExpiresAt', Math.floor(Date.now() / 1000) + tokenData.expires_in);
+    await setSystemSetting('musicBrainzAccessToken', tokenData.access_token ?? '');
+    await setSystemSetting('musicBrainzRefreshToken', tokenData.refresh_token ?? '');
+    await setSystemSetting('musicBrainzTokenExpiresAt', Math.floor(Date.now() / 1000) + (tokenData.expires_in ?? 3600));
     await setSystemSetting('musicBrainzConnected', true);
 
     // Fetch username for display
@@ -761,6 +762,19 @@ router.get('/providers/external/artist', requireAuth, async (req, res) => {
   } catch (err: any) {
     console.error('[ExternalMeta] artist error:', err.message);
     res.status(502).json({ error: 'Failed to fetch artist data' });
+  }
+});
+
+router.get('/providers/external/artist-top-tracks', requireAuth, async (req, res) => {
+  try {
+    const name = req.query.name as string;
+    if (!name) return res.status(400).json({ error: 'Missing name parameter' });
+    const limit = typeof req.query.limit === 'string' ? parseInt(req.query.limit, 10) : 25;
+    const tracks = await getArtistTopTracks(name, Number.isFinite(limit) ? limit : 25);
+    res.json({ tracks });
+  } catch (err: any) {
+    console.error('[ExternalMeta] artist top tracks error:', err.message);
+    res.status(502).json({ error: 'Failed to fetch artist top tracks' });
   }
 });
 

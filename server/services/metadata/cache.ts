@@ -21,6 +21,7 @@ export interface ArtistCacheExtras {
   lifespanEnd?: string | null;
   links?: string | null; // JSON
   genres?: string | null; // JSON
+  communityTags?: string | null; // JSON
   listeners?: string | null;
   members?: string | null; // JSON
 }
@@ -37,8 +38,8 @@ export async function upsertArtistCache(
   const now = Math.floor(Date.now() / 1000);
   if (updateLastUpdated) {
     await db.query(
-      `INSERT INTO artists (id, name, image_url, bio, mbid, last_updated, disambiguation, area, artist_type, lifespan_begin, lifespan_end, links, genres, listeners, members)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      `INSERT INTO artists (id, name, image_url, bio, mbid, last_updated, disambiguation, area, artist_type, lifespan_begin, lifespan_end, links, genres, community_tags, listeners, members)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
        ON CONFLICT (name) DO UPDATE SET
          image_url = COALESCE($2, artists.image_url),
          bio = COALESCE($3, artists.bio),
@@ -51,8 +52,9 @@ export async function upsertArtistCache(
          lifespan_end = COALESCE($10, artists.lifespan_end),
          links = COALESCE($11, artists.links),
          genres = COALESCE($12, artists.genres),
-         listeners = COALESCE($13, artists.listeners),
-         members = COALESCE($14, artists.members)`,
+         community_tags = COALESCE($13, artists.community_tags),
+         listeners = COALESCE($14, artists.listeners),
+         members = COALESCE($15, artists.members)`,
       [name, imageUrl, bio, mbid, now,
        extras.disambiguation ?? null,
        extras.area ?? null,
@@ -61,6 +63,7 @@ export async function upsertArtistCache(
        extras.lifespanEnd ?? null,
        extras.links ?? null,
        extras.genres ?? null,
+       extras.communityTags ?? null,
        extras.listeners ?? null,
        extras.members ?? null]
     );

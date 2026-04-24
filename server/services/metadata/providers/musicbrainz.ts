@@ -14,7 +14,8 @@ export interface MbArtist {
     artist?: { name?: string; 'sort-name'?: string };
     direction?: string;
   }>;
-  genres?: Array<{ name: string }>;
+  genres?: Array<{ name: string; count?: number }>;
+  tags?: Array<{ name: string; count?: number }>;
 }
 
 export function extractMbLinks(relations: any[]): { url: string; type: string }[] {
@@ -92,4 +93,3 @@ export async function mbSearchReleaseGroup(
 }
 
 export { mbFetch } from '../../musicbrainz.service';
-

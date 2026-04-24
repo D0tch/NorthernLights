@@ -15,6 +15,8 @@ import {
 import {
   lastFmArtistInfo,
   lastFmAlbumInfo,
+  lastFmArtistTopTags,
+  lastFmArtistTopTracks,
   lastFmTagTopAlbums,
   lastFmTagInfo,
   extractLastFmImage,
@@ -33,9 +35,24 @@ export interface ArtistData {
   lifeSpan?: { begin?: string; end?: string };
   links?: { url: string; type: string }[];
   genres?: string[];
+  communityTags?: CommunityTag[];
   listeners?: string;
   members?: string[];
   error?: string;
+}
+
+export interface CommunityTag {
+  name: string;
+  count: number;
+  providers: Array<'lastfm' | 'musicbrainz'>;
+}
+
+export interface ArtistTopTrack {
+  name: string;
+  playcount?: string;
+  listeners?: string;
+  mbid?: string;
+  url?: string;
 }
 
 export interface AlbumData {
@@ -76,6 +93,41 @@ function cleanHtml(text: string): string {
     .trim();
 }
 
+function addCommunityTag(
+  tagMap: Map<string, CommunityTag>,
+  rawName: unknown,
+  rawCount: unknown,
+  provider: 'lastfm' | 'musicbrainz'
+) {
+  if (typeof rawName !== 'string') return;
+  const name = rawName.trim();
+  if (!name) return;
+
+  const key = name.toLowerCase();
+  const parsedCount = typeof rawCount === 'number'
+    ? rawCount
+    : typeof rawCount === 'string'
+      ? parseInt(rawCount, 10)
+      : 0;
+  const count = Number.isFinite(parsedCount) ? parsedCount : 0;
+
+  const existing = tagMap.get(key);
+  if (existing) {
+    existing.count += count;
+    if (!existing.providers.includes(provider)) existing.providers.push(provider);
+    return;
+  }
+
+  tagMap.set(key, { name, count, providers: [provider] });
+}
+
+function sortedCommunityTags(tagMap: Map<string, CommunityTag>): CommunityTag[] | undefined {
+  const tags = Array.from(tagMap.values())
+    .sort((a, b) => b.count - a.count || b.providers.length - a.providers.length || a.name.localeCompare(b.name))
+    .slice(0, 16);
+  return tags.length > 0 ? tags : undefined;
+}
+
 async function getProviderSettings(): Promise<ProviderSettings> {
   return {
     lastFmApiKey: (await getSystemSetting('lastFmApiKey')) || '',
@@ -105,7 +157,10 @@ export async function getArtistData(
   const cached = await getCachedArtist(name);
 
   if (cached && isCacheFresh(cached.last_updated)) {
-    if (cached.image_url || cached.bio || cached.area || cached.artist_type || cached.disambiguation) {
+    if (
+      (cached.image_url || cached.bio || cached.area || cached.artist_type || cached.disambiguation) &&
+      (cached.community_tags || (!settings.lastFmApiKey && !settings.musicBrainzEnabled))
+    ) {
       return {
         imageUrl: cached.image_url || undefined,
         bio: cached.bio || undefined,
@@ -115,6 +170,7 @@ export async function getArtistData(
         lifeSpan: cached.lifespan_begin ? { begin: cached.lifespan_begin || undefined, end: cached.lifespan_end || undefined } : undefined,
         links: cached.links ? JSON.parse(cached.links) : undefined,
         genres: cached.genres ? JSON.parse(cached.genres) : undefined,
+        communityTags: cached.community_tags ? JSON.parse(cached.community_tags) : undefined,
         listeners: cached.listeners || undefined,
         members: cached.members ? JSON.parse(cached.members) : undefined,
       };
@@ -122,6 +178,7 @@ export async function getArtistData(
   }
 
   let data: ArtistData = {};
+  const communityTagMap = new Map<string, CommunityTag>();
 
   if (settings.musicBrainzEnabled && (mbArtistId || cached?.mbid)) {
     const mbid = mbArtistId || cached?.mbid;
@@ -143,6 +200,10 @@ export async function getArtistData(
           data.links = extractMbLinks(mbArtist.relations || []);
           if (Array.isArray(mbArtist.genres) && mbArtist.genres.length > 0) {
             data.genres = mbArtist.genres.map((g: any) => g.name);
+            mbArtist.genres.forEach((g: any) => addCommunityTag(communityTagMap, g.name, g.count, 'musicbrainz'));
+          }
+          if (Array.isArray(mbArtist.tags) && mbArtist.tags.length > 0) {
+            mbArtist.tags.forEach((tag: any) => addCommunityTag(communityTagMap, tag.name, tag.count, 'musicbrainz'));
           }
           const members = extractMbMembers(mbArtist.relations || []);
           if (members.length > 0) data.members = members;
@@ -169,6 +230,7 @@ export async function getArtistData(
   if (imgProvider === 'lastfm' && settings.lastFmApiKey) pushApi('lastfm');
   if (bioProvider === 'genius' && settings.geniusApiKey) pushApi('genius');
   if (bioProvider === 'lastfm' && settings.lastFmApiKey) pushApi('lastfm');
+  if (settings.lastFmApiKey) pushApi('lastfm');
 
   if (imgProvider === 'lastfm' && !settings.lastFmApiKey && settings.geniusApiKey)
     pushApi('genius');
@@ -252,6 +314,12 @@ export async function getArtistData(
             if (!data.listeners && artist.stats?.listeners) {
               data.listeners = artist.stats.listeners;
             }
+            const topTags = await lastFmArtistTopTags(name, settings.lastFmApiKey);
+            if (topTags?.tag && topTags.tag.length > 0) {
+              topTags.tag.forEach((tag: any) => addCommunityTag(communityTagMap, tag.name, tag.count, 'lastfm'));
+            } else if (artist.tags?.tag && artist.tags.tag.length > 0) {
+              artist.tags.tag.forEach((tag: any) => addCommunityTag(communityTagMap, tag.name, tag.count, 'lastfm'));
+            }
           }
         } catch (err) {
           if (isRateLimitError(err)) {
@@ -271,6 +339,8 @@ export async function getArtistData(
     }
   }
 
+  data.communityTags = sortedCommunityTags(communityTagMap);
+
   if (!wasRateLimited || data.imageUrl || data.bio) {
     const extras: ArtistCacheExtras = {
       disambiguation: data.disambiguation ?? null,
@@ -280,6 +350,7 @@ export async function getArtistData(
       lifespanEnd: data.lifeSpan?.end ?? null,
       links: data.links && data.links.length > 0 ? JSON.stringify(data.links) : null,
       genres: data.genres && data.genres.length > 0 ? JSON.stringify(data.genres) : null,
+      communityTags: data.communityTags && data.communityTags.length > 0 ? JSON.stringify(data.communityTags) : null,
       listeners: data.listeners ?? null,
       members: data.members && data.members.length > 0 ? JSON.stringify(data.members) : null,
     };
@@ -298,6 +369,30 @@ export async function getArtistData(
   }
 
   return data;
+}
+
+export async function getArtistTopTracks(name: string, limit: number = 25): Promise<ArtistTopTrack[]> {
+  if (!name) return [];
+  const settings = await getProviderSettings();
+  if (!settings.lastFmApiKey) return [];
+
+  const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)));
+  try {
+    const tracks = await lastFmArtistTopTracks(name, settings.lastFmApiKey, safeLimit);
+    return tracks
+      .filter((track) => typeof track.name === 'string' && track.name.trim().length > 0)
+      .map((track) => ({
+        name: track.name.trim(),
+        playcount: track.playcount,
+        listeners: track.listeners,
+        mbid: track.mbid || undefined,
+        url: track.url || undefined,
+      }));
+  } catch (error) {
+    if (isRateLimitError(error)) return [];
+    console.warn('[Metadata] Last.fm artist top tracks fetch failed:', error);
+    return [];
+  }
 }
 
 /**

@@ -458,6 +458,7 @@ export async function initDB(): Promise<Pool> {
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS lifespan_end TEXT;
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS links TEXT;
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS genres TEXT;
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS community_tags TEXT;
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS listeners TEXT;
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS members TEXT;
         EXCEPTION WHEN OTHERS THEN null;
@@ -520,6 +521,15 @@ export async function initDB(): Promise<Pool> {
         );
         CREATE INDEX IF NOT EXISTS ups_user_id_idx ON user_playback_stats(user_id);
         CREATE INDEX IF NOT EXISTS ups_track_id_idx ON user_playback_stats(track_id);
+
+        CREATE TABLE IF NOT EXISTS user_loved_tracks (
+          user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+          track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE,
+          loved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, track_id)
+        );
+        CREATE INDEX IF NOT EXISTS ult_user_id_idx ON user_loved_tracks(user_id);
+        CREATE INDEX IF NOT EXISTS ult_track_id_idx ON user_loved_tracks(track_id);
 
         CREATE TABLE IF NOT EXISTS user_settings (
           user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -638,16 +648,38 @@ function mapTrackRow(row: any) {
     artistId: row.artist_id,
     albumId: row.album_id,
     genreId: row.genre_id,
+    mbRecordingId: row.mb_recording_id,
+    mbTrackId: row.mb_track_id,
+    mbAlbumId: row.mb_album_id,
+    mbArtistId: row.mb_artist_id,
+    mbAlbumArtistId: row.mb_album_artist_id,
+    mbReleaseGroupId: row.mb_release_group_id,
+    mbWorkId: row.mb_work_id,
     genres: row.genres ? JSON.parse(row.genres) : [],
     rawUrls: row.raw_urls ? JSON.parse(row.raw_urls) : [],
     playlistAddedAt: row.playlist_added_at ? new Date(row.playlist_added_at).getTime() : undefined,
+    isLoved: row.is_loved === true,
   };
 }
 
-export async function getAllTracks() {
+export async function getAllTracks(userId: string | null = null) {
   const db = await initDB();
-  const res = await db.query('SELECT * FROM tracks');
+  const res = userId
+    ? await db.query(`
+        SELECT t.*, EXISTS (
+          SELECT 1 FROM user_loved_tracks ult
+          WHERE ult.user_id = $1 AND ult.track_id = t.id
+        ) AS is_loved
+        FROM tracks t
+      `, [userId])
+    : await db.query('SELECT t.*, FALSE AS is_loved FROM tracks t');
   return res.rows.map(mapTrackRow);
+}
+
+export async function getTrackById(trackId: string) {
+  const db = await initDB();
+  const res = await db.query('SELECT t.*, FALSE AS is_loved FROM tracks t WHERE t.id = $1', [trackId]);
+  return res.rows[0] ? mapTrackRow(res.rows[0]) : null;
 }
 
 // Returns all known track paths as a Set for O(1) existence checks during scanning.
@@ -1410,14 +1442,25 @@ export async function getPlaylists(userId: string | null = null) {
   }));
 }
 
-export async function getPlaylistTracks(playlistId: string) {
+export async function getPlaylistTracks(playlistId: string, userId: string | null = null) {
   const db = await initDB();
-  const res = await db.query(`
-    SELECT t.*, pt.added_at AS playlist_added_at FROM tracks t
-    JOIN playlist_tracks pt ON t.id = pt.track_id
-    WHERE pt.playlist_id = $1
-    ORDER BY pt.sort_order ASC
-  `, [playlistId]);
+  const res = userId
+    ? await db.query(`
+        SELECT t.*, pt.added_at AS playlist_added_at, EXISTS (
+          SELECT 1 FROM user_loved_tracks ult
+          WHERE ult.user_id = $2 AND ult.track_id = t.id
+        ) AS is_loved
+        FROM tracks t
+        JOIN playlist_tracks pt ON t.id = pt.track_id
+        WHERE pt.playlist_id = $1
+        ORDER BY pt.sort_order ASC
+      `, [playlistId, userId])
+    : await db.query(`
+        SELECT t.*, pt.added_at AS playlist_added_at, FALSE AS is_loved FROM tracks t
+        JOIN playlist_tracks pt ON t.id = pt.track_id
+        WHERE pt.playlist_id = $1
+        ORDER BY pt.sort_order ASC
+      `, [playlistId]);
   return res.rows.map(mapTrackRow);
 }
 
@@ -1614,7 +1657,12 @@ export async function getGenrePathFromKNN(acoustic8D: number[], mfcc?: number[])
 
 export async function setSystemSetting(key: string, value: any) {
   const db = await initDB();
-  const valStr = JSON.stringify(value);
+  // JSON.stringify(undefined) returns undefined (not a string), which pg then
+  // passes as a bare undefined bind parameter — the driver either warns or
+  // throws depending on version. Normalize to JSON null so the column stores a
+  // well-formed value.
+  const serialized = JSON.stringify(value);
+  const valStr = serialized === undefined ? 'null' : serialized;
   await db.query(`
     INSERT INTO system_settings (key, value)
     VALUES ($1, $2)
@@ -1816,6 +1864,19 @@ export async function getUserRecentTracks(userId: string, limit: number = 5) {
     LIMIT $2
   `, [userId, limit]);
   return res.rows.map(mapTrackRow);
+}
+
+export async function setTrackLovedForUser(userId: string, trackId: string, loved: boolean) {
+  const db = await initDB();
+  if (loved) {
+    await db.query(`
+      INSERT INTO user_loved_tracks (user_id, track_id, loved_at)
+      VALUES ($1, $2, NOW())
+      ON CONFLICT (user_id, track_id) DO UPDATE SET loved_at = EXCLUDED.loved_at
+    `, [userId, trackId]);
+  } else {
+    await db.query('DELETE FROM user_loved_tracks WHERE user_id = $1 AND track_id = $2', [userId, trackId]);
+  }
 }
 
 // ==========================================

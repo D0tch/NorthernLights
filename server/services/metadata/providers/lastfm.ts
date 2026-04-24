@@ -7,7 +7,7 @@ export interface LastFmArtistInfo {
   name: string;
   bio?: { summary?: string; content?: string };
   image?: Array<{ size: string; '#text': string }>;
-  tags?: { tag: Array<{ name: string }> };
+  tags?: { tag: Array<{ name: string; count?: number | string }> };
   stats?: { listeners?: string; plays?: string };
 }
 
@@ -28,6 +28,22 @@ export interface LastFmTagAlbums {
 export interface LastFmTagInfo {
   name: string;
   wiki?: { summary?: string; content?: string };
+}
+
+export interface LastFmTopTags {
+  tag?: Array<{ name: string; count?: number | string }>;
+}
+
+export interface LastFmArtistTopTrack {
+  name: string;
+  playcount?: string;
+  listeners?: string;
+  mbid?: string;
+  url?: string;
+}
+
+export interface LastFmArtistTopTracks {
+  track?: LastFmArtistTopTrack | LastFmArtistTopTrack[];
 }
 
 export const lastFmSemaphore = new Semaphore(5);
@@ -95,6 +111,60 @@ export async function lastFmAlbumInfo(
     if (json.error === 29) throw new RateLimitError('lastfm');
     if (json.error) throw new ProviderError('lastfm', json.message, json.error);
     return json.album || null;
+  } catch (err: any) {
+    if (err instanceof RateLimitError || err instanceof ProviderError) throw err;
+    throw new ProviderError('lastfm', err.message);
+  } finally {
+    lastFmSemaphore.release();
+  }
+}
+
+export async function lastFmArtistTopTags(
+  artist: string,
+  apiKey: string
+): Promise<LastFmTopTags | null> {
+  await lastFmSemaphore.acquire();
+  try {
+    const res = await fetchWithRetry(
+      `${LASTFM_API}?method=artist.gettoptags&artist=${encodeURIComponent(artist)}&api_key=${apiKey}&format=json`
+    );
+    if (!res.ok) {
+      if (res.status === 429) throw new RateLimitError('lastfm');
+      throw new ProviderError('lastfm', `HTTP ${res.status}`, res.status);
+    }
+    const json = await res.json();
+    if (json.error === 29) throw new RateLimitError('lastfm');
+    if (json.error) throw new ProviderError('lastfm', json.message, json.error);
+    return json.toptags || null;
+  } catch (err: any) {
+    if (err instanceof RateLimitError || err instanceof ProviderError) throw err;
+    throw new ProviderError('lastfm', err.message);
+  } finally {
+    lastFmSemaphore.release();
+  }
+}
+
+export async function lastFmArtistTopTracks(
+  artist: string,
+  apiKey: string,
+  limit: number = 25
+): Promise<LastFmArtistTopTrack[]> {
+  await lastFmSemaphore.acquire();
+  try {
+    const safeLimit = Math.max(1, Math.min(50, Math.floor(limit)));
+    const res = await fetchWithRetry(
+      `${LASTFM_API}?method=artist.gettoptracks&artist=${encodeURIComponent(artist)}&api_key=${apiKey}&format=json&limit=${safeLimit}`
+    );
+    if (!res.ok) {
+      if (res.status === 429) throw new RateLimitError('lastfm');
+      throw new ProviderError('lastfm', `HTTP ${res.status}`, res.status);
+    }
+    const json = await res.json();
+    if (json.error === 29) throw new RateLimitError('lastfm');
+    if (json.error) throw new ProviderError('lastfm', json.message, json.error);
+    const rawTracks = (json.toptracks as LastFmArtistTopTracks | undefined)?.track;
+    if (!rawTracks) return [];
+    return Array.isArray(rawTracks) ? rawTracks : [rawTracks];
   } catch (err: any) {
     if (err instanceof RateLimitError || err instanceof ProviderError) throw err;
     throw new ProviderError('lastfm', err.message);
