@@ -1,6 +1,22 @@
-import Hls from 'hls.js';
+import type Hls from 'hls.js';
 import { castManager } from './CastManager';
+
+// hls.js is ~512 KB. Load it lazily on first HLS playback so cast-only
+// or never-played sessions don't pay for it on initial paint.
+let HlsCtor: typeof Hls | null = null;
+let hlsLoadPromise: Promise<typeof Hls> | null = null;
+async function loadHls(): Promise<typeof Hls> {
+    if (HlsCtor) return HlsCtor;
+    if (!hlsLoadPromise) {
+        hlsLoadPromise = import('hls.js').then((mod) => {
+            HlsCtor = mod.default;
+            return HlsCtor;
+        });
+    }
+    return hlsLoadPromise;
+}
 import { usePlayerStore, type PlaybackTelemetry } from '../store';
+import { getPlaybackTimeSnapshot, setPlaybackCurrentTime } from '../store/playbackTime';
 import { applyStreamingQualityToHlsUrl } from './streaming';
 import { logPlaybackInfo } from './playbackDebug';
 import {
@@ -296,9 +312,9 @@ class PlaybackManager {
         if (!force && now - this.lastMediaSessionPositionUpdate < this.mediaSessionPositionIntervalMs) return;
         this.lastMediaSessionPositionUpdate = now;
 
-        const state = castManager.isConnected() ? usePlayerStore.getState() : null;
-        const duration = state?.duration || this.getDuration();
-        const position = state?.currentTime || this.getCurrentTime();
+        const timeState = getPlaybackTimeSnapshot();
+        const duration = timeState.duration || this.getDuration();
+        const position = castManager.isConnected() ? timeState.currentTime : this.getCurrentTime();
         if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(position)) return;
 
         try {
@@ -336,11 +352,12 @@ class PlaybackManager {
 
     public persistContinuitySnapshot(): void {
         const state = usePlayerStore.getState();
+        const timeState = getPlaybackTimeSnapshot();
         savePlaybackContinuitySnapshot({
             playlist: state.playlist,
             currentIndex: state.currentIndex,
-            currentTime: castManager.isConnected() ? state.currentTime : this.getCurrentTime(),
-            duration: state.duration || this.getDuration(),
+            currentTime: castManager.isConnected() ? timeState.currentTime : this.getCurrentTime(),
+            duration: timeState.duration || this.getDuration(),
             playbackState: state.playbackState,
             wasPlaying: state.playbackState === 'playing',
             repeat: state.repeat,
@@ -368,6 +385,7 @@ class PlaybackManager {
             }
             if (snapshot.currentTime > 2) {
                 this.seek(snapshot.currentTime);
+                setPlaybackCurrentTime(snapshot.currentTime);
             }
         } catch (error) {
             console.warn('[Playback] Could not restore previous playback session:', error);
@@ -494,7 +512,7 @@ class PlaybackManager {
 
     // --- HLS Playback ---
 
-    public prepareNextUrl(hlsUrl: string, rawUrl: string, title?: string, artist?: string, artUrl?: string, album?: string, format?: string): void {
+    public async prepareNextUrl(hlsUrl: string, rawUrl: string, title?: string, artist?: string, artUrl?: string, album?: string, format?: string): Promise<void> {
         if (castManager.isConnected()) return;
         const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
             hlsUrl,
@@ -506,6 +524,12 @@ class PlaybackManager {
 
         this.destroyPreparedAudio();
         this.lastPrepareFailureReason = null;
+
+        const Hls = await loadHls();
+
+        // The active prepared key may have changed while we were waiting for the
+        // hls.js chunk to load (e.g. user skipped tracks). Bail if so.
+        if (this.nextUrlKey !== null) return;
 
         try {
             logPlaybackInfo(`[Playback] Preparing next HLS track: ${title || 'Unknown Title'}${artist ? ` by ${artist}` : ''}`);
@@ -592,6 +616,8 @@ class PlaybackManager {
         const authToken = urlObj.searchParams.get('token') || '';
         this.currentHlsAuthToken = authToken;
 
+        const Hls = await loadHls();
+
         if (Hls.isSupported()) {
             this.hls = this.createHlsInstance(authToken, 60, 120);
             this.hls.loadSource(playlistUrl);
@@ -636,7 +662,7 @@ class PlaybackManager {
     }
 
     private createHlsInstance(authToken: string, maxBufferLength: number, maxMaxBufferLength: number): Hls {
-        return new Hls({
+        return new HlsCtor!({
             maxBufferLength,
             maxMaxBufferLength,
             backBufferLength: 90,
@@ -658,6 +684,7 @@ class PlaybackManager {
     }
 
     private attachActiveHlsRecovery(hls: Hls, playlistUrl: string, authToken: string): void {
+        const Hls = HlsCtor!;
         hls.on(Hls.Events.MANIFEST_PARSED, () => {
             if (hls === this.hls) {
                 this.hlsNetworkRetryCount = 0;
@@ -739,7 +766,7 @@ class PlaybackManager {
         this.hls = nextHls;
         this.currentHlsAuthToken = authToken;
         this.attachActiveHlsRecovery(nextHls, playlistUrl, authToken);
-        nextHls.once(Hls.Events.MANIFEST_PARSED, () => {
+        nextHls.once(HlsCtor!.Events.MANIFEST_PARSED, () => {
             if (position > 0) {
                 this.seek(position);
             }
