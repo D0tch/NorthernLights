@@ -324,7 +324,7 @@ export const LibraryTab: React.FC = () => {
                             if (dirStatsLoading) { return (<div className="mt-2"><div className="flex justify-between text-xs text-[var(--color-text-secondary)] mb-1"><span>Library Coverage</span><span className="animate-pulse">Loading...</span></div><div className="w-full h-2 rounded-full bg-[var(--glass-border)] overflow-hidden" /></div>); }
                             if (totalStats.totalTracks === 0) return null;
                             const pct = Math.round((totalStats.analyzed / totalStats.totalTracks) * 100);
-                            return (<div className="mt-2"><div className="flex justify-between text-xs text-[var(--color-text-secondary)] mb-1"><span>Library Coverage</span><span>{totalStats.analyzed} / {totalStats.totalTracks} tracks ({pct}%)</span></div><div className="w-full h-2 rounded-full bg-[var(--glass-border)] overflow-hidden"><div className="h-full rounded-full transition-all duration-500" style={{ width: `${pct}%`, backgroundColor: pct === 100 ? '#22c55e' : pct > 50 ? '#f59e0b' : '#ef4444' }} /></div></div>);
+                            return (<div className="mt-2"><div className="flex justify-between text-xs text-[var(--color-text-secondary)] mb-1"><span>Library Coverage</span><span>{totalStats.analyzed} / {totalStats.totalTracks} tracks ({pct}%)</span></div><div className="w-full h-2 rounded-full bg-[var(--glass-border)] overflow-hidden"><div className="h-full rounded-full transition-[width,background-color] duration-500" style={{ width: `${pct}%`, backgroundColor: pct === 100 ? '#22c55e' : pct > 50 ? '#f59e0b' : '#ef4444' }} /></div></div>);
                         })()}
                     </div>
 
@@ -375,7 +375,7 @@ export const LibraryTab: React.FC = () => {
                                                     <span>{pct !== null ? `${pct}%` : `${formatBytes(prog.bytes)}`}</span>
                                                 </div>
                                                 <div className="w-full h-1.5 rounded-full bg-[var(--glass-border)] overflow-hidden">
-                                                    <div className="h-full rounded-full bg-[var(--color-primary)] transition-all duration-300" style={{ width: pct !== null ? `${pct}%` : '0%' }} />
+                                                    <div className="h-full rounded-full bg-[var(--color-primary)] transition-[width] duration-300" style={{ width: pct !== null ? `${pct}%` : '0%' }} />
                                                 </div>
                                             </div>
                                         )}

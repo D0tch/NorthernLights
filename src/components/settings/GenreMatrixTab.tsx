@@ -238,7 +238,7 @@ export const GenreMatrixTab: React.FC = () => {
                         <span className="text-[var(--color-text-primary)] font-bold">{coveragePercent}%</span>
                         <div className="w-24 h-1.5 bg-black/10 dark:bg-white/10 rounded-full overflow-hidden">
                             <div
-                                className="h-full bg-[var(--color-primary)] transition-all duration-500"
+                                className="h-full bg-[var(--color-primary)] transition-[width] duration-500"
                                 style={{ width: `${coveragePercent}%` }}
                             />
                         </div>
