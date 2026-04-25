@@ -1,4 +1,4 @@
-import { initDB, createPlaylist, addTracksToPlaylist, getPlaylists, getPlaylistTracks, getUserRecentTracks, getUserTopTracks } from '../database';
+import { initDB, createPlaylist, addTracksToPlaylist, getPlaylists, getPlaylistTracks, getUserRecentTracks, getUserTopTracks, deleteSystemPlaylistsForUser } from '../database';
 import { genreMatrixService } from './genreMatrix.service';
 import { getLibraryProfile, GenreHealth } from './libraryProfile.service';
 import { compileConceptToLibrary } from './llmConceptCompiler.service';
@@ -1282,6 +1282,9 @@ export async function getHubCollections(
          continue;
      }
 
+     // System playlists are repopulated below by the engine sections; skip stale rows here.
+     if (pl.isSystem) continue;
+
      if (!hubs.find((h: any) => h.id === pl.id)) {
         const tracks = await getPlaylistTracks(pl.id);
         if (tracks.length > 0) {
@@ -1298,6 +1301,23 @@ export async function getHubCollections(
   }
 
   // --- ENGINE-DRIVEN CATEGORIES (per-user) ---
+  // Wipe stale system playlists for this user up-front so sections that fail to
+  // generate don't leave outdated rows behind.
+  if (userId) {
+    await deleteSystemPlaylistsForUser(userId);
+  }
+
+  // Persist a system-owned playlist and return the descriptor for the hub list.
+  const persistSystem = async (slug: string, title: string, description: string, tracks: any[]) => {
+    if (!userId || tracks.length === 0) {
+      return { id: `engine_${slug}`, title, description, isLlmGenerated: false, isSystem: true, tracks };
+    }
+    const id = `engine_${slug}_${userId}`;
+    await createPlaylist(id, title, description, false, userId, true);
+    await addTracksToPlaylist(id, tracks.map((t: any) => t.id));
+    return { id, title, description, isLlmGenerated: false, isSystem: true, tracks };
+  };
+
   const constraints = await getDynamicConstraints();
 
   // 1. Up Next (Near user's recent history, genre-aware re-ranking)
@@ -1361,10 +1381,7 @@ export async function getHubCollections(
         if (upNextRes.rows.length > 0) {
           const ranked = reRankByHopCost(upNextRes.rows, referenceGenre, 30);
           const pool = ranked.sort(() => 0.5 - Math.random());
-          hubs.unshift({
-            id: 'engine_upnext', title: 'Up Next', description: 'Based on what you just listened to.',
-            isLlmGenerated: false, tracks: pool.slice(0, 15)
-          });
+          hubs.unshift(await persistSystem('upnext', 'Up Next', 'Based on what you just listened to.', pool.slice(0, 15)));
         }
       }
     }
@@ -1417,10 +1434,7 @@ export async function getHubCollections(
        if (upNextRes.rows.length > 0) {
          const ranked = reRankByHopCost(upNextRes.rows, referenceGenre, 30);
          const pool = ranked.sort(() => 0.5 - Math.random());
-         hubs.unshift({
-           id: 'engine_upnext', title: 'Up Next', description: 'Based on what you just listened to.',
-           isLlmGenerated: false, tracks: pool.slice(0, 15)
-         });
+         hubs.unshift(await persistSystem('upnext', 'Up Next', 'Based on what you just listened to.', pool.slice(0, 15)));
        }
     }
   }
@@ -1466,10 +1480,7 @@ export async function getHubCollections(
 
   if (jumpRes.rows.length > 0) {
      const shuffled = jumpRes.rows.sort(() => 0.5 - Math.random());
-     hubs.unshift({
-       id: 'engine_jumpback', title: 'Jump Back In', description: 'Tracks you love that have been waiting.',
-       isLlmGenerated: false, tracks: shuffled.slice(0, 15)
-     });
+     hubs.unshift(await persistSystem('jumpback', 'Jump Back In', 'Tracks you love that have been waiting.', shuffled.slice(0, 15)));
   }
 
   // 3. The Vault (0 plays, acoustically near user's most-played tracks, genre-aware)
@@ -1533,10 +1544,7 @@ export async function getHubCollections(
         if (vaultRes.rows.length > 0) {
           const ranked = reRankByHopCost(vaultRes.rows, referenceGenre, 30);
           const shuffled = ranked.sort(() => 0.5 - Math.random());
-          hubs.push({
-            id: 'engine_vault', title: 'The Vault', description: 'Unplayed tracks that match your taste.',
-            isLlmGenerated: false, tracks: shuffled.slice(0, 15)
-          });
+          hubs.push(await persistSystem('vault', 'The Vault', 'Unplayed tracks that match your taste.', shuffled.slice(0, 15)));
         }
       }
     }
@@ -1588,10 +1596,7 @@ export async function getHubCollections(
        if (vaultRes.rows.length > 0) {
          const ranked = reRankByHopCost(vaultRes.rows, referenceGenre, 30);
          const shuffled = ranked.sort(() => 0.5 - Math.random());
-         hubs.push({
-           id: 'engine_vault', title: 'The Vault', description: 'Unplayed tracks that match your taste.',
-           isLlmGenerated: false, tracks: shuffled.slice(0, 15)
-         });
+         hubs.push(await persistSystem('vault', 'The Vault', 'Unplayed tracks that match your taste.', shuffled.slice(0, 15)));
        }
     }
   }
