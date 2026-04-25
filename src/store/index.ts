@@ -8,6 +8,12 @@ import { cloneTrackForQueue, ensureQueueEntryIds } from '../utils/queue';
 import { preloadManager } from '../utils/PreloadManager';
 import { setPlaybackDebugLogging } from '../utils/playbackDebug';
 import { savePlaybackContinuitySnapshot } from '../utils/playbackContinuity';
+import {
+  getPlaybackTimeSnapshot,
+  setPlaybackCurrentTime,
+  setPlaybackDuration,
+  setPlaybackTimeState,
+} from './playbackTime';
 
 import { clearExternalCache } from '../utils/externalImagery';
 import type { ToastType } from '../components/Toast';
@@ -32,6 +38,11 @@ const buildTrackUrls = (trackId: string, path: string, token: string, quality: s
     artUrl: `${base}/api/art?pathB64=${pathB64}${tokenParam}`,
   };
 };
+
+const hydrateServerTrack = (track: TrackInfo, token: string, quality: string): TrackInfo => ({
+  ...track,
+  ...buildTrackUrls(track.id, track.path, token, quality),
+});
 
 const dedupeTrackIds = (trackIds: string[]): string[] => {
   const seen = new Set<string>();
@@ -148,8 +159,6 @@ export interface PlayerState {
   // Playback State (Transient)
   currentIndex: number | null;
   playbackState: PlaybackState;
-  currentTime: number;
-  duration: number;
   isBuffering: boolean;
   castConnected: boolean;
   playbackTelemetry: PlaybackTelemetry;
@@ -333,12 +342,13 @@ export const usePlayerStore = create<PlayerState>()(
       // Setup PlaybackManager callbacks to update store state
       playbackManager.setCallbacks({
         onTimeUpdate: (time) => {
-          set({ currentTime: time });
+          setPlaybackCurrentTime(time);
           persistContinuitySnapshot(false);
           // Check scrobble eligibility (>50% duration or 4 minutes, whichever is earlier, and track >30s)
           const state = get();
-          if (!state._scrobbleEligible && state._scrobbleStartAt && state.duration > 30) {
-            const halfDuration = state.duration / 2;
+          const { duration } = getPlaybackTimeSnapshot();
+          if (!state._scrobbleEligible && state._scrobbleStartAt && duration > 30) {
+            const halfDuration = duration / 2;
             const threshold = Math.min(halfDuration, 240); // 4 minutes = 240s
             if (time >= threshold) {
               set({ _scrobbleEligible: true });
@@ -352,9 +362,9 @@ export const usePlayerStore = create<PlayerState>()(
           // that was set in playAtIndex. Once hls.js parses the full VOD playlist,
           // durationchange fires with the real total and we accept it.
           if (isFinite(duration) && duration > 0) {
-            const current = get().duration;
+            const current = getPlaybackTimeSnapshot().duration;
             if (duration >= current || current === 0) {
-              set({ duration });
+              setPlaybackDuration(duration);
               persistContinuitySnapshot(true);
             }
           }
@@ -374,13 +384,14 @@ export const usePlayerStore = create<PlayerState>()(
           const currentTrack = state.currentIndex !== null ? state.playlist[state.currentIndex] : null;
           if (_scrobbleEligible && _scrobbleStartAt && currentTrack?.artist && currentTrack?.title) {
             const authHeaders = (get() as any).getAuthHeader();
+            const { duration } = getPlaybackTimeSnapshot();
             const payload = {
               tracks: [{
                 artist: currentTrack.artist,
                 track: currentTrack.title,
                 album: currentTrack.album || '',
                 albumArtist: currentTrack.albumArtist || '',
-                duration: Math.round(state.duration),
+                duration: Math.round(duration),
                 timestamp: Math.floor(_scrobbleStartAt / 1000),
                 mbid: currentTrack.mbTrackId || '',
               }],
@@ -438,10 +449,9 @@ export const usePlayerStore = create<PlayerState>()(
           // Receiver auto-advanced to next track in the queue — sync sender UI
           const state = get();
           if (index !== state.currentIndex && index >= 0 && index < state.playlist.length) {
+            setPlaybackTimeState({ currentTime: 0, duration: state.playlist[index].duration || 0 });
             set({
               currentIndex: index,
-              currentTime: 0,
-              duration: state.playlist[index].duration || 0,
               _scrobbleStartAt: Date.now(),
               _scrobbleEligible: false,
             });
@@ -503,11 +513,12 @@ export const usePlayerStore = create<PlayerState>()(
         if (!force && now - lastContinuitySnapshotAt < 5000) return;
         lastContinuitySnapshotAt = now;
         const state = get();
+        const { currentTime, duration } = getPlaybackTimeSnapshot();
         savePlaybackContinuitySnapshot({
           playlist: state.playlist,
           currentIndex: state.currentIndex,
-          currentTime: state.currentTime,
-          duration: state.duration,
+          currentTime,
+          duration,
           playbackState: state.playbackState,
           wasPlaying: state.playbackState === 'playing',
           repeat: state.repeat,
@@ -539,8 +550,6 @@ export const usePlayerStore = create<PlayerState>()(
 
         currentIndex: null as number | null,
         playbackState: 'stopped' as PlaybackState,
-        currentTime: 0,
-        duration: 0,
         isBuffering: false as boolean,
         castConnected: false as boolean,
         playbackTelemetry: {
@@ -916,8 +925,7 @@ export const usePlayerStore = create<PlayerState>()(
                 const track = {
                   ...data.track,
                   isInfinity: true,
-                  artists: typeof data.track.artists === 'string' ? JSON.parse(data.track.artists) : data.track.artists,
-                  ...buildTrackUrls(data.track.id, data.track.path, token, quality),
+                  ...hydrateServerTrack(data.track, token, quality),
                 };
                 get().addTrackToPlaylist(track);
                 if (!isPrefetch) {
@@ -949,24 +957,7 @@ export const usePlayerStore = create<PlayerState>()(
               const token = authToken || '';
               const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
 
-              const libraryWithUrls = data.tracks.map((t: any) => {
-                let artistsArray = t.artists;
-                if (typeof t.artists === 'string') {
-                  try { artistsArray = JSON.parse(t.artists); } catch(e) {}
-                }
-                
-                let genresArray = t.genres;
-                if (typeof t.genres === 'string') {
-                  try { genresArray = JSON.parse(t.genres); } catch(e) {}
-                }
-                
-                return {
-                  ...t,
-                  artists: artistsArray,
-                  genres: genresArray,
-                  ...buildTrackUrls(t.id, t.path, token, quality),
-                };
-              });
+              const libraryWithUrls = data.tracks.map((t: TrackInfo) => hydrateServerTrack(t, token, quality));
 
               set({
                 library: libraryWithUrls,
@@ -1297,18 +1288,7 @@ export const usePlayerStore = create<PlayerState>()(
               const token = authToken || '';
               const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
 
-               const latestLibrary = data.tracks.map((t: any) => {
-                let artistsArray = t.artists;
-                if (typeof t.artists === 'string') {
-                  try { artistsArray = JSON.parse(t.artists); } catch(e) {}
-                }
-                
-                return {
-                  ...t,
-                  artists: artistsArray,
-                  ...buildTrackUrls(t.id, t.path, token, quality),
-                };
-              });
+              const latestLibrary = data.tracks.map((t: TrackInfo) => hydrateServerTrack(t, token, quality));
               set({
                 library: latestLibrary,
                 artists: data.artists || [],
@@ -1423,7 +1403,8 @@ export const usePlayerStore = create<PlayerState>()(
 
           // Immediately set the DB-known duration so the UI doesn't flash "0:10"
           // while waiting for hls.js to parse the full manifest.
-          set({ currentTime: 0, duration: track.duration || 0, isBuffering: true });
+          setPlaybackTimeState({ currentTime: 0, duration: track.duration || 0 });
+          set({ isBuffering: true });
 
           try {
             // Set volume before playing
@@ -1512,7 +1493,8 @@ export const usePlayerStore = create<PlayerState>()(
 
         stop: () => {
           playbackManager.stop();
-          set({ currentIndex: null, currentTime: 0, playbackState: 'stopped' });
+          setPlaybackTimeState({ currentTime: 0, duration: 0 });
+          set({ currentIndex: null, playbackState: 'stopped' });
           persistContinuitySnapshot(true);
         },
 
@@ -1536,13 +1518,14 @@ export const usePlayerStore = create<PlayerState>()(
         },
 
         prevTrack: async () => {
-          const { playlist, currentIndex, currentTime } = get();
+          const { playlist, currentIndex } = get();
+          const { currentTime } = getPlaybackTimeSnapshot();
           if (playlist.length === 0) return;
 
           // If we are more than 3 seconds in, just restart the track
           if (currentTime > 3 && currentIndex !== null) {
             playbackManager.seek(0);
-            set({ currentTime: 0 });
+            setPlaybackCurrentTime(0);
             persistContinuitySnapshot(true);
             return;
           }
@@ -1572,8 +1555,8 @@ export const usePlayerStore = create<PlayerState>()(
 
         setCastConnected: (connected: boolean) => set({ castConnected: connected }),
 
-        syncTimeUpdate: (time: number) => set({ currentTime: time }),
-        syncDuration: (duration: number) => set({ duration }),
+        syncTimeUpdate: (time: number) => setPlaybackCurrentTime(time),
+        syncDuration: (duration: number) => setPlaybackDuration(duration),
         syncPlaybackState: (state: PlaybackState) => set({ playbackState: state }),
         recordPlaybackTelemetry: (telemetry: Partial<PlaybackTelemetry>) => set((state: PlayerState) => ({
           playbackTelemetry: {
@@ -1686,7 +1669,6 @@ export const usePlayerStore = create<PlayerState>()(
           return rest;
         }) : [],
         currentIndex: state.currentIndex,
-        duration: state.duration,
         playbackState: state.playbackState,
       }),
       onRehydrateStorage: () => (state) => {
