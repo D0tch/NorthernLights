@@ -11,6 +11,8 @@ import { fetchGenreImage } from '../utils/externalImagery';
 
 type HubCollection = Partial<Playlist> & { tracks: TrackInfo[] };
 
+let hasPlayedHubCardIntro = false;
+
 const HubCardSkeleton: React.FC = () => (
   <div className="p-4 sm:p-5 bg-[var(--glass-bg)] border border-[var(--glass-border)] rounded-[var(--radius)] animate-pulse">
     <div className="flex items-center gap-2 mb-3">
@@ -28,15 +30,16 @@ interface HubCardProps {
   onOpen: () => void;
   onPlay: () => void;
   onPinToggle?: () => void;
+  animate?: boolean;
 }
 
-const HubCard: React.FC<HubCardProps> = ({ collection, onOpen, onPlay, onPinToggle }) => {
+const HubCard: React.FC<HubCardProps> = ({ collection, onOpen, onPlay, onPinToggle, animate = false }) => {
   const { artUrls, bgColor } = useDominantColor(collection.tracks);
   const hasCovers = artUrls.length > 0;
 
   return (
     <div
-      className="relative p-4 sm:p-5 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] hub-card-animate"
+      className={`relative p-4 sm:p-5 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] ${animate ? 'hub-card-animate' : ''}`}
       onClick={onOpen}
       role="button"
       tabIndex={0}
@@ -115,7 +118,7 @@ const HubCard: React.FC<HubCardProps> = ({ collection, onOpen, onPlay, onPinTogg
           e.stopPropagation();
           onPlay();
         }}
-        className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-all duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95 z-20"
+        className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-ui duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95 z-20"
         aria-label="Play"
       >
         <Play className="w-5 h-5 ml-0.5" fill="currentColor" />
@@ -128,16 +131,17 @@ interface DiscoverCardProps {
   collection: HubCollection;
   onOpen: () => void;
   onPlay: () => void;
+  animate?: boolean;
 }
 
-const DiscoverCard: React.FC<DiscoverCardProps> = ({ collection, onOpen, onPlay }) => {
+const DiscoverCard: React.FC<DiscoverCardProps> = ({ collection, onOpen, onPlay, animate = false }) => {
   const { artUrls } = useDominantColor(collection.tracks);
   const covers = artUrls.slice(0, 4);
   const hasCovers = covers.length > 0;
 
   return (
     <div
-      className="relative flex flex-col sm:flex-row gap-4 p-4 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] hub-card-animate"
+      className={`relative flex flex-col gap-3 p-4 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] ${animate ? 'hub-card-animate' : ''}`}
       onClick={onOpen}
       role="button"
       tabIndex={0}
@@ -150,18 +154,18 @@ const DiscoverCard: React.FC<DiscoverCardProps> = ({ collection, onOpen, onPlay 
       aria-label={`Play ${collection.title || 'Untitled playlist'}`}
     >
       {/* Left: 2x2 Cover Grid */}
-      <div className="grid grid-cols-2 gap-1.5 shrink-0 w-full sm:w-36 lg:w-40">
+      <div className="grid grid-cols-2 gap-0.5 shrink-0 w-full rounded-lg overflow-hidden">
         {hasCovers ? (
           covers.map((url, i) => (
             <img
               key={i}
               src={url}
               alt=""
-              className="aspect-square rounded-lg object-cover shadow-sm"
+              className="aspect-square object-cover"
             />
           ))
         ) : (
-          <div className="col-span-2 aspect-square rounded-lg bg-[var(--color-surface-variant)] flex items-center justify-center">
+          <div className="col-span-2 aspect-video bg-[var(--color-surface-variant)] flex items-center justify-center">
             <Disc3 className="w-8 h-8 text-[var(--color-text-muted)] opacity-40" />
           </div>
         )}
@@ -188,7 +192,7 @@ const DiscoverCard: React.FC<DiscoverCardProps> = ({ collection, onOpen, onPlay 
           e.stopPropagation();
           onPlay();
         }}
-        className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-all duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95 z-20"
+        className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-ui duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95 z-20"
         aria-label="Play"
       >
         <Play className="w-5 h-5 ml-0.5" fill="currentColor" />
@@ -201,16 +205,17 @@ interface ExploreCardProps {
   genre: string;
   trackCount: number;
   entity?: { id: string; name?: string };
+  animate?: boolean;
 }
 
-const ExploreCard: React.FC<ExploreCardProps> = ({ genre, trackCount, entity }) => {
+const ExploreCard: React.FC<ExploreCardProps> = ({ genre, trackCount, entity, animate = false }) => {
   const [ref, inView] = useInView();
   const { imageUrl } = useExternalImage(() => fetchGenreImage(genre), [genre], { enabled: inView });
 
   const CardContent = (
     <div
       ref={ref}
-      className="relative overflow-hidden rounded-[var(--radius)] cursor-pointer group aspect-[2/1] sm:aspect-[3/2] hub-card-animate"
+      className={`relative overflow-hidden rounded-[var(--radius)] cursor-pointer group aspect-[2/1] sm:aspect-[3/2] ${animate ? 'hub-card-animate' : ''}`}
     >
       {imageUrl ? (
         <div className="absolute inset-0 z-0">
@@ -268,6 +273,7 @@ export const Hub: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState('');
+  const [shouldAnimateCards] = useState(() => !hasPlayedHubCardIntro);
 
   const fetchHubData = async () => {
     setIsLoading(true);
@@ -305,6 +311,10 @@ export const Hub: React.FC = () => {
       fetchHubData();
     }
   }, [library]);
+
+  useEffect(() => {
+    if (shouldAnimateCards && !isLoading) hasPlayedHubCardIntro = true;
+  }, [isLoading, shouldAnimateCards]);
 
   const handleGeneratePlaylists = async () => {
     setIsGenerating(true);
@@ -417,69 +427,6 @@ export const Hub: React.FC = () => {
         </div>
       )}
 
-      {aiPlaylists.length > 0 && (
-        <section>
-          <h2 className="text-xl sm:text-2xl font-bold text-[var(--color-text-primary)] mb-1">
-            For you, {currentUser?.username || 'there'}
-          </h2>
-          <p className="text-sm text-[var(--color-text-secondary)] mb-5">
-            Curated intelligently for your current vibe
-          </p>
-          <div className="flex sm:grid sm:grid-cols-2 lg:grid-cols-3 overflow-x-auto snap-x snap-mandatory gap-4 sm:gap-5 lg:gap-6 hub-scroll-mobile">
-            {aiPlaylists.map((collection) => (
-              <HubCard
-                key={collection.id}
-                collection={collection}
-                onOpen={() => collection.id && navigate(`/playlists/${collection.id}`)}
-                onPlay={() => handlePlayCollection(collection.tracks)}
-                onPinToggle={() =>
-                  collection.id && handleTogglePin(collection.id, !collection.pinned)
-                }
-              />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {systemCollections.length > 0 && (
-        <section>
-          <h2 className="text-lg font-semibold text-[var(--color-text-secondary)] mb-4">
-            Discover
-          </h2>
-          <div className="flex flex-col gap-4">
-            {systemCollections.map((collection) => (
-              <DiscoverCard
-                key={collection.id}
-                collection={collection}
-                onOpen={() => collection.id && navigate(`/playlists/${collection.id}`)}
-                onPlay={() => handlePlayCollection(collection.tracks)}
-              />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {topGenres.length > 0 && (
-        <section>
-          <div className="flex items-center gap-2 mb-4">
-            <Compass className="w-5 h-5 text-[var(--color-text-muted)]" />
-            <h2 className="text-lg font-semibold text-[var(--color-text-secondary)]">
-              Explore
-            </h2>
-          </div>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
-            {topGenres.map(({ genre, count, entity }) => (
-              <ExploreCard
-                key={genre}
-                genre={genre}
-                trackCount={count}
-                entity={entity}
-              />
-            ))}
-          </div>
-        </section>
-      )}
-
       {aiPlaylists.length === 0 && (
         <div className="flex flex-col items-center justify-center py-16 text-center">
           <div className="w-16 h-16 rounded-full bg-[var(--color-surface-variant)] flex items-center justify-center mb-4">
@@ -518,6 +465,74 @@ export const Hub: React.FC = () => {
           )}
         </div>
       )}
+
+      {aiPlaylists.length > 0 && (
+        <section>
+          <h2 className="text-xl sm:text-2xl font-bold text-[var(--color-text-primary)] mb-1">
+            For you, {currentUser?.username || 'there'}
+          </h2>
+          <p className="text-sm text-[var(--color-text-secondary)] mb-5">
+            Curated intelligently for your current vibe
+          </p>
+          <div className="flex sm:grid sm:grid-cols-2 lg:grid-cols-3 overflow-x-auto snap-x snap-mandatory gap-4 sm:gap-5 lg:gap-6 hub-scroll-mobile">
+            {aiPlaylists.map((collection) => (
+              <HubCard
+                key={collection.id}
+                collection={collection}
+                onOpen={() => collection.id && navigate(`/playlists/${collection.id}`)}
+                onPlay={() => handlePlayCollection(collection.tracks)}
+                onPinToggle={() =>
+                  collection.id && handleTogglePin(collection.id, !collection.pinned)
+                }
+                animate={shouldAnimateCards}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {systemCollections.length > 0 && (
+        <section>
+          <h2 className="text-lg font-semibold text-[var(--color-text-secondary)] mb-4">
+            Discover
+          </h2>
+          <div className="grid grid-cols-2 sm:grid-cols-1 gap-3 sm:gap-4">
+            {systemCollections.map((collection) => (
+              <DiscoverCard
+                key={collection.id}
+                collection={collection}
+                onOpen={() => collection.id && navigate(`/playlists/${collection.id}`)}
+                onPlay={() => handlePlayCollection(collection.tracks)}
+                animate={shouldAnimateCards}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {topGenres.length > 0 && (
+        <section>
+          <div className="flex items-center gap-2 mb-4">
+            <Compass className="w-5 h-5 text-[var(--color-text-muted)]" />
+            <h2 className="text-lg font-semibold text-[var(--color-text-secondary)]">
+              Explore
+            </h2>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 sm:gap-4">
+            {topGenres.map(({ genre, count, entity }) => (
+              <ExploreCard
+                key={genre}
+                genre={genre}
+                trackCount={count}
+                entity={entity}
+                animate={shouldAnimateCards}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
+
     </div>
   );
 };

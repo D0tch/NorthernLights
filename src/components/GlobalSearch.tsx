@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../store';
@@ -34,7 +34,19 @@ interface ResultsProps {
     openContextMenu: (track: TrackInfo, x: number, y: number) => void;
 }
 
-const SearchResults: React.FC<ResultsProps> = ({
+interface SearchMatches {
+    matchedArtists: { name: string; id: string }[];
+    matchedAlbums: { title: string; artist: string; id: string; artUrl?: string }[];
+    matchedTracks: TrackInfo[];
+}
+
+const EMPTY_SEARCH_MATCHES: SearchMatches = {
+    matchedArtists: [],
+    matchedAlbums: [],
+    matchedTracks: [],
+};
+
+const SearchResults = React.memo(function SearchResults({
     query,
     matchedArtists,
     matchedAlbums,
@@ -43,7 +55,7 @@ const SearchResults: React.FC<ResultsProps> = ({
     onAlbumClick,
     onTrackPlay,
     openContextMenu,
-}) => {
+}: ResultsProps) {
     const noResults =
         matchedArtists.length === 0 && matchedAlbums.length === 0 && matchedTracks.length === 0;
 
@@ -161,7 +173,7 @@ const SearchResults: React.FC<ResultsProps> = ({
                                         e.stopPropagation();
                                         openContextMenu(track, e.clientX, e.clientY);
                                     }}
-                                    className="opacity-0 group-hover:opacity-100 p-2 text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition-all flex-shrink-0"
+                                    className="opacity-0 group-hover:opacity-100 p-2 text-[var(--color-text-muted)] hover:text-[var(--color-primary)] transition-ui flex-shrink-0"
                                 >
                                     <MoreHorizontal size={16} />
                                 </button>
@@ -173,7 +185,7 @@ const SearchResults: React.FC<ResultsProps> = ({
             )}
         </div>
     );
-};
+});
 
 // ─── main component ───────────────────────────────────────────────────────────
 
@@ -188,12 +200,26 @@ export const GlobalSearch: React.FC = () => {
 
     const [isExpanded, setIsExpanded] = useState(false);
     const [query, setQuery] = useState('');
+    const [debouncedQuery, setDebouncedQuery] = useState('');
     const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
 
     const inputRef = useRef<HTMLInputElement>(null);
     const mobileInputRef = useRef<HTMLInputElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!query.trim()) {
+            setDebouncedQuery('');
+            return;
+        }
+
+        const timer = window.setTimeout(() => {
+            setDebouncedQuery(query);
+        }, 150);
+
+        return () => window.clearTimeout(timer);
+    }, [query]);
 
     // ── open ──────────────────────────────────────────────────────────────────
     const handleExpand = () => {
@@ -282,72 +308,93 @@ export const GlobalSearch: React.FC = () => {
     }, [isExpanded, isMobile]);
 
     // ── filter logic ──────────────────────────────────────────────────────────
-    const q = query.toLowerCase().trim();
-    const hasQuery = q.length > 0;
+    const rawQuery = query.trim();
+    const q = debouncedQuery.toLowerCase().trim();
+    const hasQuery = rawQuery.length > 0;
+    const hasDebouncedQuery = q.length > 0;
+    const canShowResults = hasQuery && hasDebouncedQuery;
 
-    let matchedArtists: { name: string; id: string }[] = [];
-    let matchedAlbums: { title: string; artist: string; id: string; artUrl?: string }[] = [];
-    let matchedTracks: TrackInfo[] = [];
-
-    if (hasQuery) {
-        matchedArtists = artists
-            .filter((a: any) => a.name?.toLowerCase().includes(q))
-            .slice(0, 5)
-            .map((a: any) => ({ name: a.name, id: a.id }));
-
-        const albumMatches = albums
-            .filter(
-                (a: any) =>
-                    a.title?.toLowerCase().includes(q) || a.artist_name?.toLowerCase().includes(q)
-            )
-            .slice(0, 5);
-        matchedAlbums = albumMatches.map((a: any) => {
-            const track = library.find((t: TrackInfo) => t.albumId === a.id);
-            return { title: a.title, artist: a.artist_name || 'Unknown Artist', id: a.id, artUrl: track?.artUrl };
-        });
-
-        const tracksSet = new Set<string>();
-        library.forEach((track: TrackInfo) => {
-            if (track.title?.toLowerCase().includes(q) || track.path.toLowerCase().includes(q)) {
-                if (!tracksSet.has(track.id)) {
-                    matchedTracks.push(track);
-                    tracksSet.add(track.id);
-                }
+    const albumArtById = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const track of library as TrackInfo[]) {
+            if (track.albumId && track.artUrl && !map.has(track.albumId)) {
+                map.set(track.albumId, track.artUrl);
             }
-        });
+        }
+        return map;
+    }, [library]);
 
-        if (matchedArtists.length > 0) {
-            const matchedArtistNames = new Set(matchedArtists.map((a: any) => a.name.toLowerCase()));
-            library.forEach((track: TrackInfo) => {
-                if (tracksSet.has(track.id)) return;
-                const tArtists: string[] = Array.isArray(track.artists) ? track.artists : [];
-                if (tArtists.some(a => matchedArtistNames.has(a.toLowerCase()))) {
-                    matchedTracks.push(track);
-                    tracksSet.add(track.id);
-                }
-            });
+    const { matchedArtists, matchedAlbums, matchedTracks } = useMemo<SearchMatches>(() => {
+        if (!q) return EMPTY_SEARCH_MATCHES;
+
+        const nextArtists: { name: string; id: string }[] = [];
+        for (const artist of artists as Array<{ name?: string; id: string }>) {
+            const name = artist.name;
+            if (!name?.toLowerCase().includes(q)) continue;
+            nextArtists.push({ name, id: artist.id });
+            if (nextArtists.length >= 5) break;
         }
 
-        matchedTracks = matchedTracks.slice(0, 10);
-    }
+        const nextAlbums: { title: string; artist: string; id: string; artUrl?: string }[] = [];
+        for (const album of albums as Array<{ title?: string; artist_name?: string; id: string }>) {
+            const title = album.title || 'Unknown Album';
+            const artist = album.artist_name || 'Unknown Artist';
+            if (!title.toLowerCase().includes(q) && !artist.toLowerCase().includes(q)) continue;
+            nextAlbums.push({ title, artist, id: album.id, artUrl: albumArtById.get(album.id) });
+            if (nextAlbums.length >= 5) break;
+        }
+
+        const matchedArtistNames = new Set(nextArtists.map(artist => artist.name.toLowerCase()));
+        const tracksSet = new Set<string>();
+        const nextTracks: TrackInfo[] = [];
+
+        for (const track of library as TrackInfo[]) {
+            if (tracksSet.has(track.id)) continue;
+
+            const title = track.title || '';
+            const path = track.path || '';
+            const directMatch = title.toLowerCase().includes(q) || path.toLowerCase().includes(q);
+            let artistMatch = false;
+
+            if (!directMatch && matchedArtistNames.size > 0) {
+                const trackArtists = Array.isArray(track.artists)
+                    ? track.artists
+                    : typeof track.artists === 'string'
+                        ? [track.artists]
+                        : [];
+                artistMatch = trackArtists.some(artist => matchedArtistNames.has(artist.toLowerCase()));
+            }
+
+            if (!directMatch && !artistMatch) continue;
+            nextTracks.push(track);
+            tracksSet.add(track.id);
+            if (nextTracks.length >= 10) break;
+        }
+
+        return {
+            matchedArtists: nextArtists,
+            matchedAlbums: nextAlbums,
+            matchedTracks: nextTracks,
+        };
+    }, [q, artists, albums, library, albumArtById]);
 
     // ── shared handlers ───────────────────────────────────────────────────────
-    const handleArtistClick = (artistId: string) => {
+    const handleArtistClick = useCallback((artistId: string) => {
         navigate(`/library/artist/${artistId}`);
         handleClose();
-    };
-    const handleAlbumClick = (albumId: string) => {
+    }, [handleClose, navigate]);
+    const handleAlbumClick = useCallback((albumId: string) => {
         navigate(`/library/album/${albumId}`);
         handleClose();
-    };
-    const handleTrackPlay = (track: TrackInfo) => {
+    }, [handleClose, navigate]);
+    const handleTrackPlay = useCallback((track: TrackInfo) => {
         if (!track) return;
         setPlaylist([track], 0);
         handleClose();
-    };
+    }, [handleClose, setPlaylist]);
 
-    const sharedResultsProps: ResultsProps = {
-        query,
+    const sharedResultsProps = useMemo<ResultsProps>(() => ({
+        query: debouncedQuery.trim() || rawQuery,
         matchedArtists,
         matchedAlbums,
         matchedTracks,
@@ -355,14 +402,14 @@ export const GlobalSearch: React.FC = () => {
         onAlbumClick: handleAlbumClick,
         onTrackPlay: handleTrackPlay,
         openContextMenu,
-    };
+    }), [debouncedQuery, rawQuery, matchedArtists, matchedAlbums, matchedTracks, handleArtistClick, handleAlbumClick, handleTrackPlay, openContextMenu]);
 
     // ── pill (trigger) ────────────────────────────────────────────────────────
     const pill = (
         <div ref={containerRef} className="relative z-[60] flex items-center ml-auto h-9">
             <div
                 className={`
-                    flex items-center rounded-full border backdrop-blur-md transition-all duration-300 overflow-hidden
+                    flex items-center rounded-full border backdrop-blur-md transition-ui duration-300 overflow-hidden
                     ${isExpanded && !isMobile
                         ? 'w-64 sm:w-80 bg-[var(--glass-bg)] border-[var(--color-primary)] shadow-[0_0_12px_rgba(34,201,131,0.2)]'
                         : 'w-[104px] bg-black/10 dark:bg-white/10 border-black/10 dark:border-white/15 hover:bg-black/15 dark:hover:bg-white/15 hover:border-[var(--glass-border-hover)] cursor-pointer'
@@ -400,7 +447,7 @@ export const GlobalSearch: React.FC = () => {
             </div>
 
             {/* Desktop dropdown portal */}
-            {isExpanded && !isMobile && hasQuery &&
+            {isExpanded && !isMobile && canShowResults &&
                 createPortal(
                     <div
                         ref={dropdownRef}
@@ -423,13 +470,13 @@ export const GlobalSearch: React.FC = () => {
                     <button
                         aria-label="Close search"
                         onClick={handleClose}
-                        className="flex-shrink-0 p-1 -ml-1 rounded-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] active:scale-95 transition-all"
+                        className="flex-shrink-0 p-1 -ml-1 rounded-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] active:scale-95 transition-ui"
                     >
                         <ArrowLeft size={22} />
                     </button>
 
                     {/* Input */}
-                    <div className="flex-1 flex items-center gap-2 rounded-full px-4 py-2 bg-black/5 dark:bg-white/10 border border-[var(--color-primary)]/60 shadow-[0_0_12px_rgba(34,201,131,0.15)] focus-within:border-[var(--color-primary)] focus-within:shadow-[0_0_16px_rgba(34,201,131,0.25)] transition-all">
+                    <div className="flex-1 flex items-center gap-2 rounded-full px-4 py-2 bg-black/5 dark:bg-white/10 border border-[var(--color-primary)]/60 shadow-[0_0_12px_rgba(34,201,131,0.15)] focus-within:border-[var(--color-primary)] focus-within:shadow-[0_0_16px_rgba(34,201,131,0.25)] transition-ui">
                         <SearchIcon size={16} className="text-[var(--color-text-muted)] flex-shrink-0" />
                         <input
                             ref={mobileInputRef}
@@ -453,7 +500,7 @@ export const GlobalSearch: React.FC = () => {
 
                 {/* Results scroll area */}
                 <div className="flex-1 overflow-y-auto overscroll-contain p-4">
-                    {hasQuery ? (
+                    {canShowResults ? (
                         <SearchResults {...sharedResultsProps} />
                     ) : (
                         <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--color-text-muted)]">
