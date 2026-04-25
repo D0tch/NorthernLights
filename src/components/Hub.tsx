@@ -141,7 +141,7 @@ const DiscoverCard: React.FC<DiscoverCardProps> = ({ collection, onOpen, onPlay,
 
   return (
     <div
-      className={`relative flex flex-col gap-3 p-4 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] ${animate ? 'hub-card-animate' : ''}`}
+      className={`relative flex flex-col sm:flex-row gap-3 p-4 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] ${animate ? 'hub-card-animate' : ''}`}
       onClick={onOpen}
       role="button"
       tabIndex={0}
@@ -154,7 +154,7 @@ const DiscoverCard: React.FC<DiscoverCardProps> = ({ collection, onOpen, onPlay,
       aria-label={`Play ${collection.title || 'Untitled playlist'}`}
     >
       {/* Left: 2x2 Cover Grid */}
-      <div className="grid grid-cols-2 gap-0.5 shrink-0 w-full rounded-lg overflow-hidden">
+      <div className="grid grid-cols-2 gap-0 shrink-0 w-full sm:w-40 rounded-lg overflow-hidden">
         {hasCovers ? (
           covers.map((url, i) => (
             <img
@@ -234,20 +234,18 @@ const ExploreCard: React.FC<ExploreCardProps> = ({ genre, trackCount, entity, an
 
       <div className="relative z-10 h-full flex flex-col justify-end p-4 sm:p-5">
         <h3
-          className={`font-bold text-xl sm:text-2xl tracking-tight leading-tight transition-colors duration-200 ${
-            imageUrl
-              ? 'text-white drop-shadow-lg'
-              : 'text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)]'
-          }`}
+          className={`font-bold text-xl sm:text-2xl tracking-tight leading-tight transition-colors duration-200 ${imageUrl
+            ? 'text-white drop-shadow-lg'
+            : 'text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)]'
+            }`}
         >
           {genre}
         </h3>
         <p
-          className={`text-xs mt-1 ${
-            imageUrl
-              ? 'text-white/70'
-              : 'text-[var(--color-text-muted)]'
-          }`}
+          className={`text-xs mt-1 ${imageUrl
+            ? 'text-white/70'
+            : 'text-[var(--color-text-muted)]'
+            }`}
         >
           {trackCount} {trackCount === 1 ? 'track' : 'tracks'}
         </p>
@@ -496,7 +494,7 @@ export const Hub: React.FC = () => {
           <h2 className="text-lg font-semibold text-[var(--color-text-secondary)] mb-4">
             Discover
           </h2>
-          <div className="grid grid-cols-2 sm:grid-cols-1 gap-3 sm:gap-4">
+          <div className="grid grid-cols-2 gap-3">
             {systemCollections.map((collection) => (
               <DiscoverCard
                 key={collection.id}
