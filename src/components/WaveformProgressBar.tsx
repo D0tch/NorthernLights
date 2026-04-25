@@ -1,24 +1,33 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { usePlayerStore } from '../store/index';
+import { usePlaybackTimeStore } from '../store/playbackTime';
+
+const INTRO_DURATION_MS = 520; // total intro sweep duration
+function easeOutCubic(t: number): number { return 1 - Math.pow(1 - t, 3); }
 
 interface WaveformProgressBarProps {
     audioUrl: string;
-    currentTime: number;
     duration: number;
     onSeek: (time: number) => void;
     dbDuration?: number;       // Fallback duration from DB when stream reports Infinity
     allowWaveformDecode?: boolean; // Set to false for live-transcoded streams to skip fetch+decode
 }
 
+function clampProgress(value: number): number {
+    if (!Number.isFinite(value)) return 0;
+    return Math.max(0, Math.min(1, value));
+}
+
 // Extract peaks from audio buffer
 function extractPeaks(buffer: AudioBuffer, numBars: number): Float32Array {
     const channelData = buffer.getChannelData(0); // mono / left channel
-    const samplesPerBar = Math.floor(channelData.length / numBars);
+    const samplesPerBar = Math.max(1, Math.floor(channelData.length / numBars));
     const peaks = new Float32Array(numBars);
 
     for (let i = 0; i < numBars; i++) {
         let max = 0;
         const start = i * samplesPerBar;
-        const end = start + samplesPerBar;
+        const end = Math.min(start + samplesPerBar, channelData.length);
         for (let j = start; j < end; j++) {
             const abs = Math.abs(channelData[j]);
             if (abs > max) max = abs;
@@ -29,64 +38,109 @@ function extractPeaks(buffer: AudioBuffer, numBars: number): Float32Array {
     return peaks;
 }
 
-// Draw the waveform on the canvas
-function drawWaveform(
+function setCanvasSize(canvas: HTMLCanvasElement, width: number, height: number, dpr: number): void {
+    const nextWidth = Math.max(1, Math.floor(width * dpr));
+    const nextHeight = Math.max(1, Math.floor(height * dpr));
+    if (canvas.width !== nextWidth) canvas.width = nextWidth;
+    if (canvas.height !== nextHeight) canvas.height = nextHeight;
+}
+
+function resetCanvas(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, dpr: number): void {
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function drawPlaceholder(
     canvas: HTMLCanvasElement,
-    peaks: Float32Array,
-    progress: number, // 0-1
     dpr: number,
-    isDark: boolean
-) {
+    isDark: boolean,
+    variant: 'base' | 'progress'
+): void {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const W = canvas.width / dpr;
-    const H = canvas.height / dpr;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    resetCanvas(ctx, canvas, dpr);
+    const width = canvas.width / dpr;
+    const height = canvas.height / dpr;
+    const midY = height / 2;
 
-    const numBars = peaks.length;
-    const barWidth = W / numBars;
-    const gap = Math.max(1, barWidth * 0.25);
-    const barW = barWidth - gap;
-    const midY = H / 2;
-    const progressX = W * progress;
-
-    // Unplayed bar color adapts to theme
-    const unplayedColor = isDark
-        ? 'rgba(255, 255, 255, 0.18)'
-        : 'rgba(0, 0, 0, 0.12)';
-
-    for (let i = 0; i < numBars; i++) {
-        const x = i * barWidth;
-        const barH = Math.max(2, peaks[i] * (H * 0.85));
-        const isPlayed = (x + barW / 2) <= progressX;
-
-        if (isPlayed) {
-            const grad = ctx.createLinearGradient(0, midY - barH / 2, 0, midY + barH / 2);
-            grad.addColorStop(0, 'rgba(52, 211, 153, 0.9)'); // Emerald/Green
-            grad.addColorStop(0.5, 'rgba(34, 197, 94, 1.0)');
-            grad.addColorStop(1, 'rgba(21, 128, 61, 0.8)');
-            ctx.fillStyle = grad;
-        } else {
-            ctx.fillStyle = unplayedColor;
-        }
-
-        const rx = 2;
-        const bx = x + gap / 2;
-        const by = midY - barH / 2;
-        ctx.beginPath();
-        ctx.roundRect(bx, by, barW, barH, rx);
-        ctx.fill();
-
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (variant === 'progress') {
+        const grad = ctx.createLinearGradient(0, 0, width, 0);
+        grad.addColorStop(0, 'rgba(34, 197, 94, 0.9)');
+        grad.addColorStop(1, 'rgba(52, 211, 153, 1)');
+        ctx.fillStyle = grad;
+    } else {
+        ctx.fillStyle = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)';
     }
+
+    ctx.beginPath();
+    ctx.roundRect(0, midY - 1.5, width, 3, 2);
+    ctx.fill();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
 }
 
-export const WaveformProgressBar: React.FC<WaveformProgressBarProps> = ({
+// Draw one static waveform layer. The moving progress is handled by transform
+// updates on the pre-rendered progress layer instead of repainting on every tick.
+// animProgress (0–1): sweep position from left; bars to the left of the front are
+// fully drawn, bars at the front scale up from 0 → full from their vertical centre.
+function drawWaveformLayer(
+    canvas: HTMLCanvasElement,
+    peaks: Float32Array,
+    dpr: number,
+    isDark: boolean,
+    variant: 'base' | 'progress',
+    animProgress = 1
+): void {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    resetCanvas(ctx, canvas, dpr);
+    const width = canvas.width / dpr;
+    const height = canvas.height / dpr;
+    const numBars = peaks.length;
+    const barWidth = width / numBars;
+    const gap = Math.max(1, barWidth * 0.25);
+    const barW = Math.max(1, barWidth - gap);
+    const midY = height / 2;
+
+    if (variant === 'progress') {
+        const grad = ctx.createLinearGradient(0, 0, 0, height);
+        grad.addColorStop(0, 'rgba(52, 211, 153, 0.9)');
+        grad.addColorStop(0.5, 'rgba(34, 197, 94, 1.0)');
+        grad.addColorStop(1, 'rgba(21, 128, 61, 0.8)');
+        ctx.fillStyle = grad;
+    } else {
+        ctx.fillStyle = isDark
+            ? 'rgba(255, 255, 255, 0.18)'
+            : 'rgba(0, 0, 0, 0.12)';
+    }
+
+    // How many bars the sweep front has reached (fractional)
+    const frontBar = animProgress * numBars;
+
+    for (let i = 0; i < numBars; i++) {
+        // How far past this bar the sweep front is (0 = not reached, 1 = fully revealed)
+        // Use a soft window of 2 bars so adjacent pillars stagger nicely
+        const barScale = Math.min(1, Math.max(0, (frontBar - i) / 2));
+        if (barScale === 0) continue;
+
+        const x = i * barWidth;
+        const fullBarH = Math.max(2, peaks[i] * (height * 0.85));
+        const barH = fullBarH * barScale;
+        const bx = x + gap / 2;
+        const by = midY - barH / 2; // always centred vertically
+
+        ctx.beginPath();
+        ctx.roundRect(bx, by, barW, barH, 2);
+        ctx.fill();
+    }
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+}
+
+const WaveformProgressBarComponent: React.FC<WaveformProgressBarProps> = ({
     audioUrl,
-    currentTime,
     duration: rawDuration,
     onSeek,
     dbDuration,
@@ -94,17 +148,114 @@ export const WaveformProgressBar: React.FC<WaveformProgressBarProps> = ({
 }) => {
     // For transcoded streams, the audio element reports Infinity duration.
     // Fall back to the DB-stored duration (in seconds) in that case.
-    const duration = (!isFinite(rawDuration) || rawDuration === 0) && dbDuration
+    const duration = (!Number.isFinite(rawDuration) || rawDuration === 0) && dbDuration
         ? dbDuration
         : rawDuration;
-    const canvasRef = useRef<HTMLCanvasElement>(null);
+    const theme = usePlayerStore(state => state.theme);
+    const isDark = theme === 'dark';
+    const containerRef = useRef<HTMLDivElement>(null);
+    const baseCanvasRef = useRef<HTMLCanvasElement>(null);
+    const progressCanvasRef = useRef<HTMLCanvasElement>(null);
+    const progressLayerRef = useRef<HTMLDivElement>(null);
+    const durationRef = useRef(duration);
     const [peaks, setPeaks] = useState<Float32Array | null>(null);
     const [loading, setLoading] = useState(false);
     const lastUrlRef = useRef<string>('');
+    // Intro animation state
+    const introAnimRef = useRef<number | null>(null);
+    const introStartRef = useRef<number | null>(null);
+    const animProgressRef = useRef<number>(1); // 1 = fully drawn (no animation pending)
     const dpr = typeof window !== 'undefined' ? Math.min(window.devicePixelRatio || 1, 2) : 1;
-    const isDark = typeof document !== 'undefined' && document.documentElement.classList.contains('dark');
 
-    // Load and decode audio when URL changes -- only when allowed (skip for live transcoded streams)
+    const updateProgressLayer = useCallback((time: number) => {
+        const progress = durationRef.current > 0 ? clampProgress(time / durationRef.current) : 0;
+        const layer = progressLayerRef.current;
+        const progressCanvas = progressCanvasRef.current;
+        if (!layer || !progressCanvas) return;
+
+        if (progress <= 0.0005) {
+            layer.style.opacity = '0';
+            layer.style.transform = 'scaleX(0)';
+            progressCanvas.style.transform = 'scaleX(1)';
+            return;
+        }
+
+        const visibleProgress = Math.max(progress, 0.001);
+        layer.style.opacity = '1';
+        layer.style.transform = `scaleX(${visibleProgress.toFixed(5)})`;
+        progressCanvas.style.transform = `scaleX(${(1 / visibleProgress).toFixed(5)})`;
+    }, []);
+
+    useEffect(() => {
+        durationRef.current = duration;
+        updateProgressLayer(usePlaybackTimeStore.getState().currentTime);
+    }, [duration, updateProgressLayer]);
+
+    useEffect(() => {
+        return usePlaybackTimeStore.subscribe((state, previousState) => {
+            if (state.currentTime !== previousState.currentTime || state.duration !== previousState.duration) {
+                updateProgressLayer(state.currentTime);
+            }
+        });
+    }, [updateProgressLayer]);
+
+    const drawStaticLayers = useCallback((animProgress = animProgressRef.current) => {
+        const container = containerRef.current;
+        const baseCanvas = baseCanvasRef.current;
+        const progressCanvas = progressCanvasRef.current;
+        if (!container || !baseCanvas || !progressCanvas) return;
+
+        const rect = container.getBoundingClientRect();
+        const width = rect.width || container.offsetWidth || 1;
+        const height = rect.height || 48;
+        setCanvasSize(baseCanvas, width, height, dpr);
+        setCanvasSize(progressCanvas, width, height, dpr);
+
+        if (peaks) {
+            drawWaveformLayer(baseCanvas, peaks, dpr, isDark, 'base', animProgress);
+            drawWaveformLayer(progressCanvas, peaks, dpr, isDark, 'progress', animProgress);
+        } else {
+            drawPlaceholder(baseCanvas, dpr, isDark, 'base');
+            drawPlaceholder(progressCanvas, dpr, isDark, 'progress');
+        }
+
+        updateProgressLayer(usePlaybackTimeStore.getState().currentTime);
+    }, [dpr, isDark, peaks, updateProgressLayer]);
+
+    // Kick off the intro sweep whenever peaks first arrive
+    useEffect(() => {
+        if (!peaks) return;
+
+        // Cancel any previous in-flight animation
+        if (introAnimRef.current !== null) cancelAnimationFrame(introAnimRef.current);
+        introStartRef.current = null;
+        animProgressRef.current = 0;
+
+        const tick = (now: number) => {
+            if (introStartRef.current === null) introStartRef.current = now;
+            const elapsed = now - introStartRef.current;
+            const raw = Math.min(elapsed / INTRO_DURATION_MS, 1);
+            const eased = easeOutCubic(raw);
+            animProgressRef.current = eased;
+            drawStaticLayers(eased);
+
+            if (raw < 1) {
+                introAnimRef.current = requestAnimationFrame(tick);
+            } else {
+                introAnimRef.current = null;
+                animProgressRef.current = 1;
+            }
+        };
+
+        introAnimRef.current = requestAnimationFrame(tick);
+        return () => {
+            if (introAnimRef.current !== null) cancelAnimationFrame(introAnimRef.current);
+        };
+    // drawStaticLayers is intentionally excluded: we only want this to fire when peaks change
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [peaks]);
+
+    // Load and decode audio when URL changes. Skip for live transcoded streams.
     useEffect(() => {
         if (!allowWaveformDecode) {
             setLoading(false);
@@ -117,7 +268,6 @@ export const WaveformProgressBar: React.FC<WaveformProgressBarProps> = ({
         setPeaks(null);
         setLoading(true);
 
-        // We still want the canvas to be usable before decode completes
         const abortCtrl = new AbortController();
 
         (async () => {
@@ -131,10 +281,9 @@ export const WaveformProgressBar: React.FC<WaveformProgressBarProps> = ({
                 audioCtx.close();
                 if (abortCtrl.signal.aborted) return;
 
-                const canvas = canvasRef.current;
-                const numBars = canvas ? Math.floor(canvas.offsetWidth / 3) : 200;
-                const extracted = extractPeaks(decoded, numBars);
-                setPeaks(extracted);
+                const width = containerRef.current?.offsetWidth || 600;
+                const numBars = Math.max(24, Math.floor(width / 3));
+                setPeaks(extractPeaks(decoded, numBars));
             } catch (e) {
                 if ((e as any)?.name !== 'AbortError') {
                     console.warn('Waveform decode failed:', e);
@@ -147,103 +296,81 @@ export const WaveformProgressBar: React.FC<WaveformProgressBarProps> = ({
         return () => abortCtrl.abort();
     }, [audioUrl, allowWaveformDecode]);
 
-    // Redraw whenever peaks or progress changes
     useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
+        drawStaticLayers();
+    }, [drawStaticLayers]);
 
-        if (!peaks) {
-            // Draw a placeholder flat line
-            const ctx = canvas.getContext('2d');
-            if (!ctx) return;
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            const W = canvas.width / dpr;
-            const H = canvas.height / dpr;
-            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-            const progress = duration > 0 ? currentTime / duration : 0;
-            const progressX = W * progress;
-            const midY = H / 2;
-            // Plain thin track
-            ctx.fillStyle = isDark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.08)';
-            ctx.beginPath();
-            ctx.roundRect(0, midY - 1.5, W, 3, 2);
-            ctx.fill();
-            if (progress > 0) {
-                const grad = ctx.createLinearGradient(0, 0, progressX, 0);
-                grad.addColorStop(0, 'rgba(34, 197, 94, 0.9)');
-                grad.addColorStop(1, 'rgba(52, 211, 153, 1)');
-                ctx.fillStyle = grad;
-                ctx.beginPath();
-                ctx.roundRect(0, midY - 1.5, progressX, 3, 2);
-                ctx.fill();
-            }
-            ctx.setTransform(1, 0, 0, 1, 0, 0);
-            return;
-        }
-
-        const progress = duration > 0 ? currentTime / duration : 0;
-        drawWaveform(canvas, peaks, progress, dpr, isDark);
-    }, [peaks, currentTime, duration, dpr, isDark]);
-
-    // Handle resize: re-extract peaks with new bar count
     useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas || !peaks) return;
+        const container = containerRef.current;
+        if (!container) return;
 
-        const observer = new ResizeObserver(entries => {
-            for (const entry of entries) {
-                const { width, height } = entry.contentRect;
-                canvas.width = width * dpr;
-                canvas.height = height * dpr;
-                canvas.style.width = `${width}px`;
-                canvas.style.height = `${height}px`;
-                const progress = duration > 0 ? currentTime / duration : 0;
-                drawWaveform(canvas, peaks, progress, dpr, isDark);
-            }
+        const observer = new ResizeObserver(() => {
+            drawStaticLayers();
         });
-        observer.observe(canvas);
+        observer.observe(container);
         return () => observer.disconnect();
-    }, [peaks, currentTime, duration, dpr]);
+    }, [drawStaticLayers]);
 
-    // Set canvas size on mount
-    useEffect(() => {
-        const canvas = canvasRef.current;
-        if (!canvas) return;
-        const rect = canvas.getBoundingClientRect();
-        canvas.width = rect.width * dpr;
-        canvas.height = rect.height * dpr;
-    }, [dpr]);
-
-    const handleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-        const canvas = canvasRef.current;
-        if (!canvas || duration === 0) return;
-        const rect = canvas.getBoundingClientRect();
+    const handleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+        const container = containerRef.current;
+        if (!container || duration === 0) return;
+        const rect = container.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const fraction = Math.max(0, Math.min(1, x / rect.width));
         onSeek(fraction * duration);
     }, [duration, onSeek]);
 
-    const handleMouseMove = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
-        // Show hover cursor
-        const canvas = canvasRef.current;
-        if (canvas) canvas.style.cursor = 'pointer';
-    }, []);
-
     return (
-        <div className="waveform-container" style={{ position: 'relative', width: '100%', height: '48px', display: 'flex', alignItems: 'center' }}>
+        <div
+            ref={containerRef}
+            className="waveform-container"
+            onClick={handleClick}
+            style={{
+                position: 'relative',
+                width: '100%',
+                height: '48px',
+                cursor: 'pointer',
+                borderRadius: '6px',
+                overflow: 'hidden',
+                touchAction: 'manipulation',
+            }}
+        >
             <canvas
-                ref={canvasRef}
-                onClick={handleClick}
-                onMouseMove={handleMouseMove}
+                ref={baseCanvasRef}
                 style={{
+                    position: 'absolute',
+                    inset: 0,
                     width: '100%',
                     height: '100%',
                     display: 'block',
-                    cursor: 'pointer',
-                    borderRadius: '6px',
-                    touchAction: 'manipulation',
                 }}
             />
+            <div
+                ref={progressLayerRef}
+                style={{
+                    position: 'absolute',
+                    inset: 0,
+                    pointerEvents: 'none',
+                    overflow: 'hidden',
+                    opacity: 0,
+                    transform: 'scaleX(0)',
+                    transformOrigin: 'left center',
+                    willChange: 'transform',
+                }}
+            >
+                <canvas
+                    ref={progressCanvasRef}
+                    style={{
+                        position: 'absolute',
+                        inset: 0,
+                        width: '100%',
+                        height: '100%',
+                        display: 'block',
+                        transformOrigin: 'left center',
+                        willChange: 'transform',
+                    }}
+                />
+            </div>
             {loading && (
                 <div style={{
                     position: 'absolute',
@@ -254,10 +381,13 @@ export const WaveformProgressBar: React.FC<WaveformProgressBarProps> = ({
                     pointerEvents: 'none',
                 }}>
                     <span style={{ fontSize: '0.65rem', color: isDark ? 'rgba(255,255,255,0.3)' : 'rgba(0,0,0,0.25)', letterSpacing: '0.1em' }}>
-                        Loading waveform…
+                        Loading waveform...
                     </span>
                 </div>
             )}
         </div>
     );
 };
+
+export const WaveformProgressBar = React.memo(WaveformProgressBarComponent);
+WaveformProgressBar.displayName = 'WaveformProgressBar';
