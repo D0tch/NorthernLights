@@ -75,6 +75,7 @@ export interface Playlist {
   title: string;
   description: string | null;
   isLlmGenerated: boolean;
+  isSystem?: boolean;
   pinned?: boolean;
   createdAt?: number;
   tracks: TrackInfo[];

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getPlaylists, getPlaylistTracks, createPlaylist, addTracksToPlaylist, deletePlaylist, getPlaylistOwner, togglePlaylistPin } from '../database';
+import { getPlaylists, getPlaylistTracks, createPlaylist, addTracksToPlaylist, deletePlaylist, getPlaylistOwner, getPlaylistMeta, togglePlaylistPin } from '../database';
 
 const router = Router();
 
@@ -52,8 +52,11 @@ router.post('/:id/tracks', async (req, res) => {
 
     if (!Array.isArray(trackIds)) return res.status(400).json({ error: 'trackIds must be an array' });
 
-    const owner = await getPlaylistOwner(id as string);
-    if (owner && owner !== userId && req.user?.role !== 'admin') {
+    const meta = await getPlaylistMeta(id as string);
+    if (meta?.isSystem) {
+      return res.status(403).json({ error: 'System playlists are read-only' });
+    }
+    if (meta?.userId && meta.userId !== userId && req.user?.role !== 'admin') {
       return res.status(403).json({ error: 'Not your playlist' });
     }
 
@@ -71,6 +74,11 @@ router.delete('/:id', async (req, res) => {
     const { id } = req.params;
     const userId = req.user?.userId;
     if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+
+    const meta = await getPlaylistMeta(id as string);
+    if (meta?.isSystem) {
+      return res.status(403).json({ error: 'System playlists are read-only' });
+    }
 
     if (req.user?.role === 'admin') {
       await deletePlaylist(id as string);

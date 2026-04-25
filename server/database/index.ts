@@ -552,6 +552,13 @@ export async function initDB(): Promise<Pool> {
           ALTER TABLE playlists ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT FALSE;
         EXCEPTION WHEN OTHERS THEN null;
         END $$;
+
+        -- Add is_system column to playlists (system-owned, read-only to users)
+        DO $$
+        BEGIN
+          ALTER TABLE playlists ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT FALSE;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
       `);
 
       client.release();
@@ -1352,13 +1359,13 @@ export async function migrateEntityIds() {
 // PLAYLISTS API 
 // ==========================================
 
-export async function createPlaylist(id: string, title: string, description: string | null = null, isLlmGenerated: boolean = false, userId: string | null = null) {
+export async function createPlaylist(id: string, title: string, description: string | null = null, isLlmGenerated: boolean = false, userId: string | null = null, isSystem: boolean = false) {
   const db = await initDB();
   await db.query(`
-    INSERT INTO playlists (id, title, description, created_at, is_llm_generated, user_id)
-    VALUES ($1, $2, $3, NOW(), $4, $5)
-    ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description
-  `, [id, title, description, isLlmGenerated, userId]);
+    INSERT INTO playlists (id, title, description, created_at, is_llm_generated, user_id, is_system)
+    VALUES ($1, $2, $3, NOW(), $4, $5, $6)
+    ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description, is_system = EXCLUDED.is_system
+  `, [id, title, description, isLlmGenerated, userId, isSystem]);
 }
 
 export async function addTracksToPlaylist(playlistId: string, trackIds: string[]) {
@@ -1437,6 +1444,7 @@ export async function getPlaylists(userId: string | null = null) {
   return res.rows.map((row: any) => ({
     ...row,
     isLlmGenerated: row.is_llm_generated,
+    isSystem: row.is_system,
     pinned: row.pinned,
     createdAt: new Date(row.created_at).getTime(),
   }));
@@ -1482,6 +1490,27 @@ export async function getPlaylistOwner(playlistId: string): Promise<string | nul
   const res = await db.query('SELECT user_id FROM playlists WHERE id = $1', [playlistId]);
   if (res.rows.length === 0) return null;
   return (res.rows[0] as any).user_id || null;
+}
+
+export async function getPlaylistMeta(playlistId: string): Promise<{ userId: string | null; isSystem: boolean } | null> {
+  const db = await initDB();
+  const res = await db.query('SELECT user_id, is_system FROM playlists WHERE id = $1', [playlistId]);
+  if (res.rows.length === 0) return null;
+  const row = res.rows[0] as any;
+  return { userId: row.user_id || null, isSystem: !!row.is_system };
+}
+
+export async function deleteSystemPlaylistsForUser(userId: string) {
+  const db = await initDB();
+  await db.query(`
+    DELETE FROM playlist_tracks
+    WHERE playlist_id IN (SELECT id FROM playlists WHERE is_system = TRUE AND user_id = $1)
+  `, [userId]);
+  const res = await db.query(
+    'DELETE FROM playlists WHERE is_system = TRUE AND user_id = $1',
+    [userId]
+  );
+  return res.rowCount || 0;
 }
 
 export async function cleanupOrphanedPlaylists() {
