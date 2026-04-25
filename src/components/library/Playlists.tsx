@@ -338,9 +338,10 @@ export const Playlists: React.FC = () => {
           ? () => togglePin(activePlaylist.id!, !activePlaylist.pinned)
           : undefined
         }
-        onDelete={() => {
-          if (activePlaylist) deletePlaylist(activePlaylist.id!);
-        }}
+        onDelete={activePlaylist && !activePlaylist.isSystem
+          ? () => deletePlaylist(activePlaylist.id!)
+          : undefined
+        }
       />
 
       {/* ── Header ── */}

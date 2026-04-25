@@ -37,7 +37,7 @@ interface PlaylistContextMenuProps {
     onClose: () => void;
     onPlay: () => void;
     onPinToggle?: () => void;
-    onDelete: () => void;
+    onDelete?: () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -77,13 +77,17 @@ export const PlaylistContextMenu: React.FC<PlaylistContextMenuProps> = ({
                                 onClick={() => { onPinToggle(); onClose(); }}
                             />
                         )}
-                        <ContextMenuDivider />
-                        <ContextMenuButton
-                            icon={<Trash2 size={15} />}
-                            label="Delete"
-                            onClick={() => { onDelete(); onClose(); }}
-                            danger
-                        />
+                        {onDelete && (
+                            <>
+                                <ContextMenuDivider />
+                                <ContextMenuButton
+                                    icon={<Trash2 size={15} />}
+                                    label="Delete"
+                                    onClick={() => { onDelete(); onClose(); }}
+                                    danger
+                                />
+                            </>
+                        )}
                     </ContextMenuList>
                 </ContextMenuFrame>
             )}

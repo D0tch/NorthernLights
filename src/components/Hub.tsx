@@ -262,7 +262,7 @@ const ExploreCard: React.FC<ExploreCardProps> = ({ genre, trackCount, entity }) 
 };
 
 export const Hub: React.FC = () => {
-  const { library, setPlaylist, getAuthHeader, togglePin, currentUser, genres: genreEntities } = usePlayerStore();
+  const { library, setPlaylist, getAuthHeader, togglePin, currentUser, genres: genreEntities, fetchPlaylistsFromServer } = usePlayerStore();
   const navigate = useNavigate();
   const [collections, setCollections] = useState<HubCollection[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -289,6 +289,9 @@ export const Hub: React.FC = () => {
           .filter((col: any) => col.tracks.length > 0);
 
         setCollections(mappedCollections);
+        // System playlists are persisted server-side during the hub fetch.
+        // Refresh the playlist store so PlaylistDetail can resolve them by ID.
+        void fetchPlaylistsFromServer();
       }
     } catch (e) {
       console.error('Failed to load hub data', e);
@@ -345,9 +348,7 @@ export const Hub: React.FC = () => {
 
   const aiPlaylists = collections.filter((c) => c.isLlmGenerated);
   const systemCollections = collections.filter(
-    (c) =>
-      !c.isLlmGenerated &&
-      ['engine_upnext', 'engine_jumpback', 'engine_vault'].includes(c.id || '')
+    (c) => !c.isLlmGenerated && (c.isSystem || (c.id || '').startsWith('engine_'))
   );
 
   // Derive top 6 genres by track count

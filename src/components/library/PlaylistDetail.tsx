@@ -83,6 +83,7 @@ interface PlaylistTrackRowProps {
   onMove: (fromIndex: number, toIndex: number) => void;
   onContextMenu: (track: TrackInfo, x: number, y: number, playlistId: string, playlistTrackIndex: number) => void;
   playlistId: string;
+  readOnly?: boolean;
 }
 
 const PlaylistTrackRow = memo(({
@@ -95,8 +96,9 @@ const PlaylistTrackRow = memo(({
   onMove,
   onContextMenu,
   playlistId,
+  readOnly = false,
 }: PlaylistTrackRowProps) => {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id, disabled: readOnly });
   const artistNames = Array.isArray(track.artists) && track.artists.length > 0
     ? track.artists
     : parseArtists(track.artist || track.albumArtist || '');
@@ -177,47 +179,56 @@ const PlaylistTrackRow = memo(({
       </div>
 
       <div className="text-[var(--color-text-muted)] flex flex-row items-center justify-end md:gap-2">
-        <div className="flex flex-col md:hidden mr-1">
-          <button
-            aria-label="Move up"
-            onClick={(event) => {
-              event.stopPropagation();
-              if (index > 0) onMove(index, index - 1);
-            }}
-            disabled={index === 0}
-            className="p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30"
-          >
-            <ChevronUp size={14} />
-          </button>
-          <button
-            aria-label="Move down"
-            onClick={(event) => {
-              event.stopPropagation();
-              if (index < totalTracks - 1) onMove(index, index + 1);
-            }}
-            disabled={index === totalTracks - 1}
-            className="p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30"
-          >
-            <ChevronDown size={14} />
-          </button>
-        </div>
+        {!readOnly && (
+          <div className="flex flex-col md:hidden mr-1">
+            <button
+              aria-label="Move up"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (index > 0) onMove(index, index - 1);
+              }}
+              disabled={index === 0}
+              className="p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30"
+            >
+              <ChevronUp size={14} />
+            </button>
+            <button
+              aria-label="Move down"
+              onClick={(event) => {
+                event.stopPropagation();
+                if (index < totalTracks - 1) onMove(index, index + 1);
+              }}
+              disabled={index === totalTracks - 1}
+              className="p-0.5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-30"
+            >
+              <ChevronDown size={14} />
+            </button>
+          </div>
+        )}
 
         <div className="opacity-100 md:opacity-0 md:group-hover:opacity-100 flex items-center transition-opacity">
           <LoveButton track={track} size={16} className="p-1.5" />
-          <button
-            {...attributes}
-            {...listeners}
-            aria-label="Drag to reorder"
-            onClick={(event) => event.stopPropagation()}
-            className="hidden md:flex cursor-grab text-[var(--color-text-muted)] hover:text-[var(--color-primary)] hover:bg-black/5 dark:hover:bg-white/10 rounded-md p-1.5 active:cursor-grabbing"
-          >
-            <GripVertical size={18} />
-          </button>
+          {!readOnly && (
+            <button
+              {...attributes}
+              {...listeners}
+              aria-label="Drag to reorder"
+              onClick={(event) => event.stopPropagation()}
+              className="hidden md:flex cursor-grab text-[var(--color-text-muted)] hover:text-[var(--color-primary)] hover:bg-black/5 dark:hover:bg-white/10 rounded-md p-1.5 active:cursor-grabbing"
+            >
+              <GripVertical size={18} />
+            </button>
+          )}
           <button
             aria-label="More options"
             onClick={(event) => {
               event.stopPropagation();
-              onContextMenu(track, event.clientX, event.clientY, playlistId, index);
+              // For read-only playlists, omit playlistId so "Remove from Playlist" is hidden.
+              if (readOnly) {
+                onContextMenu(track, event.clientX, event.clientY, undefined as any, undefined as any);
+              } else {
+                onContextMenu(track, event.clientX, event.clientY, playlistId, index);
+              }
             }}
             className="text-[var(--color-text-muted)] hover:text-[var(--color-primary)] hover:bg-black/5 dark:hover:bg-white/10 rounded-md p-1.5"
           >
@@ -251,6 +262,7 @@ export const PlaylistDetail: React.FC = () => {
     [playlists, playlistId]
   );
 
+  const isSystemPlaylist = !!playlist?.isSystem;
   const playlistTracks = playlist?.tracks || [];
   const deferredPlaylistTracks = useDeferredValue(playlistTracks);
   const { bgColor } = useDominantColor(playlistTracks);
@@ -447,7 +459,11 @@ export const PlaylistDetail: React.FC = () => {
 
           <div className="flex flex-col justify-end items-center md:items-start max-w-full">
             <div className="font-semibold text-sm tracking-wider uppercase text-[var(--color-primary)]">
-              {playlist.isLlmGenerated ? 'AI Curated Playlist' : `Playlist by ${currentUser?.username || 'You'}`}
+              {playlist.isSystem
+                ? 'Curated for You'
+                : playlist.isLlmGenerated
+                  ? 'AI Curated Playlist'
+                  : `Playlist by ${currentUser?.username || 'You'}`}
             </div>
 
             <h1 className="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight my-2 leading-tight text-[var(--color-text-primary)] line-clamp-2" title={playlist.title}>
@@ -468,7 +484,9 @@ export const PlaylistDetail: React.FC = () => {
             </h2>
 
             <p className="shrink-0 text-sm text-[var(--color-text-secondary)] leading-relaxed mb-4 mt-2 line-clamp-3 max-w-3xl">
-              {playlist.description || 'Reorder the sequence, trim the weak links, and grow this playlist with nearby tracks from your library.'}
+              {playlist.description || (isSystemPlaylist
+                ? 'Refreshed automatically based on your listening.'
+                : 'Reorder the sequence, trim the weak links, and grow this playlist with nearby tracks from your library.')}
             </p>
 
             <div className="mt-2 flex flex-wrap justify-center md:justify-start items-center gap-3 w-full md:w-auto">
@@ -505,7 +523,30 @@ export const PlaylistDetail: React.FC = () => {
 
           {playlistTracks.length === 0 ? (
             <div className="px-6 py-12 text-center text-[var(--color-text-secondary)] border-b border-black/5 dark:border-white/5">
-              Add tracks from the library to start shaping this playlist.
+              {isSystemPlaylist
+                ? 'No tracks yet — listen to a few songs and check back soon.'
+                : 'Add tracks from the library to start shaping this playlist.'}
+            </div>
+          ) : isSystemPlaylist ? (
+            <div className="space-y-0.5">
+              {playlistTracks.map((track, index) => {
+                const itemId = sortableItems[index];
+                return (
+                  <PlaylistTrackRow
+                    key={itemId}
+                    id={itemId}
+                    track={track}
+                    index={index}
+                    totalTracks={playlistTracks.length}
+                    getArtistLink={getArtistLink}
+                    onPlay={handlePlayFromIndex}
+                    onMove={handleMoveTrack}
+                    onContextMenu={openContextMenu}
+                    playlistId={playlist.id}
+                    readOnly
+                  />
+                );
+              })}
             </div>
           ) : (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
@@ -535,7 +576,7 @@ export const PlaylistDetail: React.FC = () => {
           )}
         </div>
 
-        {suggestionEntries.length > 0 && (
+        {!isSystemPlaylist && suggestionEntries.length > 0 && (
           <div className="pt-2">
             <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
               <div className="min-w-0">
