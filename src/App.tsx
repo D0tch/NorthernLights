@@ -7,23 +7,8 @@ import MobileMiniPlayer from './components/MobileMiniPlayer';
 import MobileBottomTabs from './components/MobileBottomTabs';
 import KeyboardHint from './components/KeyboardHint';
 import { usePlayerStore } from './store/index';
-import { TrackInfo } from './utils/fileSystem';
-import { LibraryHome } from './components/library/LibraryHome';
-import { AlbumDetail } from './components/library/AlbumDetail';
-import { ArtistDetail } from './components/library/ArtistDetail';
-import { GenreDetail } from './components/library/GenreDetail';
-import { PlaylistDetail } from './components/library/PlaylistDetail';
-import { SetupWizard } from './components/SetupWizard';
-import { LoginPage } from './components/LoginPage';
-import { Hub } from './components/Hub';
-import { Playlists } from './components/library/Playlists';
-import { GlobalSearch } from './components/GlobalSearch';
-import { SettingsModal } from './components/SettingsModal';
-import { InviteRegister } from './components/InviteRegister';
 import { UserMenu } from './components/UserMenu';
-import { Settings as SettingsIcon, AudioWaveform, X, RefreshCw } from 'lucide-react';
-import { TrackContextMenu } from './components/library/TrackContextMenu';
-import { DatabaseControl } from './components/DatabaseControl';
+import { Settings as SettingsIcon, AudioWaveform, RefreshCw } from 'lucide-react';
 import { ToastContainer } from './components/ToastContainer';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSSE } from './hooks/useSSE';
@@ -32,6 +17,21 @@ import { playbackManager } from './utils/PlaybackManager';
 import { GlobalScanningIndicator } from './components/GlobalScanningIndicator';
 import { applyPendingPwaUpdate } from './utils/pwaUpdate';
 
+const LibraryHome = React.lazy(() => import('./components/library/LibraryHome').then(module => ({ default: module.LibraryHome })));
+const AlbumDetail = React.lazy(() => import('./components/library/AlbumDetail').then(module => ({ default: module.AlbumDetail })));
+const ArtistDetail = React.lazy(() => import('./components/library/ArtistDetail').then(module => ({ default: module.ArtistDetail })));
+const GenreDetail = React.lazy(() => import('./components/library/GenreDetail').then(module => ({ default: module.GenreDetail })));
+const PlaylistDetail = React.lazy(() => import('./components/library/PlaylistDetail').then(module => ({ default: module.PlaylistDetail })));
+const SetupWizard = React.lazy(() => import('./components/SetupWizard').then(module => ({ default: module.SetupWizard })));
+const LoginPage = React.lazy(() => import('./components/LoginPage').then(module => ({ default: module.LoginPage })));
+const Hub = React.lazy(() => import('./components/Hub').then(module => ({ default: module.Hub })));
+const Playlists = React.lazy(() => import('./components/library/Playlists').then(module => ({ default: module.Playlists })));
+const GlobalSearch = React.lazy(() => import('./components/GlobalSearch').then(module => ({ default: module.GlobalSearch })));
+const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(module => ({ default: module.SettingsModal })));
+const InviteRegister = React.lazy(() => import('./components/InviteRegister').then(module => ({ default: module.InviteRegister })));
+const TrackContextMenu = React.lazy(() => import('./components/library/TrackContextMenu').then(module => ({ default: module.TrackContextMenu })));
+const DatabaseControl = React.lazy(() => import('./components/DatabaseControl').then(module => ({ default: module.DatabaseControl })));
+
 const TAB_CONFIG = [
   { path: '/library', label: 'Hub', end: true },
   { path: '/playlists', label: 'Playlists' },
@@ -39,6 +39,41 @@ const TAB_CONFIG = [
   { path: '/library/albums', label: 'Albums' },
   { path: '/library/genres', label: 'Genres' },
 ];
+
+const FullPageFallback: React.FC<{ label?: string }> = ({ label = 'Loading...' }) => (
+  <div className="h-screen w-full flex flex-col items-center justify-center bg-[var(--color-bg-primary)] text-[var(--color-text-primary)]">
+    <div className="w-12 h-12 border-4 border-[var(--color-primary)]/20 border-t-[var(--color-primary)] rounded-full animate-spin" />
+    <p className="mt-4 text-sm text-[var(--color-text-secondary)]">{label}</p>
+  </div>
+);
+
+const RouteFallback: React.FC = () => (
+  <div className="page-container">
+    <div className="h-8 w-32 rounded bg-[var(--color-surface-variant)] animate-pulse mb-2" />
+    <div className="h-4 w-48 rounded bg-[var(--color-surface-variant)] animate-pulse mb-8" />
+    <div className="album-grid">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div key={i} className="flex flex-col animate-pulse">
+          <div className="aspect-square w-full mb-3 rounded-2xl bg-[var(--color-surface-variant)]" />
+          <div className="px-1 space-y-1.5">
+            <div className="h-4 w-3/4 rounded bg-[var(--color-surface-variant)]" />
+            <div className="h-3 w-1/2 rounded bg-[var(--color-surface-variant)]" />
+          </div>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+const SearchFallback: React.FC = () => (
+  <div className="h-9 w-[104px] flex-shrink-0 rounded-full border border-black/10 dark:border-white/15 bg-black/10 dark:bg-white/10" />
+);
+
+const GlobalSearchSlot: React.FC = () => (
+  <React.Suspense fallback={<SearchFallback />}>
+    <GlobalSearch />
+  </React.Suspense>
+);
 
 const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
@@ -56,9 +91,6 @@ const App: React.FC = () => {
   const checkSetupStatus = usePlayerStore(state => state.checkSetupStatus);
   const authToken = usePlayerStore(state => state.authToken);
   const login = usePlayerStore(state => state.login);
-
-  const libraryFolders = usePlayerStore(state => state.libraryFolders);
-  const rescanLibrary = usePlayerStore(state => state.rescanLibrary);
 
   const [isScannerVisibleLocally, setIsScannerVisibleLocally] = React.useState(false);
   const isScanningGlobal = usePlayerStore(state => state.isScanning);
@@ -337,9 +369,11 @@ const App: React.FC = () => {
   // If database is not connected, show the control panel immediately
   if (dbConnected === false && !isDatabaseStarting) {
     return (
-      <DatabaseControl
-        onReady={handleDatabaseReady}
-      />
+      <React.Suspense fallback={<FullPageFallback label="Loading database tools..." />}>
+        <DatabaseControl
+          onReady={handleDatabaseReady}
+        />
+      </React.Suspense>
     );
   }
 
@@ -378,16 +412,22 @@ const App: React.FC = () => {
   }
 
   if (needsSetup) {
-      return <SetupWizard onComplete={() => checkSetupStatus().then(() => {
+      return <React.Suspense fallback={<FullPageFallback label="Loading setup..." />}>
+        <SetupWizard onComplete={() => checkSetupStatus().then(() => {
           usePlayerStore.getState().fetchLibraryFromServer();
           usePlayerStore.getState().fetchPlaylistsFromServer();
-      })} />;
+        })} />
+      </React.Suspense>;
   }
 
   if (!authToken) {
       // Invite registration doesn't require auth
       if (location.pathname.startsWith('/invite/')) {
-          return <InviteRegister />;
+          return (
+            <React.Suspense fallback={<FullPageFallback label="Loading invite..." />}>
+              <InviteRegister />
+            </React.Suspense>
+          );
       }
 
       const handleLogin = async (username: string, password: string) => {
@@ -399,12 +439,19 @@ const App: React.FC = () => {
           }
           return success;
       };
-      return <LoginPage onLogin={handleLogin} />;
+      return (
+        <React.Suspense fallback={<FullPageFallback label="Loading sign in..." />}>
+          <LoginPage onLogin={handleLogin} />
+        </React.Suspense>
+      );
   }
 
   return (
     <>
-      <TrackContextMenu />
+      <div className="app-backdrop" aria-hidden="true" />
+      <React.Suspense fallback={null}>
+        <TrackContextMenu />
+      </React.Suspense>
       {/* Global Scanning Indicator (admin only) */}
       {isAdmin && isScanningGlobal && isScannerVisibleLocally && (
         <GlobalScanningIndicator onClose={() => setIsScannerVisibleLocally(false)} />
@@ -428,7 +475,7 @@ const App: React.FC = () => {
                   <div className="scan-indicator-dot" />
                 </button>
               )}
-              <GlobalSearch />
+              <GlobalSearchSlot />
               <UserMenu onOpenSettings={() => setIsSettingsOpen(true)} />
             </div>
           </div>
@@ -444,7 +491,7 @@ const App: React.FC = () => {
                         className={({ isActive }) => `
                             capitalize font-semibold text-sm px-5 py-2 rounded-full
                             border backdrop-blur-md whitespace-nowrap
-                            transition-all duration-200 cursor-pointer
+                            transition-ui duration-200 cursor-pointer
                             active:scale-95 no-underline
                             ${isActive
                                 ? 'btn-aurora shadow-aurora'
@@ -457,7 +504,7 @@ const App: React.FC = () => {
                 );
             })}
             <div className="flex items-center gap-2 ml-auto">
-              <GlobalSearch />
+              <GlobalSearchSlot />
               <UserMenu onOpenSettings={() => setIsSettingsOpen(true)} />
               {isAdmin && isScanningGlobal && (
                 <button
@@ -471,7 +518,7 @@ const App: React.FC = () => {
               )}
               <button
                 onClick={() => setIsSettingsOpen(true)}
-                className="p-2 rounded-full text-[var(--color-text-secondary)] bg-black/5 dark:bg-white/[0.06] hover:text-[var(--color-text-primary)] hover:bg-black/10 dark:hover:bg-white/[0.12] transition-all duration-300 border border-[var(--color-border)] hover:border-[var(--glass-border-hover)] flex-shrink-0"
+                className="p-2 rounded-full text-[var(--color-text-secondary)] bg-black/5 dark:bg-white/[0.06] hover:text-[var(--color-text-primary)] hover:bg-black/10 dark:hover:bg-white/[0.12] transition-ui duration-300 border border-[var(--color-border)] hover:border-[var(--glass-border-hover)] flex-shrink-0"
                 title="Settings"
               >
                 <SettingsIcon className="w-5 h-5" />
@@ -500,56 +547,60 @@ const App: React.FC = () => {
                     </div>
                   </div>
                 ) : (
-                <Routes>
-                  <Route path="/invite/:token" element={<InviteRegister />} />
-                  <Route path="*" element={
-                    <div className="empty-state font-body flex flex-col items-center justify-center p-8 flex-1">
-                      <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-[var(--aurora-green)] to-[var(--color-primary)] mb-4">
-                        NorthernLights
-                      </h1>
-                      <p className="text-lg text-[var(--color-text-secondary)] mb-8 max-w-md text-center">
-                        Provide the absolute path to your local music directory to let the host scan and stream it.
-                      </p>
-                      <div className="flex flex-col md:flex-row gap-4 w-full max-w-lg">
-                        <input
-                          type="text"
-                          placeholder="/home/andreas/Music"
-                          value={folderPathInput}
-                          onChange={(e) => setFolderPathInput(e.target.value)}
-                          className="flex-1 px-4 py-3 rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] backdrop-blur-md text-[var(--color-text-primary)] shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] focus:border-transparent transition-all duration-300"
-                          disabled={isScanningGlobal}
-                        />
-                        <button
-                          onClick={async () => {
-                            if (!folderPathInput.trim()) return;
-                            await usePlayerStore.getState().addLibraryFolder(folderPathInput.trim());
-                            setFolderPathInput('');
-                          }}
-                          className="btn btn-lg whitespace-nowrap"
-                          disabled={isScanningGlobal || !folderPathInput.trim()}
-                        >
-                          {isScanningGlobal ? '✦ Scanning...' : '✦ Map Folder'}
-                        </button>
+                <React.Suspense fallback={<RouteFallback />}>
+                  <Routes>
+                    <Route path="/invite/:token" element={<InviteRegister />} />
+                    <Route path="*" element={
+                      <div className="empty-state font-body flex flex-col items-center justify-center p-8 flex-1">
+                        <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-[var(--aurora-green)] to-[var(--color-primary)] mb-4">
+                          NorthernLights
+                        </h1>
+                        <p className="text-lg text-[var(--color-text-secondary)] mb-8 max-w-md text-center">
+                          Provide the absolute path to your local music directory to let the host scan and stream it.
+                        </p>
+                        <div className="flex flex-col md:flex-row gap-4 w-full max-w-lg">
+                          <input
+                            type="text"
+                            placeholder="/home/andreas/Music"
+                            value={folderPathInput}
+                            onChange={(e) => setFolderPathInput(e.target.value)}
+                            className="flex-1 px-4 py-3 rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] backdrop-blur-md text-[var(--color-text-primary)] shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] focus:border-transparent transition-ui duration-300"
+                            disabled={isScanningGlobal}
+                          />
+                          <button
+                            onClick={async () => {
+                              if (!folderPathInput.trim()) return;
+                              await usePlayerStore.getState().addLibraryFolder(folderPathInput.trim());
+                              setFolderPathInput('');
+                            }}
+                            className="btn btn-lg whitespace-nowrap"
+                            disabled={isScanningGlobal || !folderPathInput.trim()}
+                          >
+                            {isScanningGlobal ? '✦ Scanning...' : '✦ Map Folder'}
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  } />
-                </Routes>
+                    } />
+                  </Routes>
+                </React.Suspense>
                 )
               ) : (
-                <Routes>
-                  <Route path="/" element={<Navigate to="/library" replace />} />
-                  <Route path="/invite/:token" element={<InviteRegister />} />
-                  <Route path="/library" element={<Hub />} />
-                  <Route path="/library/artists" element={<LibraryHome section="artists" />} />
-                  <Route path="/library/artist/:artistId" element={<ArtistDetail />} />
-                  <Route path="/library/albums" element={<LibraryHome section="albums" />} />
-                  <Route path="/library/album/:albumId" element={<AlbumDetail />} />
-                  <Route path="/library/genres" element={<LibraryHome section="genres" />} />
-                  <Route path="/library/genre/:genreId" element={<GenreDetail />} />
-                  <Route path="/playlists" element={<Playlists />} />
-                  <Route path="/playlists/:playlistId" element={<PlaylistDetail />} />
-                  <Route path="*" element={<Navigate to="/library" replace />} />
-                </Routes>
+                <React.Suspense fallback={<RouteFallback />}>
+                  <Routes>
+                    <Route path="/" element={<Navigate to="/library" replace />} />
+                    <Route path="/invite/:token" element={<InviteRegister />} />
+                    <Route path="/library" element={<Hub />} />
+                    <Route path="/library/artists" element={<LibraryHome section="artists" />} />
+                    <Route path="/library/artist/:artistId" element={<ArtistDetail />} />
+                    <Route path="/library/albums" element={<LibraryHome section="albums" />} />
+                    <Route path="/library/album/:albumId" element={<AlbumDetail />} />
+                    <Route path="/library/genres" element={<LibraryHome section="genres" />} />
+                    <Route path="/library/genre/:genreId" element={<GenreDetail />} />
+                    <Route path="/playlists" element={<Playlists />} />
+                    <Route path="/playlists/:playlistId" element={<PlaylistDetail />} />
+                    <Route path="*" element={<Navigate to="/library" replace />} />
+                  </Routes>
+                </React.Suspense>
               )}
             </div>
           </div>
@@ -575,7 +626,9 @@ const App: React.FC = () => {
         </main>
 
         {isSettingsOpen && (
-          <SettingsModal onClose={() => setIsSettingsOpen(false)} />
+          <React.Suspense fallback={null}>
+            <SettingsModal onClose={() => setIsSettingsOpen(false)} />
+          </React.Suspense>
         )}
 
         <ToastContainer />
@@ -608,7 +661,7 @@ const App: React.FC = () => {
         {/* Sidebar Container - Mobile Bottom Sheet / Desktop Right Panel */}
         <div 
           ref={sidebarRef}
-          className={`sidebar-bottom-sheet fixed z-50 w-full ${isSidebarCollapsed ? 'md:w-24' : 'md:w-96'} transform transition-all duration-300 ease-in-out md:relative md:translate-x-0 border-l border-[var(--glass-border)] ${isSidebarOpen ? 'translate-y-0' : 'translate-y-full md:translate-y-0'}`}
+          className={`sidebar-bottom-sheet fixed z-50 w-full ${isSidebarCollapsed ? 'md:w-24' : 'md:w-96'} transform transition-[width,transform] duration-300 ease-in-out md:relative md:translate-x-0 border-l border-[var(--glass-border)] ${isSidebarOpen ? 'translate-y-0' : 'translate-y-full md:translate-y-0'}`}
         >
           {/* Drag Handle - Mobile Only */}
           <div 
