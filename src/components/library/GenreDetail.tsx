@@ -95,7 +95,7 @@ export const GenreDetail: React.FC = () => {
                     </div>
                 )}
                 {!summaryLoading && genreSummary && (
-                    <p className="text-sm md:text-base text-[var(--color-text-secondary)] leading-relaxed max-w-3xl mb-6 md:mb-8 line-clamp-4 hover:line-clamp-none transition-all duration-300 motion-reduce:transition-none">
+                    <p className="text-sm md:text-base text-[var(--color-text-secondary)] leading-relaxed max-w-3xl mb-6 md:mb-8 line-clamp-4 hover:line-clamp-none transition-ui duration-300 motion-reduce:transition-none">
                         {genreSummary}
                     </p>
                 )}

@@ -1,4 +1,5 @@
-import React, { memo, useCallback, useDeferredValue, useMemo, useState } from 'react';
+import React, { memo, useCallback, useDeferredValue, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   DndContext,
@@ -112,7 +113,7 @@ const PlaylistTrackRow = memo(({
         opacity: isDragging ? 0.55 : 1,
         zIndex: isDragging ? 10 : 1,
       }}
-      className="grid grid-cols-[28px_44px_minmax(0,1fr)_56px_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-all duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
+      className="grid grid-cols-[28px_44px_minmax(0,1fr)_56px_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
     >
       <div
         className="text-center md:text-left text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums"
@@ -264,6 +265,7 @@ export const PlaylistDetail: React.FC = () => {
 
   const isSystemPlaylist = !!playlist?.isSystem;
   const playlistTracks = playlist?.tracks || [];
+  const trackListRef = useRef<HTMLDivElement>(null);
   const deferredPlaylistTracks = useDeferredValue(playlistTracks);
   const { bgColor } = useDominantColor(playlistTracks);
 
@@ -281,6 +283,15 @@ export const PlaylistDetail: React.FC = () => {
     () => playlistTracks.map((track, index) => `${track.id}-${index}`),
     [playlistTracks]
   );
+
+  const shouldVirtualizePlaylistRows = playlistTracks.length > 50;
+  const playlistRowsVirtualizer = useVirtualizer({
+    count: playlistTracks.length,
+    getScrollElement: () => trackListRef.current,
+    estimateSize: () => 68,
+    overscan: 8,
+    enabled: shouldVirtualizePlaylistRows,
+  });
 
   const totalDuration = useMemo(
     () => playlistTracks.reduce((sum, track) => sum + (track.duration || 0), 0),
@@ -313,12 +324,22 @@ export const PlaylistDetail: React.FC = () => {
     setIsSaving(saving);
   }, []);
 
+  const artistLinkByName = useMemo(() => {
+    const links = new Map<string, string>();
+    for (const entity of artists) {
+      if (entity.name && entity.id) {
+        links.set(entity.name.toLowerCase(), `/library/artist/${entity.id}`);
+      }
+    }
+    return links;
+  }, [artists]);
+
   const getArtistLink = useCallback((artistName: string, track: TrackInfo): string | null => {
-    const entity = artists.find((entry) => entry.name?.toLowerCase() === artistName.toLowerCase());
-    if (entity) return `/library/artist/${entity.id}`;
+    const entityLink = artistLinkByName.get(artistName.toLowerCase());
+    if (entityLink) return entityLink;
     if (track.artistId) return `/library/artist/${track.artistId}`;
     return null;
-  }, [artists]);
+  }, [artistLinkByName]);
 
   const persistTracks = useCallback(
     async (nextTracks: TrackInfo[], pendingLabel: string, successMessage: string) => {
@@ -386,6 +407,36 @@ export const PlaylistDetail: React.FC = () => {
     }
   }, [addToast, addTracksToUserPlaylist, playlist, setSavingState]);
 
+  const renderPlaylistTrackRow = useCallback((track: TrackInfo, index: number, readOnly = isSystemPlaylist) => {
+    const itemId = sortableItems[index];
+    if (!playlist || !itemId) return null;
+
+    return (
+      <PlaylistTrackRow
+        key={itemId}
+        id={itemId}
+        track={track}
+        index={index}
+        totalTracks={playlistTracks.length}
+        getArtistLink={getArtistLink}
+        onPlay={handlePlayFromIndex}
+        onMove={handleMoveTrack}
+        onContextMenu={openContextMenu}
+        playlistId={playlist.id}
+        readOnly={readOnly}
+      />
+    );
+  }, [
+    getArtistLink,
+    handleMoveTrack,
+    handlePlayFromIndex,
+    isSystemPlaylist,
+    openContextMenu,
+    playlist,
+    playlistTracks.length,
+    sortableItems,
+  ]);
+
   if (!playlistId) {
     return <div className="page-container">Playlist not found.</div>;
   }
@@ -441,7 +492,7 @@ export const PlaylistDetail: React.FC = () => {
         <BackButton onClick={() => navigate('/playlists')}>Back to Playlists</BackButton>
 
         <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
-          <div className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden backdrop-blur-xl bg-black/10 dark:bg-white/5">
+          <div className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5">
             <div className="grid h-full w-full grid-cols-2 gap-0.5">
               {(heroArtUrls.length > 0 ? heroArtUrls.slice(0, 4) : [null, null, null, null]).map((artUrl, index) => (
                 <div key={`${artUrl || 'fallback'}-${index}`} className="overflow-hidden bg-black/10 dark:bg-white/10">
@@ -528,51 +579,93 @@ export const PlaylistDetail: React.FC = () => {
                 : 'Add tracks from the library to start shaping this playlist.'}
             </div>
           ) : isSystemPlaylist ? (
-            <div className="space-y-0.5">
-              {playlistTracks.map((track, index) => {
-                const itemId = sortableItems[index];
-                return (
-                  <PlaylistTrackRow
-                    key={itemId}
-                    id={itemId}
-                    track={track}
-                    index={index}
-                    totalTracks={playlistTracks.length}
-                    getArtistLink={getArtistLink}
-                    onPlay={handlePlayFromIndex}
-                    onMove={handleMoveTrack}
-                    onContextMenu={openContextMenu}
-                    playlistId={playlist.id}
-                    readOnly
-                  />
-                );
-              })}
-            </div>
-          ) : (
-            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-              <SortableContext items={sortableItems} strategy={verticalListSortingStrategy}>
-                <div className="space-y-0.5">
-                  {playlistTracks.map((track, index) => {
-                    const itemId = sortableItems[index];
+            <div
+              ref={trackListRef}
+              className={shouldVirtualizePlaylistRows ? 'max-h-[70vh] overflow-y-auto overflow-x-hidden hide-scrollbar pr-1' : undefined}
+            >
+              {shouldVirtualizePlaylistRows ? (
+                <div
+                  style={{
+                    height: `${playlistRowsVirtualizer.getTotalSize()}px`,
+                    position: 'relative',
+                    width: '100%',
+                  }}
+                >
+                  {playlistRowsVirtualizer.getVirtualItems().map((virtualRow) => {
+                    const track = playlistTracks[virtualRow.index];
+                    const itemId = sortableItems[virtualRow.index];
+                    if (!track || !itemId) return null;
 
                     return (
-                      <PlaylistTrackRow
+                      <div
                         key={itemId}
-                        id={itemId}
-                        track={track}
-                        index={index}
-                        totalTracks={playlistTracks.length}
-                        getArtistLink={getArtistLink}
-                        onPlay={handlePlayFromIndex}
-                        onMove={handleMoveTrack}
-                        onContextMenu={openContextMenu}
-                        playlistId={playlist.id}
-                      />
+                        data-index={virtualRow.index}
+                        ref={playlistRowsVirtualizer.measureElement}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          width: '100%',
+                          transform: `translateY(${virtualRow.start}px)`,
+                        }}
+                      >
+                        {renderPlaylistTrackRow(track, virtualRow.index, true)}
+                      </div>
                     );
                   })}
                 </div>
-              </SortableContext>
-            </DndContext>
+              ) : (
+                <div className="space-y-0.5">
+                  {playlistTracks.map((track, index) => renderPlaylistTrackRow(track, index, true))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div
+              ref={trackListRef}
+              className={shouldVirtualizePlaylistRows ? 'max-h-[70vh] overflow-y-auto overflow-x-hidden hide-scrollbar pr-1' : undefined}
+            >
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                <SortableContext items={sortableItems} strategy={verticalListSortingStrategy}>
+                  {shouldVirtualizePlaylistRows ? (
+                    <div
+                      style={{
+                        height: `${playlistRowsVirtualizer.getTotalSize()}px`,
+                        position: 'relative',
+                        width: '100%',
+                      }}
+                    >
+                      {playlistRowsVirtualizer.getVirtualItems().map((virtualRow) => {
+                        const track = playlistTracks[virtualRow.index];
+                        const itemId = sortableItems[virtualRow.index];
+                        if (!track || !itemId) return null;
+
+                        return (
+                          <div
+                            key={itemId}
+                            data-index={virtualRow.index}
+                            ref={playlistRowsVirtualizer.measureElement}
+                            style={{
+                              position: 'absolute',
+                              top: 0,
+                              left: 0,
+                              width: '100%',
+                              transform: `translateY(${virtualRow.start}px)`,
+                            }}
+                          >
+                            {renderPlaylistTrackRow(track, virtualRow.index, false)}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="space-y-0.5">
+                      {playlistTracks.map((track, index) => renderPlaylistTrackRow(track, index, false))}
+                    </div>
+                  )}
+                </SortableContext>
+              </DndContext>
+            </div>
           )}
         </div>
 

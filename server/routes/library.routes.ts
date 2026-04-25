@@ -816,11 +816,14 @@ router.post('/remove', async (req, res) => {
 // Get entire library
 router.get('/', async (req, res) => {
   try {
-    const tracks = await getAllTracks(req.user?.userId || null);
-    const directories = await getDirectories();
-    const artists = await getAllArtists();
-    const albums = await getAllAlbums();
-    const genres = await getAllGenres();
+    const userId = req.user?.userId || null;
+    const [tracks, directories, artists, albums, genres] = await Promise.all([
+      getAllTracks(userId),
+      getDirectories(),
+      getAllArtists(),
+      getAllAlbums(),
+      getAllGenres(),
+    ]);
     res.json({ tracks, directories, artists, albums, genres });
   } catch (error) {
     console.error('DB fetch error:', error);

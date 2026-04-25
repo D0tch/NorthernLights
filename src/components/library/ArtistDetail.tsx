@@ -346,14 +346,19 @@ export const ArtistDetail: React.FC = () => {
                         {/* MusicBrainz metadata */}
                         {(disambiguation || type || area || lifeSpan?.begin) && (
                             <div className="flex flex-wrap items-center gap-3 mb-3 text-xs text-[var(--color-text-muted)]">
-                                {disambiguation && (
-                                    <span className="text-sm text-[var(--color-text-muted)] italic">{disambiguation}</span>
-                                )}
                                 {type && (
                                     <span className="inline-flex items-center gap-1">
                                         {type === 'Group' ? <Users className="w-3 h-3" /> : type === 'Person' ? <Mic2 className="w-3 h-3" /> : <Globe className="w-3 h-3" />}
                                         {type}
+                                        {disambiguation && (
+                                            <span className="italic text-[var(--color-text-muted)]">
+                                                {' – '}{disambiguation}
+                                            </span>
+                                        )}
                                     </span>
+                                )}
+                                {!type && disambiguation && (
+                                    <span className="italic text-[var(--color-text-muted)]">{disambiguation}</span>
                                 )}
                                 {area && (
                                     <span className="inline-flex items-center gap-1">
@@ -420,7 +425,7 @@ export const ArtistDetail: React.FC = () => {
                                 aria-haspopup="menu"
                                 aria-expanded={linksMenuOpen}
                                 title={allLinks.length > 0 ? 'Artist links' : 'No artist links available'}
-                                className="absolute right-0 top-0 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] text-[var(--color-text-secondary)] shadow-[var(--shadow-sm)] transition-all hover:border-[var(--glass-border-hover)] hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none md:static md:z-auto md:h-12 md:w-12"
+                                className="absolute right-0 top-0 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] text-[var(--color-text-secondary)] shadow-[var(--shadow-sm)] transition-ui hover:border-[var(--glass-border-hover)] hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none md:static md:z-auto md:h-12 md:w-12"
                             >
                                 <Link2 className="w-5 h-5" />
                             </button>
@@ -533,7 +538,7 @@ export const ArtistDetail: React.FC = () => {
                                 <div
                                     key={track.id}
                                     onClick={() => setPlaylist(popularLibraryTracks.map(entry => entry.track), index)}
-                                    className="grid grid-cols-[28px_44px_minmax(0,1fr)_56px_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_140px_92px] gap-2 md:gap-3 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-all duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
+                                    className="grid grid-cols-[28px_44px_minmax(0,1fr)_56px_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_140px_92px] gap-2 md:gap-3 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
                                 >
                                     {/* Rank */}
                                     <div className="text-center md:text-left text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums">

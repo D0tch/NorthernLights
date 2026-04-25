@@ -640,6 +640,39 @@ process.on('SIGINT', () => handleShutdown('SIGINT'));
 process.on('SIGTERM', () => handleShutdown('SIGTERM'));
 process.once('SIGUSR2', () => handleShutdown('SIGUSR2'));
 
+function parseStringArrayField(value: any): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+  }
+  if (typeof value !== 'string' || value.trim().length === 0) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+    }
+    if (typeof parsed === 'string' && parsed.trim().length > 0) {
+      return [parsed];
+    }
+  } catch {
+    return [value];
+  }
+
+  return [];
+}
+
+function parseObjectArrayField<T extends object>(value: any): T[] {
+  if (Array.isArray(value)) return value as T[];
+  if (typeof value !== 'string' || value.trim().length === 0) return [];
+
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function mapTrackRow(row: any) {
   return {
     ...row,
@@ -662,8 +695,9 @@ function mapTrackRow(row: any) {
     mbAlbumArtistId: row.mb_album_artist_id,
     mbReleaseGroupId: row.mb_release_group_id,
     mbWorkId: row.mb_work_id,
-    genres: row.genres ? JSON.parse(row.genres) : [],
-    rawUrls: row.raw_urls ? JSON.parse(row.raw_urls) : [],
+    artists: parseStringArrayField(row.artists),
+    genres: parseStringArrayField(row.genres),
+    rawUrls: parseObjectArrayField<{ url: string; type: string }>(row.raw_urls),
     playlistAddedAt: row.playlist_added_at ? new Date(row.playlist_added_at).getTime() : undefined,
     isLoved: row.is_loved === true,
   };

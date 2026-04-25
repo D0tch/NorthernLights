@@ -115,7 +115,7 @@ const FilterableListPanel: React.FC<FilterableListPanelProps> = ({
                     {filter && (
                         <button
                             onClick={() => setFilter('')}
-                            className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] active:scale-90 transition-all"
+                            className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] active:scale-90 transition-ui"
                         >
                             <X size={12} />
                         </button>

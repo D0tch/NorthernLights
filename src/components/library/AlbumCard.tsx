@@ -73,7 +73,7 @@ export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl
                             flex items-center justify-center
                             opacity-0 md:scale-75
                             md:group-hover:opacity-100 md:group-hover:scale-100
-                            transition-all duration-300 ease-out
+                            transition-ui duration-300 ease-out
                             hover:scale-110 active:scale-95
                             motion-reduce:transition-none
                             bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white backdrop-blur-sm

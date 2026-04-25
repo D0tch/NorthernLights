@@ -25,7 +25,7 @@ const PlaylistCard: React.FC<{
 
   return (
     <div
-      className="relative p-4 sm:p-5 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-all duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
+      className="relative p-4 sm:p-5 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
       onClick={onOpen}
       role="button"
       tabIndex={0}
@@ -98,7 +98,7 @@ const PlaylistCard: React.FC<{
       {/* Play FAB — always visible on mobile, hover-reveal on desktop */}
       <button
         onClick={(e) => { e.stopPropagation(); onPlay(); }}
-        className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 sm:opacity-0 sm:translate-y-2 sm:group-hover:opacity-100 sm:group-hover:translate-y-0 sm:group-focus-within:opacity-100 sm:group-focus-within:translate-y-0 transition-all duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95 z-20"
+        className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 sm:opacity-0 sm:translate-y-2 sm:group-hover:opacity-100 sm:group-hover:translate-y-0 sm:group-focus-within:opacity-100 sm:group-focus-within:translate-y-0 transition-ui duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95 z-20"
         aria-label={`Play ${playlist.title}`}
       >
         <Play className="w-5 h-5 ml-0.5" fill="currentColor" />
@@ -207,7 +207,7 @@ const GeneratePlaylistModal: React.FC<{ onClose: () => void; onGenerated: () => 
               <button
                 key={ex}
                 onClick={() => setPrompt(ex)}
-                className="text-xs px-3 py-1.5 rounded-full bg-[var(--color-surface)] border border-[var(--glass-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-primary)] hover:text-[var(--color-text-primary)] transition-all"
+                className="text-xs px-3 py-1.5 rounded-full bg-[var(--color-surface)] border border-[var(--glass-border)] text-[var(--color-text-secondary)] hover:border-[var(--color-primary)] hover:text-[var(--color-text-primary)] transition-ui"
               >
                 {ex}
               </button>
@@ -222,7 +222,7 @@ const GeneratePlaylistModal: React.FC<{ onClose: () => void; onGenerated: () => 
           <button
             onClick={handleGenerate}
             disabled={!prompt.trim() || isGenerating}
-            className="flex-1 py-3 rounded-xl bg-aurora-gradient hover:brightness-110 text-white font-semibold shadow-lg transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            className="flex-1 py-3 rounded-xl bg-aurora-gradient hover:brightness-110 text-white font-semibold shadow-lg transition-ui active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
           >
             {isGenerating
               ? <><Loader2 className="w-4 h-4 animate-spin" /> Generating…</>

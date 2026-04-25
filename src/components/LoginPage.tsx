@@ -51,7 +51,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
               onChange={e => setUsername(e.target.value)}
               placeholder="admin"
               autoFocus
-              className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
+              className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
             />
           </div>
 
@@ -64,7 +64,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
               value={password}
               onChange={e => setPassword(e.target.value)}
               placeholder="••••••••"
-              className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
+              className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
             />
           </div>
 

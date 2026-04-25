@@ -143,7 +143,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
           <button
             onClick={toggleShuffle}
             aria-label="Toggle shuffle"
-            className="w-10 h-10 flex items-center justify-center rounded-full text-[var(--color-text-muted)] active:scale-90 transition-all"
+            className="w-10 h-10 flex items-center justify-center rounded-full text-[var(--color-text-muted)] active:scale-90 transition-ui"
             style={{ opacity: shuffle ? 1 : 0.4 }}
           >
             <Shuffle size={20} />
@@ -187,7 +187,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
           <button
             onClick={cycleRepeat}
             aria-label="Cycle repeat"
-            className="w-10 h-10 flex items-center justify-center rounded-full text-[var(--color-text-muted)] active:scale-90 transition-all"
+            className="w-10 h-10 flex items-center justify-center rounded-full text-[var(--color-text-muted)] active:scale-90 transition-ui"
             style={{ opacity: repeat === 'none' ? 0.4 : 1 }}
           >
             {repeat === 'one' ? <Repeat1 size={20} /> : <Repeat size={20} />}
@@ -207,7 +207,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
           <button
             onClick={() => setShowLyrics(!showLyrics)}
             aria-label="Toggle lyrics"
-            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border border-[var(--glass-border)] transition-all"
+            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border border-[var(--glass-border)] transition-ui"
             style={{
               opacity: showLyrics ? 1 : 0.4,
               color: showLyrics ? 'var(--color-primary)' : 'var(--color-text-muted)',
@@ -220,7 +220,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
           <button
             onClick={toggleInfinityMode}
             aria-label="Toggle Infinity Mode"
-            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border border-[var(--glass-border)] transition-all"
+            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border border-[var(--glass-border)] transition-ui"
             style={{
               opacity: isInfinityMode ? 1 : 0.4,
               color: isInfinityMode ? 'var(--color-primary)' : 'var(--color-text-muted)',
@@ -233,7 +233,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
 
           <button
             onClick={() => castConnected ? castManager.disconnect() : castManager.requestSession()}
-            className="w-10 h-10 flex items-center justify-center rounded-full active:scale-90 transition-all"
+            className="w-10 h-10 flex items-center justify-center rounded-full active:scale-90 transition-ui"
             style={{
               color: castConnected ? 'var(--color-primary)' : 'var(--color-text-muted)',
               filter: castConnected ? 'drop-shadow(0 0 4px var(--color-primary))' : 'none',

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { fetchArtistData } from '../utils/externalImagery';
 
 interface ArtistDataState {
@@ -34,7 +34,8 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | undefined>();
 
-  const [lastFetchedName, setLastFetchedName] = useState<string | undefined>();
+  const lastFetchedNameRef = useRef<string | undefined>();
+  const lastSuccessfulFetchKeyRef = useRef<string | undefined>();
 
   useEffect(() => {
     if (!artistName || !enabled || artistName === 'Unknown Artist') {
@@ -44,9 +45,15 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
 
     let mounted = true;
     let timer: NodeJS.Timeout | null = null;
+    const fetchKey = `${artistName}\n${mbArtistId ?? ''}`;
+
+    if (lastSuccessfulFetchKeyRef.current === fetchKey) {
+      setIsLoading(false);
+      return;
+    }
 
     // Reset metadata only if the artist name has changed (not just scrolling in view)
-    if (lastFetchedName !== artistName) {
+    if (lastFetchedNameRef.current !== artistName) {
       setImageUrl(undefined);
       setBio(undefined);
       setDisambiguation(undefined);
@@ -66,7 +73,8 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
       fetchArtistData(artistName, mbArtistId)
         .then(data => {
           if (mounted) {
-            setLastFetchedName(artistName);
+            lastFetchedNameRef.current = artistName;
+            lastSuccessfulFetchKeyRef.current = fetchKey;
             setImageUrl(data.imageUrl);
             setBio(data.bio);
             setDisambiguation(data.disambiguation);
@@ -96,7 +104,7 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
       mounted = false;
       if (timer) clearTimeout(timer);
     };
-  }, [artistName, mbArtistId, enabled, debounceMs, lastFetchedName]);
+  }, [artistName, mbArtistId, enabled, debounceMs]);
 
   return { imageUrl, bio, disambiguation, area, type, lifeSpan, links, genres, communityTags, listeners, members, isLoading, error };
 };

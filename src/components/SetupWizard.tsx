@@ -287,7 +287,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
     };
 
     const stepDotClass = (i: number) =>
-        `w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm transition-all duration-300 ${
+        `w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm transition-ui duration-300 ${
             step === i ? 'bg-[var(--color-primary)] text-white scale-110 shadow-[var(--shadow-md)]'
             : step > i ? 'bg-[var(--color-primary-dark)] text-white'
             : 'bg-[var(--color-surface-hover)] text-[var(--color-text-secondary)]'
@@ -331,11 +331,11 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                         <div className="space-y-4">
                             <div>
                                 <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Username</label>
-                                <input type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="admin" className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all font-mono text-[var(--color-text-primary)]" />
+                                <input type="text" value={username} onChange={e => setUsername(e.target.value)} placeholder="admin" className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui font-mono text-[var(--color-text-primary)]" />
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Password</label>
-                                <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all font-mono text-[var(--color-text-primary)]" />
+                                <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui font-mono text-[var(--color-text-primary)]" />
                             </div>
                             {authError && <p className="text-red-400 text-sm opacity-90">{authError}</p>}
                         </div>
@@ -360,14 +360,14 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                         
                         <div>
                             <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Absolute Directory Path</label>
-                            <input type="text" value={libraryPath} onChange={e => setLibraryPath(e.target.value)} placeholder="/path/to/music" className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all font-mono text-[var(--color-text-primary)]" />
+                            <input type="text" value={libraryPath} onChange={e => setLibraryPath(e.target.value)} placeholder="/path/to/music" className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui font-mono text-[var(--color-text-primary)]" />
                         </div>
 
                         <div className="flex gap-4 mt-6">
                             <button onClick={handleAddLibrary} className="flex-1 bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white font-semibold py-4 rounded-xl shadow-lg transition-transform active:scale-[0.98] flex items-center justify-center gap-2">
                                 <FolderPlus className="w-5 h-5" /> Import Library
                             </button>
-                            <button onClick={() => setStep(3)} className="px-6 bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] border border-[var(--glass-border)] text-[var(--color-text-primary)] font-semibold rounded-xl transition-all">
+                            <button onClick={() => setStep(3)} className="px-6 bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] border border-[var(--glass-border)] text-[var(--color-text-primary)] font-semibold rounded-xl transition-ui">
                                 Skip
                             </button>
                         </div>
@@ -474,7 +474,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                         </div>
 
                         <div className="flex gap-4 mt-6">
-                            <button disabled={mbdbProgress.isImporting} onClick={() => setStep(4)} className="flex-1 py-2.5 rounded-xl bg-aurora-gradient hover:brightness-110 text-white font-semibold shadow-lg transition-all active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                            <button disabled={mbdbProgress.isImporting} onClick={() => setStep(4)} className="flex-1 py-2.5 rounded-xl bg-aurora-gradient hover:brightness-110 text-white font-semibold shadow-lg transition-ui active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
                                 {mbdbProgress.phase === 'complete' ? 'Next Step' : 'Skip MBDB Import'} <ChevronRight className="w-5 h-5" />
                             </button>
                         </div>
@@ -518,7 +518,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                                             {model.files.map(f => {
                                                 const p = modelProgress.get(`${model.name}/${f.filename}`);
                                                 if (!p || p.status !== 'downloading' || p.total <= 0) return null;
-                                                return <div key={f.filename} className="h-full bg-blue-500 rounded-full transition-all duration-300" style={{ width: `${(p.bytes / p.total) * 100}%` }} />;
+                                                return <div key={f.filename} className="h-full bg-blue-500 rounded-full transition-[width] duration-300" style={{ width: `${(p.bytes / p.total) * 100}%` }} />;
                                             })}
                                         </div>
                                     )}
@@ -614,7 +614,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                                     value={llmBaseUrl}
                                     onChange={e => setLlmBaseUrl(e.target.value)}
                                     placeholder="http://localhost:1234/v1"
-                                    className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all font-mono text-sm text-[var(--color-text-primary)]"
+                                    className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui font-mono text-sm text-[var(--color-text-primary)]"
                                 />
                             </div>
                             <div>
@@ -624,7 +624,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                                     value={llmApiKey}
                                     onChange={e => setLlmApiKey(e.target.value)}
                                     placeholder="sk-... or leave blank"
-                                    className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all font-mono text-sm text-[var(--color-text-primary)]"
+                                    className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui font-mono text-sm text-[var(--color-text-primary)]"
                                 />
                             </div>
 
@@ -651,7 +651,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                                     onFocus={() => setShowModelDropdown(true)}
                                     onBlur={() => setTimeout(() => setShowModelDropdown(false), 200)}
                                     placeholder="gpt-4o / llama-3 (auto-filled on test)"
-                                    className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all font-mono text-sm text-[var(--color-text-primary)]"
+                                    className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui font-mono text-sm text-[var(--color-text-primary)]"
                                 />
                                 {availableModels.length > 0 && showModelDropdown && (
                                     <ul className="absolute left-0 right-0 z-50 w-full mt-1 max-h-40 overflow-y-auto bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl shadow-xl backdrop-blur-xl hide-scrollbar py-1">
@@ -673,7 +673,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                             <button onClick={handleSaveLlm} className="flex-1 bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white font-semibold py-4 rounded-xl shadow-lg transition-transform active:scale-[0.98] flex items-center justify-center gap-2">
                                 Save & Continue <ChevronRight className="w-5 h-5" />
                             </button>
-                            <button onClick={() => setStep(6)} className="px-6 bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] border border-[var(--glass-border)] text-[var(--color-text-primary)] font-semibold rounded-xl transition-all">
+                            <button onClick={() => setStep(6)} className="px-6 bg-[var(--color-surface)] hover:bg-[var(--color-surface-hover)] border border-[var(--glass-border)] text-[var(--color-text-primary)] font-semibold rounded-xl transition-ui">
                                 Skip
                             </button>
                         </div>
@@ -692,7 +692,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                             <div>
                                 <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Last.fm API Key</label>
                                 <div className="flex gap-2">
-                                    <input type="password" value={lastFmKey} onChange={e => setLastFmKeyState(e.target.value)} placeholder="32-character API key" className="flex-1 bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all font-mono text-[var(--color-text-primary)]" />
+                                    <input type="password" value={lastFmKey} onChange={e => setLastFmKeyState(e.target.value)} placeholder="32-character API key" className="flex-1 bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui font-mono text-[var(--color-text-primary)]" />
                                     <button onClick={() => testLastFm(lastFmKey)} disabled={lastFmStatus === 'testing' || !lastFmKey} className="px-4 py-2 bg-[var(--glass-bg)] border border-[var(--glass-border)] rounded-lg font-semibold text-sm hover:bg-[var(--glass-bg-hover)] transition-colors text-[var(--color-text-primary)] disabled:opacity-50 shadow-sm whitespace-nowrap">
                                         {lastFmStatus === 'testing' ? 'Testing...' : 'Test'}
                                     </button>
@@ -702,12 +702,12 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Last.fm Shared Secret</label>
-                                <input type="password" value={lastFmSecret} onChange={e => setLastFmSecretState(e.target.value)} placeholder="For scrobbling (optional during setup)" className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all font-mono text-[var(--color-text-primary)]" />
+                                <input type="password" value={lastFmSecret} onChange={e => setLastFmSecretState(e.target.value)} placeholder="For scrobbling (optional during setup)" className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui font-mono text-[var(--color-text-primary)]" />
                             </div>
                             <div>
                                 <label className="block text-sm font-medium text-[var(--color-text-secondary)] mb-1">Genius Access Token</label>
                                 <div className="flex gap-2">
-                                    <input type="password" value={geniusKey} onChange={e => setGeniusKeyState(e.target.value)} placeholder="64-character Bearer Token" className="flex-1 bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all font-mono text-[var(--color-text-primary)]" />
+                                    <input type="password" value={geniusKey} onChange={e => setGeniusKeyState(e.target.value)} placeholder="64-character Bearer Token" className="flex-1 bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui font-mono text-[var(--color-text-primary)]" />
                                     <button onClick={() => testGenius(geniusKey)} disabled={geniusStatus === 'testing' || !geniusKey} className="px-4 py-2 bg-[var(--glass-bg)] border border-[var(--glass-border)] rounded-lg font-semibold text-sm hover:bg-[var(--glass-bg-hover)] transition-colors text-[var(--color-text-primary)] disabled:opacity-50 shadow-sm whitespace-nowrap">
                                         {geniusStatus === 'testing' ? 'Testing...' : 'Test'}
                                     </button>
@@ -736,9 +736,9 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
                                             {musicBrainzStatus === 'error' && <span className="text-red-500 font-semibold text-xs">✗ {musicBrainzMessage}</span>}
                                         </div>
                                         <label className="block text-xs font-medium text-[var(--color-text-secondary)]">Client ID (optional)</label>
-                                        <input type="text" value={musicBrainzClientIdLocal} onChange={e => setMusicBrainzClientIdLocal(e.target.value)} placeholder="From musicbrainz.org/account/applications" className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all text-sm font-mono text-[var(--color-text-primary)]" />
+                                        <input type="text" value={musicBrainzClientIdLocal} onChange={e => setMusicBrainzClientIdLocal(e.target.value)} placeholder="From musicbrainz.org/account/applications" className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui text-sm font-mono text-[var(--color-text-primary)]" />
                                         <label className="block text-xs font-medium text-[var(--color-text-secondary)]">Client Secret (optional)</label>
-                                        <input type="password" value={musicBrainzClientSecretLocal} onChange={e => setMusicBrainzClientSecretLocal(e.target.value)} placeholder="From musicbrainz.org/account/applications" className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all text-sm font-mono text-[var(--color-text-primary)]" />
+                                        <input type="password" value={musicBrainzClientSecretLocal} onChange={e => setMusicBrainzClientSecretLocal(e.target.value)} placeholder="From musicbrainz.org/account/applications" className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui text-sm font-mono text-[var(--color-text-primary)]" />
                                     </div>
                                 )}
                             </div>

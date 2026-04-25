@@ -34,7 +34,7 @@ export const LoveButton: React.FC<LoveButtonProps> = ({ track, className = '', s
       aria-pressed={isLoved}
       aria-label={isLoved ? 'Remove from favorites' : 'Add to favorites'}
       title={isLoved ? 'Remove from favorites' : 'Add to favorites'}
-      className={`inline-flex items-center justify-center gap-1.5 rounded-full transition-all active:scale-95 disabled:opacity-60 ${
+      className={`inline-flex items-center justify-center gap-1.5 rounded-full transition-ui active:scale-95 disabled:opacity-60 ${
         isLoved
           ? 'text-rose-500 drop-shadow-[0_0_8px_rgba(244,63,94,0.35)]'
           : 'text-[var(--color-text-muted)] hover:text-rose-400'

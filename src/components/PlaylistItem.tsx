@@ -143,7 +143,7 @@ export const PlaylistItem = memo(({
                 e.stopPropagation();
                 onContextMenu(track, e.clientX, e.clientY);
               }}
-              className="flex items-center justify-center p-1 rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-primary)] hover:bg-black/5 dark:hover:bg-white/5 transition-all"
+              className="flex items-center justify-center p-1 rounded-md text-[var(--color-text-muted)] hover:text-[var(--color-primary)] hover:bg-black/5 dark:hover:bg-white/5 transition-ui"
             >
               <MoreHorizontal size={16} />
             </button>
@@ -153,7 +153,7 @@ export const PlaylistItem = memo(({
                 e.stopPropagation();
                 onRemove(index);
               }}
-              className="flex items-center justify-center p-1 rounded-md text-[var(--color-text-muted)] hover:text-rose-400 hover:bg-black/5 dark:hover:bg-white/5 transition-all"
+              className="flex items-center justify-center p-1 rounded-md text-[var(--color-text-muted)] hover:text-rose-400 hover:bg-black/5 dark:hover:bg-white/5 transition-ui"
             >
               <span className="text-[0.8rem]">✕</span>
             </button>

@@ -115,6 +115,17 @@ export default defineConfig({
             }
           },
           {
+            // Public deterministic third-party imagery proxied through Aurora.
+            // Must stay above the generic /api/ NetworkOnly rule.
+            urlPattern: /\/api\/providers\/external\/proxy-image(\?.*)?$/i,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'external-image-proxy-cache',
+              expiration: { maxEntries: 200, maxAgeSeconds: 604800 }, // 7 days
+              cacheableResponse: { statuses: [0, 200] }
+            }
+          },
+          {
             // Keep authenticated/user-specific API data out of Cache Storage.
             urlPattern: /\/api\//,
             handler: 'NetworkOnly'
@@ -166,9 +177,6 @@ export default defineConfig({
           if (id.includes('node_modules')) {
             if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) {
               return 'vendor-react';
-            }
-            if (id.includes('framer-motion')) {
-              return 'vendor-motion';
             }
             if (id.includes('lucide-react')) {
               return 'vendor-icons';

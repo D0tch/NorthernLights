@@ -1,12 +1,13 @@
 import { usePlayerStore } from '../store/index';
+import { usePlaybackTimeStore } from '../store/playbackTime';
 import { playbackManager } from '../utils/PlaybackManager';
 import { WaveformProgressBar } from './WaveformProgressBar';
 import { formatTime } from '../utils/formatTime';
 import React from 'react';
 
 const ProgressBar = () => {
-  const currentTime = usePlayerStore((state) => state.currentTime);
-  const duration = usePlayerStore((state) => state.duration);
+  const currentTime = usePlaybackTimeStore((state) => state.currentTime);
+  const duration = usePlaybackTimeStore((state) => state.duration);
   const playlist = usePlayerStore((state) => state.playlist);
   const currentIndex = usePlayerStore((state) => state.currentIndex);
 
@@ -22,9 +23,9 @@ const ProgressBar = () => {
     ? dbDuration
     : duration;
 
-  const handleSeek = (time: number) => {
+  const handleSeek = React.useCallback((time: number) => {
     playbackManager.seek(time);
-  };
+  }, []);
 
   return (
     <div className="progress-bar-container">
@@ -32,7 +33,6 @@ const ProgressBar = () => {
       {currentTrack?.url ? (
         <WaveformProgressBar
           audioUrl={currentTrack.rawUrl || currentTrack.url}
-          currentTime={currentTime}
           duration={displayDuration}
           onSeek={handleSeek}
           dbDuration={dbDuration}
@@ -57,4 +57,3 @@ const ProgressBar = () => {
 };
 
 export default ProgressBar;
-

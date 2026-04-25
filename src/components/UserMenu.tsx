@@ -42,7 +42,7 @@ export const UserMenu: React.FC<UserMenuProps> = ({ onOpenSettings }) => {
       <button
         ref={buttonRef}
         onClick={() => setIsOpen(!isOpen)}
-        className="flex items-center gap-2 px-3 h-9 rounded-full bg-[var(--color-surface)] border border-[var(--glass-border)] hover:bg-[var(--color-surface-hover)] transition-all text-sm"
+        className="flex items-center gap-2 px-3 h-9 rounded-full bg-[var(--color-surface)] border border-[var(--glass-border)] hover:bg-[var(--color-surface-hover)] transition-ui text-sm"
       >
         <div className="w-6 h-6 rounded-full bg-[var(--color-primary)]/20 text-[var(--color-primary)] flex items-center justify-center">
           <User className="w-3.5 h-3.5" />

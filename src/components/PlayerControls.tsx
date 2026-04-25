@@ -17,12 +17,12 @@ import {
   IconVolume
 } from './icons/PlayerIcons';
 
-const baseBtnClass = "flex items-center justify-center w-10 h-10 rounded-full border border-black/10 bg-black/5 backdrop-blur-md text-black/60 hover:text-black/90 hover:border-black/20 hover:bg-black/10 hover:shadow-[0_4px_16px_rgba(0,0,0,0.1),inset_0_1px_0_rgba(255,255,255,0.6)] active:scale-95 active:bg-black/10 dark:border-white/10 dark:bg-white/5 dark:text-white/75 dark:hover:text-white dark:hover:border-white/20 dark:hover:bg-white/10 dark:hover:shadow-[0_4px_16px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.12)] transition-all duration-150";
+const baseBtnClass = "flex items-center justify-center w-10 h-10 rounded-full border border-black/10 bg-black/5 backdrop-blur-md text-black/60 hover:text-black/90 hover:border-black/20 hover:bg-black/10 hover:shadow-[0_4px_16px_rgba(0,0,0,0.1),inset_0_1px_0_rgba(255,255,255,0.6)] active:scale-95 active:bg-black/10 dark:border-white/10 dark:bg-white/5 dark:text-white/75 dark:hover:text-white dark:hover:border-white/20 dark:hover:bg-white/10 dark:hover:shadow-[0_4px_16px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.12)] transition-ui duration-150";
 
-const playBtnClass = "flex items-center justify-center w-14 h-14 rounded-full border border-emerald-500/40 bg-gradient-to-br from-emerald-500/85 to-emerald-600/90 backdrop-blur-[20px] text-white shadow-[0_0_24px_rgba(16,185,129,0.35),inset_0_1px_0_rgba(255,255,255,0.2)] hover:from-emerald-400/90 hover:to-emerald-500/95 hover:border-emerald-300/60 hover:shadow-[0_0_36px_rgba(16,185,129,0.65),inset_0_1px_0_rgba(255,255,255,0.25)] hover:scale-105 active:scale-95 transition-all duration-200";
+const playBtnClass = "flex items-center justify-center w-14 h-14 rounded-full border border-emerald-500/40 bg-gradient-to-br from-emerald-500/85 to-emerald-600/90 backdrop-blur-[20px] text-white shadow-[0_0_24px_rgba(16,185,129,0.35),inset_0_1px_0_rgba(255,255,255,0.2)] hover:from-emerald-400/90 hover:to-emerald-500/95 hover:border-emerald-300/60 hover:shadow-[0_0_36px_rgba(16,185,129,0.65),inset_0_1px_0_rgba(255,255,255,0.25)] hover:scale-105 active:scale-95 transition-ui duration-200";
 
-const volumeSliderClass = "w-20 h-1 appearance-none bg-black/5 dark:bg-white/5 rounded-full cursor-pointer outline-none transition-all hover:h-1.5 " +
-  "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--color-text-secondary)] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:transition-all " +
+const volumeSliderClass = "w-20 h-1 appearance-none bg-black/5 dark:bg-white/5 rounded-full cursor-pointer outline-none transition-[height] hover:h-1.5 " +
+  "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--color-text-secondary)] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:transition-[background-color,box-shadow,transform] " +
   "hover:[&::-webkit-slider-thumb]:bg-[var(--color-text-primary)] hover:[&::-webkit-slider-thumb]:scale-125 hover:[&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(16,185,129,0.3)]";
 
 export const PlayerControls: React.FC = () => {

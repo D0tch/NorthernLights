@@ -106,7 +106,7 @@ export const InviteRegister: React.FC = () => {
               onChange={e => setUsername(e.target.value)}
               placeholder="Choose a username"
               autoFocus
-              className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
+              className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
             />
           </div>
 
@@ -117,7 +117,7 @@ export const InviteRegister: React.FC = () => {
               value={password}
               onChange={e => setPassword(e.target.value)}
               placeholder="Choose a password"
-              className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
+              className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
             />
           </div>
 

@@ -50,7 +50,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
         <div className="flex gap-3 pt-2">
           <button
             onClick={onConfirm}
-            className="flex-1 py-2.5 rounded-xl bg-red-500/80 hover:bg-red-500 text-white font-semibold transition-all active:scale-[0.98]"
+            className="flex-1 py-2.5 rounded-xl bg-red-500/80 hover:bg-red-500 text-white font-semibold transition-ui active:scale-[0.98]"
           >
             {confirmLabel}
           </button>

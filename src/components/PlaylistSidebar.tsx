@@ -85,7 +85,7 @@ export const PlaylistSidebar: React.FC = () => {
               <h3 className="text-xs font-bold text-[var(--color-text-secondary)] uppercase tracking-wider">Play Queue ({playlist.length})</h3>
               <button 
                 onClick={() => setIsSidebarCollapsed(true)}
-                className="hidden md:flex p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-all"
+                className="hidden md:flex p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-ui"
                 title="Collapse Queue"
                 aria-label="Collapse Queue"
               >
@@ -95,7 +95,7 @@ export const PlaylistSidebar: React.FC = () => {
           ) : (
             <button 
               onClick={() => setIsSidebarCollapsed(false)}
-              className="p-2 rounded-xl bg-white/50 dark:bg-black/30 border border-black/5 dark:border-white/5 hover:bg-black/5 dark:hover:bg-white/10 text-[var(--color-primary)] transition-all shadow-sm flex items-center justify-center"
+              className="p-2 rounded-xl bg-white/50 dark:bg-black/30 border border-black/5 dark:border-white/5 hover:bg-black/5 dark:hover:bg-white/10 text-[var(--color-primary)] transition-ui shadow-sm flex items-center justify-center"
               title={`Expand Queue (${playlist.length})`}
               aria-label="Expand Queue"
             >

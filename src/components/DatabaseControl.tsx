@@ -233,7 +233,7 @@ export function DatabaseControl({ onReady, inline = false, variant = 'full' }: D
 
         {/* Status Display Area */}
         <div className="flex flex-col items-center text-center space-y-2">
-          <div className={`w-16 h-16 rounded-full flex items-center justify-center transition-all duration-500 ${status === 'running' ? 'bg-green-500/20 shadow-[0_0_20px_rgba(34,197,94,0.15)]' :
+          <div className={`w-16 h-16 rounded-full flex items-center justify-center transition-ui duration-500 ${status === 'running' ? 'bg-green-500/20 shadow-[0_0_20px_rgba(34,197,94,0.15)]' :
               status === 'stopped' ? 'bg-amber-500/20' :
                 'bg-red-500/20'
             }`}>
@@ -347,7 +347,7 @@ export function DatabaseControl({ onReady, inline = false, variant = 'full' }: D
 
             <button
                 onClick={fetchDbStatus}
-                className="w-full py-2 px-4 rounded-xl text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] flex items-center justify-center gap-2 transition-all hover:bg-[var(--color-bg-tertiary)]"
+                className="w-full py-2 px-4 rounded-xl text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text-secondary)] flex items-center justify-center gap-2 transition-ui hover:bg-[var(--color-bg-tertiary)]"
             >
                 <RotateCcw className="w-4 h-4" />
                 Refresh Status

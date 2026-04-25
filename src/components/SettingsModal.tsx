@@ -3,20 +3,32 @@ import { createPortal } from 'react-dom';
 import { usePlayerStore } from '../store/index';
 import { Globe, User, Palette, Folder, Play, Cpu, LogOut, Search, X, Users, Database, Brain } from 'lucide-react';
 
-import { AccountTab } from './settings/AccountTab';
-import { AppearanceTab } from './settings/AppearanceTab';
-import { LibraryTab } from './settings/LibraryTab';
-import { PlaybackTab } from './settings/PlaybackTab';
-import { SystemTab } from './settings/SystemTab';
-import { GenAiTab } from './settings/GenAiTab';
-import { GenreMatrixTab } from './settings/GenreMatrixTab';
-import { DatabaseTab } from './settings/DatabaseTab';
-import { MetadataTab } from './settings/MetadataTab';
-import { AdminDashboard } from './settings/AdminDashboard';
-
 interface SettingsModalProps {
     onClose: () => void;
 }
+
+const AccountTab = React.lazy(() => import('./settings/AccountTab').then(module => ({ default: module.AccountTab })));
+const AppearanceTab = React.lazy(() => import('./settings/AppearanceTab').then(module => ({ default: module.AppearanceTab })));
+const LibraryTab = React.lazy(() => import('./settings/LibraryTab').then(module => ({ default: module.LibraryTab })));
+const PlaybackTab = React.lazy(() => import('./settings/PlaybackTab').then(module => ({ default: module.PlaybackTab })));
+const SystemTab = React.lazy(() => import('./settings/SystemTab').then(module => ({ default: module.SystemTab })));
+const GenAiTab = React.lazy(() => import('./settings/GenAiTab').then(module => ({ default: module.GenAiTab })));
+const GenreMatrixTab = React.lazy(() => import('./settings/GenreMatrixTab').then(module => ({ default: module.GenreMatrixTab })));
+const DatabaseTab = React.lazy(() => import('./settings/DatabaseTab').then(module => ({ default: module.DatabaseTab })));
+const MetadataTab = React.lazy(() => import('./settings/MetadataTab').then(module => ({ default: module.MetadataTab })));
+const AdminDashboard = React.lazy(() => import('./settings/AdminDashboard').then(module => ({ default: module.AdminDashboard })));
+
+const SettingsTabFallback: React.FC = () => (
+    <div className="space-y-4 animate-pulse">
+        <div className="h-7 w-44 rounded bg-[var(--color-surface-variant)]" />
+        <div className="h-4 w-72 max-w-full rounded bg-[var(--color-surface-variant)]" />
+        <div className="mt-8 space-y-3">
+            <div className="h-16 rounded-2xl bg-[var(--color-surface-variant)]" />
+            <div className="h-16 rounded-2xl bg-[var(--color-surface-variant)]" />
+            <div className="h-16 rounded-2xl bg-[var(--color-surface-variant)]" />
+        </div>
+    </div>
+);
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
     const loadSettings = usePlayerStore(state => state.loadSettings);
@@ -94,12 +106,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                 <div className="absolute top-4 right-4 flex items-center justify-center z-50 group">
                     <button 
                         onClick={handleClose}
-                        className="w-10 h-10 rounded-full bg-[var(--color-surface)] border border-[var(--glass-border)] hover:bg-[var(--glass-bg-hover)] text-[var(--color-text-primary)] flex items-center justify-center backdrop-blur-md transition-all active:scale-95 shadow-lg"
+                        className="w-10 h-10 rounded-full bg-[var(--color-surface)] border border-[var(--glass-border)] hover:bg-[var(--glass-bg-hover)] text-[var(--color-text-primary)] flex items-center justify-center backdrop-blur-md transition-ui active:scale-95 shadow-lg"
                         aria-label="Close Settings"
                     >
                         <X size={20} />
                     </button>
-                    <span className="hidden md:block absolute right-14 px-2 py-1 bg-[var(--color-surface)] border border-[var(--glass-border)] text-[var(--color-text-primary)] text-xs rounded opacity-0 translate-x-[10px] group-hover:opacity-100 group-hover:translate-x-0 transition-all pointer-events-none shadow-lg">ESC</span>
+                    <span className="hidden md:block absolute right-14 px-2 py-1 bg-[var(--color-surface)] border border-[var(--glass-border)] text-[var(--color-text-primary)] text-xs rounded opacity-0 translate-x-[10px] group-hover:opacity-100 group-hover:translate-x-0 transition-ui pointer-events-none shadow-lg">ESC</span>
                 </div>
 
                 {/* Mobile: Horizontal tab bar at top */}
@@ -159,7 +171,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                             <Search size={16} className="absolute left-8 top-1/2 -translate-y-1/2 text-[var(--color-text-muted)] pointer-events-none" />
                             <input 
                                 type="text" 
-                                className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-full pl-10 pr-4 py-2.5 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-all placeholder:text-[var(--color-text-muted)]" 
+                                className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-full pl-10 pr-4 py-2.5 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui placeholder:text-[var(--color-text-muted)]" 
                                 placeholder="Search settings..." 
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -193,7 +205,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                                                         role="tab"
                                                         aria-selected={activeTab === tab.id}
                                                         data-settings-tab={tab.id === 'GenAI' ? 'genai' : tab.id === 'Database' ? 'database' : tab.id === 'Genre Matrix' ? 'genre-matrix' : ''}
-                                                        className={`w-full flex items-center px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
+                                                        className={`w-full flex items-center px-3 py-2.5 rounded-xl text-sm font-medium transition-ui duration-200 ${
                                                             activeTab === tab.id 
                                                             ? 'bg-[var(--color-primary)] text-white shadow-md' 
                                                             : 'text-[var(--color-text-secondary)] hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-text-primary)]'
@@ -233,21 +245,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                     
                     <div className="flex-1 overflow-y-auto px-4 md:px-10 py-6 md:py-10 pb-[env(safe-area-inset-bottom)]">
                         <div className="max-w-2xl mx-auto w-full relative z-10">
-                            {activeTab === 'My Account' && <AccountTab onClose={handleClose} />}
-                            {activeTab === 'Appearance' && <AppearanceTab />}
-                            {isAdmin && activeTab === 'Library' && <LibraryTab />}
-                            {isAdmin && activeTab === 'Metadata' && <MetadataTab />}
-                            {activeTab === 'Playback' && <PlaybackTab />}
-                            
-                            {isAdmin && (
-                                <>
-                                    {activeTab === 'System' && <SystemTab />}
-                                    {activeTab === 'GenAI' && <GenAiTab />}
-                                    {activeTab === 'Genre Matrix' && <GenreMatrixTab />}
-                                    {activeTab === 'Database' && <DatabaseTab />}
-                                    {activeTab === 'Users' && <AdminDashboard />}
-                                </>
-                            )}
+                            <React.Suspense fallback={<SettingsTabFallback />}>
+                                {activeTab === 'My Account' && <AccountTab onClose={handleClose} />}
+                                {activeTab === 'Appearance' && <AppearanceTab />}
+                                {isAdmin && activeTab === 'Library' && <LibraryTab />}
+                                {isAdmin && activeTab === 'Metadata' && <MetadataTab />}
+                                {activeTab === 'Playback' && <PlaybackTab />}
+                                
+                                {isAdmin && (
+                                    <>
+                                        {activeTab === 'System' && <SystemTab />}
+                                        {activeTab === 'GenAI' && <GenAiTab />}
+                                        {activeTab === 'Genre Matrix' && <GenreMatrixTab />}
+                                        {activeTab === 'Database' && <DatabaseTab />}
+                                        {activeTab === 'Users' && <AdminDashboard />}
+                                    </>
+                                )}
+                            </React.Suspense>
                         </div>
                     </div>
                 </div>

@@ -1,4 +1,5 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { AlbumArt } from '../AlbumArt';
@@ -8,6 +9,7 @@ import { BackButton } from './BackButton';
 import { useAlbumData } from '../../hooks/useAlbumData';
 import { LoveButton } from '../LoveButton';
 import { ContextMenuFrame, ContextMenuHeader, ContextMenuLink, ContextMenuList, ContextMenuPortal } from '../ContextMenu';
+import type { TrackInfo } from '../../utils/fileSystem';
 
 import { MoreHorizontal, Play, Clock, ExternalLink, Headphones, BarChart2, Link2, Music2, Calendar, Gauge } from 'lucide-react';
 
@@ -73,6 +75,115 @@ const TrackRowSkeleton: React.FC = () => (
     </div>
 );
 
+interface AlbumDiscHeaderRow {
+    type: 'disc';
+    disc: number;
+}
+
+interface AlbumTrackListRow {
+    type: 'track';
+    track: TrackInfo;
+    index: number;
+}
+
+type AlbumListRow = AlbumDiscHeaderRow | AlbumTrackListRow;
+
+interface AlbumTrackRowProps {
+    track: TrackInfo;
+    index: number;
+    displayNumber: number;
+    getArtistLink: (artistName: string) => string | null;
+    onPlay: (index: number) => void;
+    onContextMenu: (track: TrackInfo, x: number, y: number) => void;
+}
+
+const AlbumDiscHeader = memo(({ disc }: { disc: number }) => (
+    <div className="px-2 md:px-4 pt-4 pb-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-primary)] border-b border-black/5 dark:border-white/10 mb-1">
+        Disc {disc}
+    </div>
+));
+
+AlbumDiscHeader.displayName = 'AlbumDiscHeader';
+
+const AlbumTrackRow = memo(({
+    track,
+    index,
+    displayNumber,
+    getArtistLink,
+    onPlay,
+    onContextMenu,
+}: AlbumTrackRowProps) => {
+    const artistNames = Array.isArray(track.artists) && track.artists.length > 0
+        ? track.artists
+        : parseArtists(track.artist || '');
+
+    return (
+        <div
+            onClick={() => onPlay(index)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onPlay(index);
+                }
+            }}
+            className="grid grid-cols-[30px_1fr_40px] md:grid-cols-[40px_1fr_100px] gap-2 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 focus-visible:bg-black/5 dark:focus-visible:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-primary)] rounded-lg my-0.5 group"
+        >
+            <div className="text-center md:text-left text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums">
+                {displayNumber}
+            </div>
+            <div className="font-medium truncate text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)] transition-colors min-w-0">
+                <span className="block truncate text-sm md:text-base">{track.title || track.path.split(/[\/\\]/).pop()}</span>
+                {artistNames.length > 0 && (
+                    <span className="block text-xs text-[var(--color-text-muted)] mt-0.5 truncate">
+                        {artistNames.map((a, j) => {
+                            const link = getArtistLink(a);
+                            return (
+                                <React.Fragment key={`${a}-${j}`}>
+                                    {j > 0 && ' · '}
+                                    {link ? (
+                                        <Link
+                                            to={link}
+                                            state={{ backLabel: 'Back to Album' }}
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="hover:text-[var(--color-primary)] transition-colors no-underline text-inherit"
+                                        >{a}</Link>
+                                    ) : (
+                                        <span>{a}</span>
+                                    )}
+                                </React.Fragment>
+                            );
+                        })}
+                    </span>
+                )}
+            </div>
+            <div className="text-[var(--color-text-muted)] text-right group-hover:text-[var(--color-text-primary)] transition-colors flex flex-row items-center justify-end md:gap-3">
+                <LoveButton
+                    track={track}
+                    size={16}
+                    className="p-1.5 opacity-50 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
+                />
+                <span className="w-12 text-right hidden md:inline text-sm tabular-nums">
+                    {formatTime(track.duration, '--:--')}
+                </span>
+                <button
+                    aria-label="More options"
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        onContextMenu(track, e.clientX, e.clientY);
+                    }}
+                    className="opacity-50 md:opacity-0 md:group-hover:opacity-100 text-[var(--color-text-muted)] hover:text-[var(--color-primary)] hover:bg-black/5 dark:hover:bg-white/10 rounded-md transition-ui p-1.5 focus:opacity-100"
+                >
+                    <MoreHorizontal size={18} />
+                </button>
+            </div>
+        </div>
+    );
+});
+
+AlbumTrackRow.displayName = 'AlbumTrackRow';
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export const AlbumDetail: React.FC = () => {
@@ -86,6 +197,7 @@ export const AlbumDetail: React.FC = () => {
     const openContextMenu = usePlayerStore(state => state.openContextMenu);
     const [linksMenuOpen, setLinksMenuOpen] = useState(false);
     const linksButtonRef = useRef<HTMLButtonElement>(null);
+    const trackListRef = useRef<HTMLDivElement>(null);
 
     const albumInfo = useMemo(() => albums.find(a => a.id === albumId), [albums, albumId]);
 
@@ -111,6 +223,61 @@ export const AlbumDetail: React.FC = () => {
     const isMultiDisc = useMemo(() =>
         new Set(sortedTracks.map(t => t.discNumber ?? 1)).size > 1,
     [sortedTracks]);
+
+    const albumListRows = useMemo<AlbumListRow[]>(() => {
+        const rows: AlbumListRow[] = [];
+        let lastDisc: number | null = null;
+
+        sortedTracks.forEach((track, index) => {
+            const disc = track.discNumber ?? 1;
+            if (isMultiDisc && disc !== lastDisc) {
+                lastDisc = disc;
+                rows.push({ type: 'disc', disc });
+            }
+            rows.push({ type: 'track', track, index });
+        });
+
+        return rows;
+    }, [isMultiDisc, sortedTracks]);
+
+    const shouldVirtualizeAlbumRows = albumListRows.length > 50;
+    const albumRowsVirtualizer = useVirtualizer({
+        count: albumListRows.length,
+        getScrollElement: () => trackListRef.current,
+        estimateSize: (index) => albumListRows[index]?.type === 'disc' ? 34 : 52,
+        overscan: 8,
+        enabled: shouldVirtualizeAlbumRows,
+    });
+
+    const artistLinkByName = useMemo(() => {
+        const links = new Map<string, string>();
+
+        for (const entity of artists) {
+            if (entity.name && entity.id) {
+                links.set(entity.name.toLowerCase(), `/library/artist/${entity.id}`);
+            }
+        }
+
+        for (const track of albumTracks) {
+            const fallbackName = track.albumArtist || track.artist;
+            if (track.artistId && fallbackName) {
+                links.set(fallbackName.toLowerCase(), `/library/artist/${track.artistId}`);
+            }
+        }
+
+        return links;
+    }, [albumTracks, artists]);
+
+    const getArtistLink = useCallback((artistName: string): string | null => {
+        return artistLinkByName.get(artistName.toLowerCase()) || null;
+    }, [artistLinkByName]);
+
+    const handlePlayAll = useCallback(() => setPlaylist(sortedTracks, 0), [setPlaylist, sortedTracks]);
+    const handlePlayTrack = useCallback((index: number) => setPlaylist(sortedTracks, index), [setPlaylist, sortedTracks]);
+    const handleTrackContextMenu = useCallback(
+        (track: TrackInfo, x: number, y: number) => openContextMenu(track, x, y),
+        [openContextMenu]
+    );
 
     // ── Derived metadata ───────────────────────────────────────────────────
 
@@ -226,26 +393,13 @@ export const AlbumDetail: React.FC = () => {
     const albumYear = albumTracks.find(t => t.year)?.year;
     const headerArtists = parseArtists(albumArtist);
 
-    const getArtistLink = (artistName: string): string | null => {
-        const entity = artists.find((a: any) => a.name?.toLowerCase() === artistName.toLowerCase());
-        if (entity) return `/library/artist/${entity.id}`;
-        const track = albumTracks.find(t =>
-            (t.albumArtist || t.artist || '').toLowerCase() === artistName.toLowerCase()
-        );
-        if (track?.artistId) return `/library/artist/${track.artistId}`;
-        return null;
-    };
-
-    const handlePlayAll = () => setPlaylist(sortedTracks, 0);
-    const handlePlayTrack = (index: number) => setPlaylist(sortedTracks, index);
-
     return (
         <div className="relative flex flex-col overflow-hidden p-4 md:p-8 lg:p-12 flex-1">
 
             <div className="shrink-0 mb-6"><BackButton onClick={() => navigate(-1)} /></div>
 
             <div className="shrink-0 flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
-                <div className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden backdrop-blur-xl bg-black/10 dark:bg-white/5">
+                <div className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5">
                     <AlbumArt artUrl={artUrl} artist={albumArtist} size={240} className="w-full h-full object-cover rounded-2xl" />
                 </div>
                 <div className="flex flex-col justify-end items-center md:items-start max-w-full">
@@ -318,7 +472,7 @@ export const AlbumDetail: React.FC = () => {
                     <div className="mt-2 flex flex-wrap justify-center md:justify-start gap-3 w-full md:w-auto">
                         <button
                             onClick={handlePlayAll}
-                            className="flex items-center justify-center gap-2 px-8 py-3.5 bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white font-bold text-sm tracking-widest uppercase rounded-full shadow-[0_4px_24px_rgba(16,185,129,0.3)] hover:shadow-[0_8px_32px_rgba(16,185,129,0.4)] hover:scale-105 active:scale-95 motion-reduce:transition-none motion-reduce:hover:scale-100 transition-all duration-300 w-full md:w-auto"
+                            className="flex items-center justify-center gap-2 px-8 py-3.5 bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white font-bold text-sm tracking-widest uppercase rounded-full shadow-[0_4px_24px_rgba(16,185,129,0.3)] hover:shadow-[0_8px_32px_rgba(16,185,129,0.4)] hover:scale-105 active:scale-95 motion-reduce:transition-none motion-reduce:hover:scale-100 transition-ui duration-300 w-full md:w-auto"
                         >
                             <Play size={18} fill="currentColor" className="ml-1" />
                             PLAY {releaseType.toUpperCase()}
@@ -333,7 +487,7 @@ export const AlbumDetail: React.FC = () => {
                             aria-haspopup="menu"
                             aria-expanded={linksMenuOpen}
                             title={fileLinks.length > 0 ? 'Album links' : 'No album links available'}
-                            className="absolute right-4 top-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] text-[var(--color-text-secondary)] shadow-[var(--shadow-sm)] transition-all hover:border-[var(--glass-border-hover)] hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none md:static md:z-auto md:h-12 md:w-12"
+                            className="absolute right-4 top-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] text-[var(--color-text-secondary)] shadow-[var(--shadow-sm)] transition-ui hover:border-[var(--glass-border-hover)] hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none md:static md:z-auto md:h-12 md:w-12"
                         >
                             <Link2 className="w-5 h-5" />
                         </button>
@@ -400,92 +554,70 @@ export const AlbumDetail: React.FC = () => {
                 </div>
             )}
 
-            <div className="mt-4 overflow-y-auto flex-1 min-h-0 hide-scrollbar pb-6">
+            <div className="mt-4 flex-1 min-h-0 flex flex-col pb-6">
                 <div className="grid grid-cols-[30px_1fr_40px] md:grid-cols-[40px_1fr_100px] px-2 md:px-4 py-3 border-b border-black/5 dark:border-white/10 font-semibold text-xs uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
                     <div className="text-center md:text-left">#</div>
                     <div>Title</div>
                     <div className="text-right hidden md:block">Time</div>
                 </div>
-                {(() => {
-                    const rows: React.ReactNode[] = [];
-                    let lastDisc: number | null = null;
-                    sortedTracks.forEach((track, i) => {
-                        const disc = track.discNumber ?? 1;
-                        if (isMultiDisc && disc !== lastDisc) {
-                            lastDisc = disc;
-                            rows.push(
-                                <div key={`disc-${disc}`} className="px-2 md:px-4 pt-4 pb-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-primary)] border-b border-black/5 dark:border-white/10 mb-1">
-                                    Disc {disc}
-                                </div>
-                            );
-                        }
-                        rows.push(
-                            <div
-                                key={track.id}
-                                onClick={() => handlePlayTrack(i)}
-                                role="button"
-                                tabIndex={0}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter' || e.key === ' ') {
-                                        e.preventDefault();
-                                        handlePlayTrack(i);
-                                    }
-                                }}
-                                className="grid grid-cols-[30px_1fr_40px] md:grid-cols-[40px_1fr_100px] gap-2 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-all duration-200 hover:bg-black/5 dark:hover:bg-white/5 focus-visible:bg-black/5 dark:focus-visible:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-primary)] rounded-lg my-0.5 group"
-                            >
-                                <div className="text-center md:text-left text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums">
-                                    {track.trackNumber ?? i + 1}
-                                </div>
-                                <div className="font-medium truncate text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)] transition-colors min-w-0">
-                                    <span className="block truncate text-sm md:text-base">{track.title || track.path.split(/[\/\\]/).pop()}</span>
-                                    {((track.artists && Array.isArray(track.artists) && track.artists.length > 0) || (track.artist && parseArtists(track.artist).length > 0)) && (
-                                        <span className="block text-xs text-[var(--color-text-muted)] mt-0.5 truncate">
-                                            {(Array.isArray(track.artists) && track.artists.length > 0 ? track.artists : parseArtists(track.artist || '')).map((a, j) => {
-                                                const link = getArtistLink(a);
-                                                return (
-                                                    <React.Fragment key={a}>
-                                                        {j > 0 && ' · '}
-                                                        {link ? (
-                                                            <Link
-                                                                to={link}
-                                                                state={{ backLabel: 'Back to Album' }}
-                                                                onClick={(e) => e.stopPropagation()}
-                                                                className="hover:text-[var(--color-primary)] transition-colors no-underline text-inherit"
-                                                            >{a}</Link>
-                                                        ) : (
-                                                            <span>{a}</span>
-                                                        )}
-                                                    </React.Fragment>
-                                                );
-                                            })}
-                                        </span>
-                                    )}
-                                </div>
-                                <div className="text-[var(--color-text-muted)] text-right group-hover:text-[var(--color-text-primary)] transition-colors flex flex-row items-center justify-end md:gap-3">
-                                    <LoveButton
-                                        track={track}
-                                        size={16}
-                                        className="p-1.5 opacity-50 md:opacity-0 md:group-hover:opacity-100 focus:opacity-100"
-                                    />
-                                    <span className="w-12 text-right hidden md:inline text-sm tabular-nums">
-                                        {formatTime(track.duration, '--:--')}
-                                    </span>
-                                    <button
-                                        aria-label="More options"
-                                        onClick={(e) => {
-                                            e.stopPropagation();
-                                            openContextMenu(track, e.clientX, e.clientY);
+                <div ref={trackListRef} className="overflow-y-auto flex-1 min-h-0 hide-scrollbar">
+                    {shouldVirtualizeAlbumRows ? (
+                        <div
+                            style={{
+                                height: `${albumRowsVirtualizer.getTotalSize()}px`,
+                                position: 'relative',
+                                width: '100%',
+                            }}
+                        >
+                            {albumRowsVirtualizer.getVirtualItems().map((virtualRow) => {
+                                const row = albumListRows[virtualRow.index];
+                                if (!row) return null;
+
+                                return (
+                                    <div
+                                        key={row.type === 'disc' ? `disc-${row.disc}` : row.track.id}
+                                        data-index={virtualRow.index}
+                                        ref={albumRowsVirtualizer.measureElement}
+                                        style={{
+                                            position: 'absolute',
+                                            top: 0,
+                                            left: 0,
+                                            width: '100%',
+                                            transform: `translateY(${virtualRow.start}px)`,
                                         }}
-                                        className="opacity-50 md:opacity-0 md:group-hover:opacity-100 text-[var(--color-text-muted)] hover:text-[var(--color-primary)] hover:bg-black/5 dark:hover:bg-white/10 rounded-md transition-all p-1.5 focus:opacity-100"
                                     >
-                                        <MoreHorizontal size={18} />
-                                    </button>
-                                </div>
-                            </div>
-                        );
-                    });
-                    return rows;
-                })()}
+                                        {row.type === 'disc' ? (
+                                            <AlbumDiscHeader disc={row.disc} />
+                                        ) : (
+                                            <AlbumTrackRow
+                                                track={row.track}
+                                                index={row.index}
+                                                displayNumber={row.track.trackNumber ?? row.index + 1}
+                                                getArtistLink={getArtistLink}
+                                                onPlay={handlePlayTrack}
+                                                onContextMenu={handleTrackContextMenu}
+                                            />
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    ) : (
+                        albumListRows.map((row) => row.type === 'disc' ? (
+                            <AlbumDiscHeader key={`disc-${row.disc}`} disc={row.disc} />
+                        ) : (
+                            <AlbumTrackRow
+                                key={row.track.id}
+                                track={row.track}
+                                index={row.index}
+                                displayNumber={row.track.trackNumber ?? row.index + 1}
+                                getArtistLink={getArtistLink}
+                                onPlay={handlePlayTrack}
+                                onContextMenu={handleTrackContextMenu}
+                            />
+                        ))
+                    )}
+                </div>
             </div>
         </div>
     );

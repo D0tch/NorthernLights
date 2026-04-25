@@ -4,6 +4,10 @@ interface FadedHeroImageProps {
     src: string;
 }
 
+const fadeOverlayStyle: React.CSSProperties = {
+    background: 'linear-gradient(to bottom, color-mix(in srgb, var(--color-bg) 55%, transparent) 0%, color-mix(in srgb, var(--color-bg) 20%, transparent) 35%, color-mix(in srgb, var(--color-bg) 24%, transparent) 55%, color-mix(in srgb, var(--color-bg) 88%, transparent) 78%, var(--color-bg) 100%)',
+};
+
 export const FadedHeroImage: React.FC<FadedHeroImageProps> = ({ src }) => {
     const [loaded, setLoaded] = useState(false);
 
@@ -16,10 +20,7 @@ export const FadedHeroImage: React.FC<FadedHeroImageProps> = ({ src }) => {
                 onLoad={() => setLoaded(true)}
                 className={`w-full h-full object-cover transition-opacity duration-700 motion-reduce:transition-none ${loaded ? 'opacity-32 dark:opacity-22' : 'opacity-0'}`}
             />
-            <div className="absolute inset-0 bg-gradient-to-b from-[var(--color-bg)]/55 via-[var(--color-bg)]/20 via-35% to-transparent" />
-            <div className="absolute inset-0 bg-gradient-to-b from-transparent via-[var(--color-bg)]/24 via-55% to-[var(--color-bg)]/82" />
-            <div className="absolute bottom-0 left-0 w-full h-32 md:h-40 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)]/88 via-45% to-transparent" />
-            <div className="absolute bottom-0 left-0 w-full h-20 md:h-24 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.08)_0%,transparent_70%)] dark:bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.05)_0%,transparent_70%)]" />
+            <div className="absolute inset-0" style={fadeOverlayStyle} />
         </div>
     );
 };
