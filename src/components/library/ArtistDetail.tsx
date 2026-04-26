@@ -13,6 +13,7 @@ import { ArtistInitial } from './ArtistInitial';
 import { formatTime } from '../../utils/formatTime';
 import { ExternalLink, Globe, Users, Mic2, Calendar, Sparkles, Music2, Clock, BookOpen, Play, Headphones, Link2, Disc3 } from 'lucide-react';
 import { ContextMenuFrame, ContextMenuHeader, ContextMenuLink, ContextMenuList, ContextMenuPortal } from '../ContextMenu';
+import { useArtistConcerts, OnTourSticker, UpcomingShows } from './ArtistConcerts';
 
 // ─── Link label helpers ───────────────────────────────────────────────────────
 
@@ -134,6 +135,7 @@ export const ArtistDetail: React.FC = () => {
     }, [library, artistId]);
 
     const { imageUrl, bio, disambiguation, area, type, lifeSpan, links, genres, communityTags, listeners, members, isLoading: artistLoading } = useArtistData(artistName, mbArtistId);
+    const { onTour, events: upcomingEvents, loading: concertsLoading, stale: concertsStale } = useArtistConcerts(artistId);
     const { tracks: externalTopTracks } = useArtistTopTracks(artistName, {
         enabled: !!artistName,
         limit: 30,
@@ -330,6 +332,12 @@ export const ArtistDetail: React.FC = () => {
                         <h1 className="font-bold text-4xl md:text-6xl lg:text-7xl tracking-tight mb-2 text-[var(--color-text-primary)]">
                             {artistName}
                         </h1>
+
+                        {onTour && (
+                            <div className="mb-3">
+                                <OnTourSticker visible={onTour} />
+                            </div>
+                        )}
 
                         {/* Band members */}
                         {members && members.length > 0 && (
@@ -604,6 +612,12 @@ export const ArtistDetail: React.FC = () => {
                         )}
                     </section>
                 )}
+
+                <UpcomingShows
+                    events={upcomingEvents}
+                    loading={concertsLoading}
+                    stale={concertsStale}
+                />
 
                 {/* Primary Releases */}
             {[

@@ -8,6 +8,7 @@ import { useDominantColor } from '../hooks/useDominantColor';
 import { useExternalImage } from '../hooks/useExternalImage';
 import { useInView } from '../hooks/useInView';
 import { fetchGenreImage } from '../utils/externalImagery';
+import { LiveConcertsHubSection } from './LiveConcertsHubSection';
 
 type HubCollection = Partial<Playlist> & { tracks: TrackInfo[] };
 
@@ -488,6 +489,8 @@ export const Hub: React.FC = () => {
           </div>
         </section>
       )}
+
+      <LiveConcertsHubSection />
 
       {systemCollections.length > 0 && (
         <section>
