@@ -114,6 +114,15 @@ if (fs.existsSync(distPath)) {
   });
 }
 
+// Public runtime config consumed by the client at boot/runtime.
+// This must stay outside JWT auth so PWA-served or cached shells can still
+// discover the active Cast receiver configuration deterministically.
+app.get('/api/client-config', (_req, res) => {
+  res.json({
+    castReceiverAppId: (process.env.CAST_RECEIVER_APP_ID || '').trim(),
+  });
+});
+
 // Apply JWT auth middleware to all API routes
 app.use(jwtAuthMiddleware);
 
@@ -324,4 +333,3 @@ setTimeout(() => {
   runAutoWalk();
   setInterval(runAutoWalk, AUTO_WALK_INTERVAL_MS);
 }, 60_000);
-
