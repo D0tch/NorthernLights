@@ -52,6 +52,17 @@ function inferContentType(url: string, format?: string): string {
     return 'audio/mpeg';
 }
 
+function stripQueryParam(url: string, key: string): string {
+    if (!url) return url;
+    try {
+        const parsed = new URL(url);
+        parsed.searchParams.delete(key);
+        return parsed.toString();
+    } catch {
+        return url;
+    }
+}
+
 export class CastManager {
     private static instance: CastManager;
     private castContext: any = null;
@@ -373,7 +384,16 @@ export class CastManager {
         album?: string;
         format?: string;
         duration?: number;
+    }, options?: {
+        includeAuthTokenInCustomData?: boolean;
+        includeArtwork?: boolean;
+        includeDuration?: boolean;
+        compactHlsUrl?: boolean;
     }) {
+        const includeAuthTokenInCustomData = options?.includeAuthTokenInCustomData ?? true;
+        const includeArtwork = options?.includeArtwork ?? true;
+        const includeDuration = options?.includeDuration ?? true;
+        const compactHlsUrl = options?.compactHlsUrl ?? false;
         const useHls = !!this.customAppId;
         const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
             track.url || '',
@@ -381,6 +401,9 @@ export class CastManager {
         );
         let mediaUrl = useHls ? (effectiveHlsUrl || track.rawUrl || '') : (track.rawUrl || effectiveHlsUrl || '');
         if (useHls) {
+            if (compactHlsUrl) {
+                mediaUrl = stripQueryParam(mediaUrl, 'token');
+            }
             try {
                 const url = new URL(mediaUrl);
                 url.searchParams.set('codec', CUSTOM_RECEIVER_HLS_CODEC);
@@ -393,8 +416,8 @@ export class CastManager {
         mediaInfo.metadata.title = track.title || 'Unknown Title';
         mediaInfo.metadata.artist = track.artist || 'Unknown Artist';
         if (track.album) mediaInfo.metadata.albumName = track.album;
-        if (track.artUrl) mediaInfo.metadata.images = [new chrome.cast.Image(track.artUrl)];
-        if (track.duration) mediaInfo.metadata.duration = track.duration;
+        if (includeArtwork && track.artUrl) mediaInfo.metadata.images = [new chrome.cast.Image(track.artUrl)];
+        if (includeDuration && track.duration) mediaInfo.metadata.duration = track.duration;
 
         const customData: Record<string, any> = {};
         if (track.queueEntryId) {
@@ -402,7 +425,7 @@ export class CastManager {
         }
         if (useHls) {
             const authToken = this.extractTokenFromUrl(mediaUrl);
-            if (authToken) customData.token = authToken;
+            if (includeAuthTokenInCustomData && authToken) customData.token = authToken;
             customData.codec = CUSTOM_RECEIVER_HLS_CODEC;
         }
         if (Object.keys(customData).length > 0) {
@@ -421,8 +444,13 @@ export class CastManager {
         album?: string;
         format?: string;
         duration?: number;
+    }, options?: {
+        includeAuthTokenInCustomData?: boolean;
+        includeArtwork?: boolean;
+        includeDuration?: boolean;
+        compactHlsUrl?: boolean;
     }) {
-        const item = new chrome.cast.media.QueueItem(this.buildMediaInfo(track));
+        const item = new chrome.cast.media.QueueItem(this.buildMediaInfo(track, options));
         item.autoplay = true;
         item.preloadTime = 30;
         return item;
@@ -744,20 +772,49 @@ export class CastManager {
 
         const castSession = this.castContext.getCurrentSession();
         if (!castSession) return;
-        const queueItems: any[] = tracks.map((track) => this.buildQueueItem(track));
+        const normalizedStartIndex = Math.max(0, Math.min(startIndex, tracks.length - 1));
+        const queueItems: any[] = tracks.map((track, index) => this.buildQueueItem(track, {
+            includeAuthTokenInCustomData: false,
+            includeArtwork: index === normalizedStartIndex,
+            includeDuration: index === normalizedStartIndex,
+            compactHlsUrl: true,
+        }));
 
-        const startItem = queueItems[startIndex] || queueItems[0];
+        const startItem = queueItems[normalizedStartIndex] || queueItems[0];
         if (!startItem?.media) {
             console.error('[Cast] Cannot load queue: missing start item media');
             return;
         }
 
+        const startTrack = tracks[normalizedStartIndex] || tracks[0];
+        const startTrackUrl = applyStreamingQualityToHlsUrl(
+            startTrack?.url || '',
+            usePlayerStore.getState().streamingQuality
+        );
+        const sharedAuthToken = this.extractTokenFromUrl(startTrackUrl || startTrack?.rawUrl || '');
+        startItem.media.customData = {
+            ...(startItem.media.customData || {}),
+            ...(sharedAuthToken ? { token: sharedAuthToken } : {}),
+        };
+
         const request = new chrome.cast.media.LoadRequest(startItem.media);
         request.autoplay = true;
         request.queueData = new chrome.cast.media.QueueData();
         request.queueData.items = queueItems;
-        request.queueData.startIndex = startIndex;
+        request.queueData.startIndex = normalizedStartIndex;
         request.queueData.repeatMode = this.getRepeatMode(repeat);
+
+        try {
+            const approxPayloadChars = JSON.stringify({
+                media: request.media,
+                queueData: {
+                    startIndex: request.queueData.startIndex,
+                    repeatMode: request.queueData.repeatMode,
+                    items: request.queueData.items,
+                }
+            }).length;
+            console.log(`[Cast] Queue load summary: items=${queueItems.length} startIndex=${normalizedStartIndex} approxPayloadChars=${approxPayloadChars}`);
+        } catch { /* ignore */ }
 
         // Serialize loadMedia calls to prevent concurrent loads from clashing
         const previous = this.currentLoadPromise;
