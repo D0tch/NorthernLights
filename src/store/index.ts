@@ -8,6 +8,7 @@ import { cloneTrackForQueue, ensureQueueEntryIds } from '../utils/queue';
 import { preloadManager } from '../utils/PreloadManager';
 import { setPlaybackDebugLogging } from '../utils/playbackDebug';
 import { savePlaybackContinuitySnapshot } from '../utils/playbackContinuity';
+import { audioOutputManager, type AudioOutputDevice } from '../utils/AudioOutputManager';
 import {
   getPlaybackTimeSnapshot,
   setPlaybackCurrentTime,
@@ -161,6 +162,14 @@ export interface PlayerState {
   playbackState: PlaybackState;
   isBuffering: boolean;
   castConnected: boolean;
+  audioOutputSupported: boolean;
+  audioOutputPickerSupported: boolean;
+  audioOutputDevices: AudioOutputDevice[];
+  audioOutputDeviceId: string;
+  audioOutputDeviceLabel: string;
+  audioOutputActive: boolean;
+  audioOutputSelecting: boolean;
+  audioOutputError: string | null;
   playbackTelemetry: PlaybackTelemetry;
 
   // Settings State (Persisted)
@@ -223,6 +232,20 @@ export interface PlayerState {
   genreMatrixLastResult: string | null;
   genreMatrixProgress: string | null;
   autoFolderWalk: boolean;
+
+  // Concerts / Jambase (system-level, admin)
+  jambaseEnabled: boolean;
+  jambaseMaxSubscriptionsPerUser: number;
+  jambaseCacheTtlDays: number;
+  jambaseMonthlyCap: number;
+  jambaseHardStop: boolean;
+
+  // Concerts (per-user)
+  concertsEnabled: boolean;
+  concertsLat: number | null;
+  concertsLng: number | null;
+  concertsLocationLabel: string;
+  concertsRadiusKm: number;
 
   isSidebarCollapsed: boolean;
   setIsSidebarCollapsed: (collapsed: boolean) => void;
@@ -290,6 +313,10 @@ export interface PlayerState {
   nextTrack: () => Promise<void>;
   prevTrack: () => Promise<void>;
   setVolume: (v: number) => void;
+  selectAudioOutput: () => Promise<void>;
+  setAudioOutputDevice: (deviceId: string) => Promise<void>;
+  refreshAudioOutputs: () => Promise<void>;
+  clearAudioOutput: () => Promise<void>;
   toggleShuffle: () => void;
   cycleRepeat: () => void;
   setCastConnected: (connected: boolean) => void;
@@ -476,6 +503,37 @@ export const usePlayerStore = create<PlayerState>()(
         });
       }, 0);
 
+      setTimeout(() => {
+        const persisted = get();
+        const initialAudioOutput = audioOutputManager.initialize(
+          persisted.audioOutputDeviceId,
+          persisted.audioOutputDeviceLabel
+        );
+        set({
+          audioOutputSupported: initialAudioOutput.supported,
+          audioOutputPickerSupported: initialAudioOutput.pickerSupported,
+          audioOutputDevices: initialAudioOutput.devices,
+          audioOutputDeviceId: initialAudioOutput.deviceId,
+          audioOutputDeviceLabel: initialAudioOutput.label,
+          audioOutputActive: initialAudioOutput.active,
+          audioOutputSelecting: initialAudioOutput.selecting,
+          audioOutputError: initialAudioOutput.error,
+        });
+
+        audioOutputManager.subscribe((audioOutput) => {
+          set({
+            audioOutputSupported: audioOutput.supported,
+            audioOutputPickerSupported: audioOutput.pickerSupported,
+            audioOutputDevices: audioOutput.devices,
+            audioOutputDeviceId: audioOutput.deviceId,
+            audioOutputDeviceLabel: audioOutput.label,
+            audioOutputActive: audioOutput.active,
+            audioOutputSelecting: audioOutput.selecting,
+            audioOutputError: audioOutput.error,
+          });
+        });
+      }, 0);
+
       const prewarmNextFromState = (state: PlayerState, currentIndex: number | null = state.currentIndex) => {
         const nextIndex = currentIndex !== null ? currentIndex + 1 : null;
         const nextTrack = nextIndex !== null ? state.playlist[nextIndex] : null;
@@ -552,6 +610,14 @@ export const usePlayerStore = create<PlayerState>()(
         playbackState: 'stopped' as PlaybackState,
         isBuffering: false as boolean,
         castConnected: false as boolean,
+        audioOutputSupported: false,
+        audioOutputPickerSupported: false,
+        audioOutputDevices: [{ deviceId: '', label: 'System default', isDefault: true }],
+        audioOutputDeviceId: '',
+        audioOutputDeviceLabel: '',
+        audioOutputActive: false,
+        audioOutputSelecting: false,
+        audioOutputError: null,
         playbackTelemetry: {
           lastUpdatedAt: null,
           loadPath: 'none',
@@ -595,6 +661,16 @@ export const usePlayerStore = create<PlayerState>()(
         providerArtistImage: 'lastfm' as 'lastfm' | 'genius' | 'musicbrainz',
         providerArtistBio: 'lastfm' as 'lastfm' | 'genius',
         providerAlbumArt: 'lastfm' as 'lastfm' | 'genius' | 'musicbrainz',
+        jambaseEnabled: false as boolean,
+        jambaseMaxSubscriptionsPerUser: 10,
+        jambaseCacheTtlDays: 7,
+        jambaseMonthlyCap: 1000,
+        jambaseHardStop: true as boolean,
+        concertsEnabled: false as boolean,
+        concertsLat: null as number | null,
+        concertsLng: null as number | null,
+        concertsLocationLabel: '',
+        concertsRadiusKm: 50,
         authToken: null as string | null,
         streamingQuality: 'auto' as 'auto' | '64k' | '128k' | '160k' | '320k' | 'source',
         playbackDebugLogging: false as boolean,
@@ -801,7 +877,17 @@ export const usePlayerStore = create<PlayerState>()(
                 providerArtistImage: data.providerArtistImage || 'lastfm',
                 providerArtistBio: data.providerArtistBio || 'lastfm',
                 providerAlbumArt: data.providerAlbumArt || 'lastfm',
-                autoFolderWalk: data.autoFolderWalk === 'true' || data.autoFolderWalk === true
+                autoFolderWalk: data.autoFolderWalk === 'true' || data.autoFolderWalk === true,
+                jambaseEnabled: data.jambaseEnabled ?? false,
+                jambaseMaxSubscriptionsPerUser: typeof data.jambaseMaxSubscriptionsPerUser === 'number' ? data.jambaseMaxSubscriptionsPerUser : 10,
+                jambaseCacheTtlDays: typeof data.jambaseCacheTtlDays === 'number' ? data.jambaseCacheTtlDays : 7,
+                jambaseMonthlyCap: typeof data.jambaseMonthlyCap === 'number' ? data.jambaseMonthlyCap : 1000,
+                jambaseHardStop: data.jambaseHardStop ?? true,
+                concertsEnabled: data.concertsEnabled ?? false,
+                concertsLat: typeof data.concertsLat === 'number' ? data.concertsLat : null,
+                concertsLng: typeof data.concertsLng === 'number' ? data.concertsLng : null,
+                concertsLocationLabel: data.concertsLocationLabel || '',
+                concertsRadiusKm: typeof data.concertsRadiusKm === 'number' ? data.concertsRadiusKm : 50
               });
 
               // Auto-validate LLM connection if credentials exist
@@ -860,7 +946,17 @@ export const usePlayerStore = create<PlayerState>()(
                 providerArtistImage: state.providerArtistImage,
                 providerArtistBio: state.providerArtistBio,
                 providerAlbumArt: state.providerAlbumArt,
-                autoFolderWalk: state.autoFolderWalk
+                autoFolderWalk: state.autoFolderWalk,
+                jambaseEnabled: state.jambaseEnabled,
+                jambaseMaxSubscriptionsPerUser: state.jambaseMaxSubscriptionsPerUser,
+                jambaseCacheTtlDays: state.jambaseCacheTtlDays,
+                jambaseMonthlyCap: state.jambaseMonthlyCap,
+                jambaseHardStop: state.jambaseHardStop,
+                concertsEnabled: state.concertsEnabled,
+                concertsLat: state.concertsLat,
+                concertsLng: state.concertsLng,
+                concertsLocationLabel: state.concertsLocationLabel,
+                concertsRadiusKm: state.concertsRadiusKm
               };
               await fetch('/api/settings', {
                  method: 'POST',
@@ -1543,6 +1639,54 @@ export const usePlayerStore = create<PlayerState>()(
           set({ volume: v });
         },
 
+        selectAudioOutput: async () => {
+          const state = get();
+          if (state.castConnected) {
+            state.addToast('Disconnect Cast before choosing a local output.', 'info');
+            return;
+          }
+
+          const output = await playbackManager.selectAudioOutputDevice(undefined);
+          if (output.error) {
+            state.addToast(output.error, 'error');
+          } else if (output.active) {
+            state.addToast(`Playing on ${output.label || 'selected output'}.`, 'success');
+          } else {
+            state.addToast('Using system default audio output.', 'info');
+          }
+        },
+
+        setAudioOutputDevice: async (deviceId: string) => {
+          const state = get();
+          if (state.castConnected) {
+            state.addToast('Disconnect Cast before choosing a local output.', 'info');
+            return;
+          }
+
+          const output = deviceId
+            ? await playbackManager.selectAudioOutputDevice(deviceId)
+            : await playbackManager.clearAudioOutputDevice();
+          if (output.error) {
+            state.addToast(output.error, 'error');
+          } else if (output.active) {
+            state.addToast(`Playing on ${output.label || 'selected output'}.`, 'success');
+          } else {
+            state.addToast('Using system default audio output.', 'info');
+          }
+        },
+
+        refreshAudioOutputs: async () => {
+          const output = await audioOutputManager.refreshDevices();
+          if (output.error) {
+            get().addToast(output.error, 'error');
+          }
+        },
+
+        clearAudioOutput: async () => {
+          await playbackManager.clearAudioOutputDevice();
+          get().addToast('Using system default audio output.', 'info');
+        },
+
         toggleShuffle: () => set((state: PlayerState) => ({ shuffle: !state.shuffle })),
 
         cycleRepeat: () => set((state: PlayerState) => {
@@ -1663,6 +1807,8 @@ export const usePlayerStore = create<PlayerState>()(
         streamingQuality: state.streamingQuality,
         playbackDebugLogging: state.playbackDebugLogging,
         prebufferPolicy: state.prebufferPolicy,
+        audioOutputDeviceId: state.audioOutputDeviceId,
+        audioOutputDeviceLabel: state.audioOutputDeviceLabel,
         // Persist playlist and stable playback state; resume position is handled by the throttled continuity snapshot.
         playlist: state.playlist ? state.playlist.map((t: TrackInfo) => {
           const { fileHandle, ...rest } = t;

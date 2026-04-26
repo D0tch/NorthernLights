@@ -19,6 +19,7 @@ import { usePlayerStore, type PlaybackTelemetry } from '../store';
 import { getPlaybackTimeSnapshot, setPlaybackCurrentTime } from '../store/playbackTime';
 import { applyStreamingQualityToHlsUrl } from './streaming';
 import { logPlaybackInfo } from './playbackDebug';
+import { audioOutputManager } from './AudioOutputManager';
 import {
     isRecentContinuitySnapshot,
     readPlaybackContinuitySnapshot,
@@ -119,6 +120,7 @@ class PlaybackManager {
         audio.preload = 'auto';
         audio.volume = this.localVolume;
         audio.muted = this.localMuted;
+        audioOutputManager.registerElement(audio);
         return audio;
     }
 
@@ -809,6 +811,7 @@ class PlaybackManager {
         oldAudio.pause();
         this.destroyHls();
         this.syncLocalAudioOutputState(this.nextAudio);
+        await audioOutputManager.applyToRegisteredElements();
 
         this.audio = this.nextAudio;
         this.hls = this.nextHls;
@@ -821,6 +824,7 @@ class PlaybackManager {
         }
         oldAudio.removeAttribute('src');
         oldAudio.load();
+        audioOutputManager.unregisterElement(oldAudio);
 
         logPlaybackInfo('[Playback] Promoting prepared next track');
         this.recordTelemetry({
@@ -882,6 +886,7 @@ class PlaybackManager {
             }
             this.nextAudio.removeAttribute('src');
             this.nextAudio.load();
+            audioOutputManager.unregisterElement(this.nextAudio);
             this.nextAudio = null;
         }
         this.nextUrlKey = null;
@@ -890,6 +895,15 @@ class PlaybackManager {
     public clearPreparedAudio(): void {
         this.destroyPreparedAudio();
         this.lastPrepareFailureReason = null;
+    }
+
+    public async selectAudioOutputDevice(preferredDeviceId?: string) {
+        if (castManager.isConnected()) return audioOutputManager.getState();
+        return audioOutputManager.selectOutputDevice(preferredDeviceId);
+    }
+
+    public async clearAudioOutputDevice() {
+        return audioOutputManager.clearOutputDevice();
     }
 
     public async playFile(fileHandle: FileSystemFileHandle): Promise<void> {
@@ -1009,6 +1023,7 @@ class PlaybackManager {
         this.destroyPreparedAudio();
         this.audio.pause();
         this.audio.src = '';
+        audioOutputManager.unregisterElement(this.audio);
         if (this.audioContext) {
             this.audioContext.close();
             this.audioContext = null;
