@@ -78,6 +78,11 @@ export class CastManager {
 
     // Tracks whether this manager initiated the cast session (vs joining an existing one)
     private autoCastInProgress = false;
+    private rejoinSessionPending = false;
+    private rejoinHydrationTimer: ReturnType<typeof setTimeout> | null = null;
+    private rejoinHydrationAttempts = 0;
+    private readonly maxRejoinHydrationAttempts = 12;
+    private readonly rejoinHydrationDelayMs = 250;
 
     // Serializes concurrent loadMedia calls to prevent session_error on rapid clicks
     private currentLoadPromise: Promise<void> = Promise.resolve();
@@ -149,6 +154,13 @@ export class CastManager {
         }
     }
 
+    private clearRejoinHydrationTimer() {
+        if (this.rejoinHydrationTimer) {
+            clearTimeout(this.rejoinHydrationTimer);
+            this.rejoinHydrationTimer = null;
+        }
+    }
+
     public hasStoredSession(): boolean {
         try {
             return !!window.localStorage.getItem(SESSION_STORAGE_KEY);
@@ -160,6 +172,40 @@ export class CastManager {
     private hasActiveRemoteMediaSession(mediaSession: any | null = this.getMediaSession()): boolean {
         if (!mediaSession) return false;
         return !!mediaSession.media || (Array.isArray(mediaSession.items) && mediaSession.items.length > 0);
+    }
+
+    private beginRejoinHydration(reason: string) {
+        this.rejoinSessionPending = true;
+        this.rejoinHydrationAttempts = 0;
+        this.clearRejoinHydrationTimer();
+        void this.waitForRemoteSessionHydration(reason);
+    }
+
+    private async waitForRemoteSessionHydration(reason: string): Promise<void> {
+        if (!this.rejoinSessionPending) return;
+
+        const mediaSession = this.castContext?.getCurrentSession?.()?.getMediaSession?.() || null;
+        if (this.hasActiveRemoteMediaSession(mediaSession)) {
+            this.rejoinSessionPending = false;
+            this.clearRejoinHydrationTimer();
+            await this.hydrateSenderFromRemoteSession(mediaSession, reason);
+            return;
+        }
+
+        if (this.rejoinHydrationAttempts >= this.maxRejoinHydrationAttempts) {
+            this.rejoinSessionPending = false;
+            this.clearRejoinHydrationTimer();
+            console.warn('[Cast] Remote session hydration timed out; allowing local auto-cast fallback');
+            if (this.state === 'CONNECTED' && !this.autoCastInProgress) {
+                this.handleCastConnected();
+            }
+            return;
+        }
+
+        this.rejoinHydrationAttempts += 1;
+        this.rejoinHydrationTimer = setTimeout(() => {
+            void this.waitForRemoteSessionHydration(reason);
+        }, this.rejoinHydrationDelayMs);
     }
 
     private initializeCastApi() {
@@ -226,6 +272,10 @@ export class CastManager {
                     // Fresh connection with no existing remote media: auto-cast local playback.
                     // Existing/resumed remote media must win over stale local sender state.
                     if (prevState !== 'CONNECTED' && this.state === 'CONNECTED' && !this.autoCastInProgress) {
+                        if (this.castContext.getCurrentSession?.() || this.rejoinSessionPending || this.hasStoredSession()) {
+                            this.beginRejoinHydration('cast-connected');
+                            return;
+                        }
                         const mediaSession = this.castContext.getCurrentSession?.()?.getMediaSession?.() || null;
                         if (this.hasActiveRemoteMediaSession(mediaSession)) {
                             void this.hydrateSenderFromRemoteSession(mediaSession, 'cast-connected');
@@ -251,6 +301,9 @@ export class CastManager {
                                     console.log('[Cast] Session started, stored ID:', sid);
                                 }
                             }
+                            if (this.rejoinSessionPending) {
+                                this.beginRejoinHydration('session-started');
+                            }
                             break;
 
                         case cast.framework.SessionState.SESSION_RESUMED:
@@ -261,14 +314,16 @@ export class CastManager {
                             if (resumedSession) {
                                 const sid = resumedSession.getSessionId();
                                 if (sid) localStorage.setItem(SESSION_STORAGE_KEY, sid);
-                                void this.hydrateSenderFromRemoteSession(resumedSession.getMediaSession?.() || null, 'session-resumed');
                             }
+                            this.beginRejoinHydration('session-resumed');
                             break;
 
                         case cast.framework.SessionState.SESSION_ENDING:
                         case cast.framework.SessionState.SESSION_ENDED:
                             console.log('[Cast] Session ended');
                             localStorage.removeItem(SESSION_STORAGE_KEY);
+                            this.rejoinSessionPending = false;
+                            this.clearRejoinHydrationTimer();
                             this.state = 'NOT_CONNECTED';
                             this.notifyStateChange();
                             break;
@@ -283,6 +338,8 @@ export class CastManager {
                     if (!this.player.isConnected) {
                         console.log('[Cast] Remote player disconnected');
                         localStorage.removeItem(SESSION_STORAGE_KEY);
+                        this.rejoinSessionPending = false;
+                        this.clearRejoinHydrationTimer();
                         this.state = 'NOT_CONNECTED';
                         this.notifyStateChange();
                     }
@@ -641,10 +698,12 @@ export class CastManager {
         if (!storedId) return;
 
         console.log('[Cast] Attempting to rejoin session:', storedId);
+        this.rejoinSessionPending = true;
         try {
             chrome.cast.requestSessionById(storedId);
         } catch (e) {
             console.warn('[Cast] Failed to rejoin session:', e);
+            this.rejoinSessionPending = false;
             localStorage.removeItem(SESSION_STORAGE_KEY);
             toast.info('Cast session could not be restored. Starting fresh.');
         }
