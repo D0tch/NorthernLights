@@ -37,3 +37,8 @@ server/models/musicnn
 # Scratch/temp directories
 scratch/
 server/scratch/
+
+# Agent skills (generated at runtime)
+.agents/
+.claude/
+skills-lock.json
