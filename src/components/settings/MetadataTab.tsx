@@ -2,10 +2,20 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useProviderConnectionTest } from '../../hooks/useProviderConnectionTest';
 import { useToast } from '../../hooks/useToast';
-import { Trash2, Sparkles, Image as ImageIcon, BookOpen, Disc3, FileText, User, Heart, Tags, Headphones, Star } from 'lucide-react';
+import { Trash2, Sparkles, Image as ImageIcon, BookOpen, Disc3, FileText, User, Heart, Tags, Headphones, Star, Ticket, MapPin, Calendar, AlertTriangle } from 'lucide-react';
 import { DependencyBadge, DependencyGroup, DependencyInfoBox } from '../DependencyBadge';
 
-type MetadataSubTab = 'overview' | 'lastfm' | 'genius' | 'musicbrainz';
+type MetadataSubTab = 'overview' | 'lastfm' | 'genius' | 'musicbrainz' | 'jambase';
+
+type JambaseStatusResp = {
+  enabled: boolean;
+  hasKey: boolean;
+  usage: { yearMonth: string; count: number; lastCallAt: string | null; cap: number; hardStopActive: boolean; stopped: boolean };
+  maxSubscriptionsPerUser: number;
+  cacheTtlDays: number;
+  hardStop: boolean;
+  monthlyCap: number;
+};
 
 export const MetadataTab: React.FC = () => {
     const lastFmApiKey = usePlayerStore(state => state.lastFmApiKey);
@@ -29,6 +39,11 @@ export const MetadataTab: React.FC = () => {
     const providerArtistImage = usePlayerStore(state => state.providerArtistImage);
     const providerArtistBio = usePlayerStore(state => state.providerArtistBio);
     const providerAlbumArt = usePlayerStore(state => state.providerAlbumArt);
+    const jambaseEnabled = usePlayerStore(state => state.jambaseEnabled);
+    const jambaseMaxSubscriptionsPerUser = usePlayerStore(state => state.jambaseMaxSubscriptionsPerUser);
+    const jambaseCacheTtlDays = usePlayerStore(state => state.jambaseCacheTtlDays);
+    const jambaseMonthlyCap = usePlayerStore(state => state.jambaseMonthlyCap);
+    const jambaseHardStop = usePlayerStore(state => state.jambaseHardStop);
     const setSettings = usePlayerStore(state => state.setSettings);
     const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
     const { addToast } = useToast();
@@ -36,6 +51,28 @@ export const MetadataTab: React.FC = () => {
 
     const [metadataTab, setMetadataTab] = useState<MetadataSubTab>('overview');
     const [mbShowOverride, setMbShowOverride] = useState(false);
+
+    // Jambase live status (server-fetched — includes monthly usage and whether the
+    // env JAMBASE_API_KEY is set).
+    const [jambaseStatus, setJambaseStatus] = useState<JambaseStatusResp | null>(null);
+    const [jambaseTestStatus, setJambaseTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+    const [jambaseTestMessage, setJambaseTestMessage] = useState('');
+
+    const refreshJambaseStatus = useCallback(async () => {
+        try {
+            const res = await fetch('/api/providers/jambase/status', { headers: getAuthHeader() });
+            if (res.ok) {
+                const data = await res.json() as JambaseStatusResp;
+                setJambaseStatus(data);
+            }
+        } catch {}
+    }, [getAuthHeader]);
+
+    useEffect(() => {
+        if (metadataTab === 'jambase') {
+            refreshJambaseStatus();
+        }
+    }, [metadataTab, refreshJambaseStatus]);
 
     // Effective redirect URI the server will use (override if set, else SERVER_URL default)
     const [mbEffectiveRedirectUri, setMbEffectiveRedirectUri] = useState<string>('');
@@ -93,6 +130,17 @@ export const MetadataTab: React.FC = () => {
             message={musicBrainzConnected ? 'Ready for metadata, tags, and rating sync' : (musicBrainzEnabled ? 'Requires OAuth Authorization' : 'Integration currently disabled')}
         />
     );
+    const jambaseBadge = (
+        <DependencyBadge
+            label="Jambase Integration"
+            status={jambaseEnabled && jambaseStatus?.hasKey ? 'available' : (jambaseEnabled ? 'partial' : 'unavailable')}
+            message={jambaseEnabled && jambaseStatus?.hasKey
+                ? 'Ready for tour dates and live event discovery'
+                : jambaseEnabled
+                    ? 'Set JAMBASE_API_KEY in server environment'
+                    : 'Integration currently disabled'}
+        />
+    );
 
     return (
         <div className="settings-section mb-8">
@@ -129,6 +177,12 @@ export const MetadataTab: React.FC = () => {
                 >
                     MusicBrainz
                 </button>
+                <button
+                    onClick={() => setMetadataTab('jambase')}
+                    className={`btn-tab ${metadataTab === 'jambase' ? 'active' : ''}`}
+                >
+                    Jambase
+                </button>
             </div>
 
             {metadataTab === 'overview' && (
@@ -138,6 +192,7 @@ export const MetadataTab: React.FC = () => {
                             {lastFmBadge}
                             {geniusBadge}
                             {musicBrainzBadge}
+                            {jambaseBadge}
                         </DependencyGroup>
                     </div>
 
@@ -491,6 +546,208 @@ export const MetadataTab: React.FC = () => {
                                     )}
                                 </div>
                             </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {metadataTab === 'jambase' && (
+                <div>
+                    <div className="mb-6 space-y-4">
+                        <DependencyGroup title="Provider Status">
+                            {jambaseBadge}
+                        </DependencyGroup>
+                    </div>
+
+                    <div className="mb-6">
+                        <div className="flex items-center gap-2 mb-3">
+                            <Sparkles className="w-4 h-4 text-[var(--color-primary)]" />
+                            <span className="text-sm font-medium text-[var(--color-text-primary)]">Features requiring Jambase</span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <DependencyInfoBox
+                                title="Live Concerts on Hub"
+                                description='Ticket cards on the Hub showing upcoming shows by artists each user has subscribed to'
+                                icon={<Ticket size={16} />}
+                            />
+                            <DependencyInfoBox
+                                title='"On tour" Sticker'
+                                description="Surfaces a tour-status pill and upcoming show list on artist detail pages"
+                                icon={<Calendar size={16} />}
+                            />
+                            <DependencyInfoBox
+                                title="Location-aware Filtering"
+                                description="Events sorted by date and proximity to each user's saved location"
+                                icon={<MapPin size={16} />}
+                            />
+                            <DependencyInfoBox
+                                title="Tickets & Pricing"
+                                description="Direct ticket links and price indicators when supplied by the venue or promoter"
+                                icon={<Ticket size={16} />}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 flex flex-col gap-4 shadow-sm">
+                        {/* Note about API key location */}
+                        <div className="bg-blue-500/5 dark:bg-blue-500/10 border border-blue-500/10 dark:border-blue-500/20 rounded-lg p-3 text-xs text-blue-700 dark:text-blue-200">
+                            <strong>Note:</strong> Jambase is metered (1000 free calls / month, then $0.05 per call). Set <code className="font-mono">JAMBASE_API_KEY</code> in the server&apos;s <code className="font-mono">.env</code> — never paste it here. The key is read at request time and is not persisted in settings.
+                        </div>
+
+                        {/* Enable toggle */}
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <label className="text-sm font-medium text-[var(--color-text-primary)] block">{jambaseEnabled ? 'Integration Enabled' : 'Integration Disabled'}</label>
+                                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">When disabled, no calls are made and the Hub card / tour stickers are hidden.</p>
+                            </div>
+                            <button
+                                onClick={() => setSettings({ jambaseEnabled: !jambaseEnabled })}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${jambaseEnabled ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}
+                                aria-label="Toggle Jambase integration"
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${jambaseEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                            </button>
+                        </div>
+
+                        {jambaseEnabled && (
+                            <>
+                                {/* API key environment status + test */}
+                                <div className="flex flex-col gap-2 pt-3 border-t border-[var(--glass-border)]">
+                                    <label className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">API Key</label>
+                                    <div className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${jambaseStatus?.hasKey ? 'bg-green-500/5 border-green-500/20 text-green-700 dark:text-green-300' : 'bg-amber-500/5 border-amber-500/20 text-amber-700 dark:text-amber-300'}`}>
+                                        <span className="text-xs font-mono flex-1">
+                                            {jambaseStatus?.hasKey ? '✓ JAMBASE_API_KEY detected in environment' : '✗ JAMBASE_API_KEY not set — restart server after editing .env'}
+                                        </span>
+                                    </div>
+                                    <div className="flex gap-2 items-center mt-1">
+                                        <button
+                                            type="button"
+                                            disabled={jambaseTestStatus === 'testing' || !jambaseStatus?.hasKey}
+                                            onClick={async () => {
+                                                setJambaseTestStatus('testing');
+                                                setJambaseTestMessage('');
+                                                try {
+                                                    // Persist the toggle/limits before testing — admin may have just flipped them.
+                                                    await fetch('/api/settings', {
+                                                        method: 'POST',
+                                                        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                                                        body: JSON.stringify({ jambaseEnabled, jambaseMaxSubscriptionsPerUser, jambaseCacheTtlDays, jambaseMonthlyCap, jambaseHardStop }),
+                                                    });
+                                                    const res = await fetch('/api/providers/jambase/test', { method: 'POST', headers: getAuthHeader() });
+                                                    const data = await res.json();
+                                                    if (res.ok && data.status === 'ok') {
+                                                        setJambaseTestStatus('success');
+                                                        setJambaseTestMessage(data.sample ? `Found "${data.sample}"` : 'Connected');
+                                                    } else {
+                                                        setJambaseTestStatus('error');
+                                                        setJambaseTestMessage(data.error || `HTTP ${res.status}`);
+                                                    }
+                                                    refreshJambaseStatus();
+                                                } catch (e: any) {
+                                                    setJambaseTestStatus('error');
+                                                    setJambaseTestMessage(e?.message || 'Network error');
+                                                }
+                                            }}
+                                            className="btn btn-ghost btn-sm whitespace-nowrap disabled:opacity-50"
+                                        >
+                                            {jambaseTestStatus === 'testing' ? 'Testing...' : 'Test Connection'}
+                                        </button>
+                                        {jambaseTestStatus === 'success' && <span className="text-green-500 font-semibold text-xs">✓ {jambaseTestMessage}</span>}
+                                        {jambaseTestStatus === 'error' && <span className="text-red-500 font-semibold text-xs">✗ {jambaseTestMessage}</span>}
+                                    </div>
+                                </div>
+
+                                {/* Monthly usage */}
+                                <div className="flex flex-col gap-2 pt-3 border-t border-[var(--glass-border)]">
+                                    <div className="flex items-baseline justify-between">
+                                        <label className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Monthly Usage</label>
+                                        <span className="text-xs text-[var(--color-text-muted)]">{jambaseStatus?.usage.yearMonth || '—'}</span>
+                                    </div>
+                                    {(() => {
+                                        const usage = jambaseStatus?.usage;
+                                        const count = usage?.count ?? 0;
+                                        const cap = usage?.cap ?? jambaseMonthlyCap;
+                                        const pct = cap > 0 ? Math.min(100, (count / cap) * 100) : 0;
+                                        const stopped = usage?.stopped ?? false;
+                                        const tone = stopped ? 'bg-red-500' : pct >= 95 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-[var(--color-primary)]';
+                                        return (
+                                            <>
+                                                <div className="flex items-baseline justify-between">
+                                                    <span className="text-2xl font-bold text-[var(--color-text-primary)] tabular-nums">{count.toLocaleString()}</span>
+                                                    <span className="text-sm text-[var(--color-text-muted)] tabular-nums">/ {cap.toLocaleString()}</span>
+                                                </div>
+                                                <div className="h-2 w-full rounded-full bg-[var(--color-bg)] overflow-hidden">
+                                                    <div className={`h-full ${tone} transition-all duration-300`} style={{ width: `${pct}%` }} />
+                                                </div>
+                                                {pct >= 80 && !stopped && (
+                                                    <div className="flex items-start gap-2 mt-1 text-xs text-amber-700 dark:text-amber-300">
+                                                        <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                                                        <span>{Math.round(pct)}% of monthly budget used. Calls will be {jambaseHardStop ? 'paused' : 'billed'} when limit is reached.</span>
+                                                    </div>
+                                                )}
+                                                {stopped && (
+                                                    <div className="flex items-start gap-2 mt-1 text-xs text-red-700 dark:text-red-300">
+                                                        <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                                                        <span>Monthly cap reached. New API calls are paused; users are served from cache. Resets on the 1st of next month.</span>
+                                                    </div>
+                                                )}
+                                            </>
+                                        );
+                                    })()}
+                                </div>
+
+                                {/* Hard stop & cap */}
+                                <div className="flex flex-col gap-3 pt-3 border-t border-[var(--glass-border)]">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div className="flex-1">
+                                            <label className="text-sm font-medium text-[var(--color-text-primary)] block">Hard stop at limit</label>
+                                            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">Pause API calls when the monthly cap is hit (recommended). Disable only if you want to pay for overage.</p>
+                                        </div>
+                                        <button
+                                            onClick={() => setSettings({ jambaseHardStop: !jambaseHardStop })}
+                                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${jambaseHardStop ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}
+                                            aria-label="Toggle hard stop"
+                                        >
+                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${jambaseHardStop ? 'translate-x-6' : 'translate-x-1'}`} />
+                                        </button>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Monthly cap</label>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                value={jambaseMonthlyCap}
+                                                onChange={e => setSettings({ jambaseMonthlyCap: Math.max(1, parseInt(e.target.value, 10) || 0) })}
+                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Max subs / user</label>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={100}
+                                                value={jambaseMaxSubscriptionsPerUser}
+                                                onChange={e => setSettings({ jambaseMaxSubscriptionsPerUser: Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 0)) })}
+                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Cache TTL (days)</label>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={90}
+                                                value={jambaseCacheTtlDays}
+                                                onChange={e => setSettings({ jambaseCacheTtlDays: Math.max(1, Math.min(90, parseInt(e.target.value, 10) || 0)) })}
+                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                            />
+                                        </div>
+                                    </div>
+                                </div>
+                            </>
                         )}
                     </div>
                 </div>
