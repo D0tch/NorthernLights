@@ -59,9 +59,11 @@ export class CastManager {
     private playerController: any = null;
     private state: CastState = 'NO_DEVICES_AVAILABLE';
 
-    // Custom receiver app ID (injected by Express server into index.html)
-    // Empty string = use Default Media Receiver + rawUrl fallback
-    private readonly customAppId: string = (window as any).__CAST_APP_ID || '';
+    // Custom receiver app ID. Prefer runtime server config because HTML injection
+    // is bypassed by service worker navigation caching and Vite dev HTML.
+    private customAppId: string = (window as any).__CAST_APP_ID || '';
+    private runtimeConfigPromise: Promise<void> | null = null;
+    private initializePromise: Promise<void> | null = null;
 
     // Tracks whether this manager initiated the cast session (vs joining an existing one)
     private autoCastInProgress = false;
@@ -138,10 +140,50 @@ export class CastManager {
 
     private initializeCastApi() {
         if (this.castContext) return;
+        if (!this.initializePromise) {
+            this.initializePromise = this.initializeCastApiInternal().finally(() => {
+                if (!this.castContext) {
+                    this.initializePromise = null;
+                }
+            });
+        }
+    }
+
+    private async ensureRuntimeConfigLoaded() {
+        if (this.customAppId) return;
+        if (!this.runtimeConfigPromise) {
+            this.runtimeConfigPromise = fetch('/api/client-config')
+                .then(async (response) => {
+                    if (!response.ok) {
+                        throw new Error(`client-config ${response.status}`);
+                    }
+                    return response.json() as Promise<{ castReceiverAppId?: string }>;
+                })
+                .then((data) => {
+                    this.customAppId = (data.castReceiverAppId || '').trim();
+                    if (this.customAppId) {
+                        console.log('[Cast] Loaded runtime custom receiver app ID');
+                    } else {
+                        console.warn('[Cast] Runtime client config has no custom receiver app ID; falling back to Default Media Receiver');
+                    }
+                })
+                .catch((error) => {
+                    console.warn('[Cast] Failed to load runtime client config:', error);
+                });
+        }
+        await this.runtimeConfigPromise;
+    }
+
+    private async initializeCastApiInternal() {
+        if (this.castContext) return;
+
+        await this.ensureRuntimeConfigLoaded();
 
         try {
+            const receiverApplicationId = this.customAppId || chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID;
+            console.log(`[Cast] Initializing sender with ${this.customAppId ? 'custom' : 'default'} receiver app ID: ${receiverApplicationId}`);
             cast.framework.CastContext.getInstance().setOptions({
-                receiverApplicationId: this.customAppId || chrome.cast.media.DEFAULT_MEDIA_RECEIVER_APP_ID,
+                receiverApplicationId,
                 autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
             });
 
