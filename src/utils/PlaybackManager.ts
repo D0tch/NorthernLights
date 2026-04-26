@@ -75,13 +75,13 @@ class PlaybackManager {
 
         // Set up CastManager listeners
         castManager.onTimeUpdate = (time) => {
-            if (castManager.isConnected()) {
+            if (castManager.isConnected() && castManager.doesSessionTrackMatchStore()) {
                 this.onTimeUpdateCallback?.(time);
                 this.updateMediaSessionPosition();
             }
         };
         castManager.onDuration = (duration) => {
-            if (castManager.isConnected()) {
+            if (castManager.isConnected() && castManager.doesSessionTrackMatchStore()) {
                 this.onDurationCallback?.(duration);
                 this.updateMediaSessionPosition(true);
             }
@@ -369,6 +369,7 @@ class PlaybackManager {
     public async restoreFromContinuitySnapshot(): Promise<void> {
         const snapshot = readPlaybackContinuitySnapshot();
         if (!isRecentContinuitySnapshot(snapshot) || !snapshot.wasPlaying) return;
+        if (castManager.isConnected() || castManager.hasStoredSession()) return;
 
         const state = usePlayerStore.getState();
         if (!state.authToken || state.playbackState === 'playing') return;

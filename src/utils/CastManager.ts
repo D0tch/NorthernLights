@@ -149,6 +149,19 @@ export class CastManager {
         }
     }
 
+    public hasStoredSession(): boolean {
+        try {
+            return !!window.localStorage.getItem(SESSION_STORAGE_KEY);
+        } catch {
+            return false;
+        }
+    }
+
+    private hasActiveRemoteMediaSession(mediaSession: any | null = this.getMediaSession()): boolean {
+        if (!mediaSession) return false;
+        return !!mediaSession.media || (Array.isArray(mediaSession.items) && mediaSession.items.length > 0);
+    }
+
     private initializeCastApi() {
         if (this.castContext) return;
         if (!this.initializePromise) {
@@ -210,9 +223,15 @@ export class CastManager {
                     this.state = event.castState;
                     this.notifyStateChange();
 
-                    // Auto-cast: when we transition to CONNECTED and have a track playing locally
+                    // Fresh connection with no existing remote media: auto-cast local playback.
+                    // Existing/resumed remote media must win over stale local sender state.
                     if (prevState !== 'CONNECTED' && this.state === 'CONNECTED' && !this.autoCastInProgress) {
-                        this.handleCastConnected();
+                        const mediaSession = this.castContext.getCurrentSession?.()?.getMediaSession?.() || null;
+                        if (this.hasActiveRemoteMediaSession(mediaSession)) {
+                            void this.hydrateSenderFromRemoteSession(mediaSession, 'cast-connected');
+                        } else {
+                            this.handleCastConnected();
+                        }
                     }
                 }
             );
@@ -242,6 +261,7 @@ export class CastManager {
                             if (resumedSession) {
                                 const sid = resumedSession.getSessionId();
                                 if (sid) localStorage.setItem(SESSION_STORAGE_KEY, sid);
+                                void this.hydrateSenderFromRemoteSession(resumedSession.getMediaSession?.() || null, 'session-resumed');
                             }
                             break;
 
@@ -487,35 +507,79 @@ export class CastManager {
         return mediaSession.media?.customData?.queueEntryId || null;
     }
 
+    private resolveTrackIndexFromSession(mediaSession: any | null = this.getMediaSession(), playlist = usePlayerStore.getState().playlist): number | null {
+        if (!mediaSession) return null;
+
+        const currentQueueEntryId = this.getCurrentQueueEntryId(mediaSession);
+        if (currentQueueEntryId) {
+            const index = playlist.findIndex((track) => track.queueEntryId === currentQueueEntryId);
+            if (index >= 0) return index;
+        }
+
+        const currentItemIndex = mediaSession.currentItemIndex;
+        if (typeof currentItemIndex === 'number' && currentItemIndex >= 0 && currentItemIndex < playlist.length) {
+            return currentItemIndex;
+        }
+
+        const fallbackIndex = mediaSession.media?.metadata?.index;
+        if (typeof fallbackIndex === 'number' && fallbackIndex >= 0 && fallbackIndex < playlist.length) {
+            return fallbackIndex;
+        }
+
+        return null;
+    }
+
+    public doesSessionTrackMatchStore(): boolean {
+        const state = usePlayerStore.getState();
+        if (state.currentIndex === null) return false;
+        const sessionIndex = this.resolveTrackIndexFromSession(this.getMediaSession(), state.playlist);
+        return sessionIndex === state.currentIndex;
+    }
+
+    private async hydrateSenderFromRemoteSession(mediaSession: any | null = this.getMediaSession(), reason: string = 'remote-session'): Promise<boolean> {
+        if (!mediaSession || !this.hasActiveRemoteMediaSession(mediaSession)) return false;
+
+        // Stop any stale local playback before hydrating sender state from Cast.
+        try {
+            playbackManager.getLocalAudioElement().pause();
+        } catch { /* ignore */ }
+
+        const trackSynced = this.syncCurrentTrackFromSession(mediaSession);
+        const duration =
+            (typeof this.player?.duration === 'number' && isFinite(this.player.duration) && this.player.duration > 0
+                ? this.player.duration
+                : mediaSession.media?.metadata?.duration) || 0;
+        const currentTime =
+            (typeof this.player?.currentTime === 'number' && isFinite(this.player.currentTime) && this.player.currentTime >= 0
+                ? this.player.currentTime
+                : mediaSession.currentTime) || 0;
+
+        if (trackSynced && this.doesSessionTrackMatchStore()) {
+            this.onDuration?.(duration);
+            this.onTimeUpdate?.(currentTime);
+        }
+
+        const playerState = mediaSession.playerState || this.player?.playerState;
+        if (playerState === chrome.cast.media.PlayerState.PLAYING) {
+            this.onPlayStateChange?.(true);
+        } else if (playerState === chrome.cast.media.PlayerState.PAUSED) {
+            this.onPlayStateChange?.(false);
+        }
+
+        console.log(`[Cast] Hydrated sender from remote session (${reason})`);
+        return trackSynced;
+    }
+
     private syncCurrentTrackFromSession(mediaSession: any | null = this.getMediaSession()): boolean {
         if (!mediaSession) return false;
 
         this.syncQueueItemMapFromSession(mediaSession);
 
         const state = usePlayerStore.getState();
-        const currentQueueEntryId = this.getCurrentQueueEntryId(mediaSession);
-        if (currentQueueEntryId) {
-            const index = state.playlist.findIndex((track) => track.queueEntryId === currentQueueEntryId);
-            if (index >= 0) {
-                if (index !== state.currentIndex) {
-                    this.onTrackChange?.(index);
-                }
-                return true;
-            }
-        }
-
-        const currentItemIndex = mediaSession.currentItemIndex;
-        if (typeof currentItemIndex === 'number' && currentItemIndex >= 0 && currentItemIndex < state.playlist.length) {
-            if (currentItemIndex !== state.currentIndex) {
-                this.onTrackChange?.(currentItemIndex);
-            }
-            return true;
-        }
-
-        const fallbackIndex = mediaSession.media?.metadata?.index;
-        if (typeof fallbackIndex === 'number' && fallbackIndex >= 0 && fallbackIndex < state.playlist.length) {
-            if (fallbackIndex !== state.currentIndex) {
-                this.onTrackChange?.(fallbackIndex);
+        const sessionIndex = this.resolveTrackIndexFromSession(mediaSession, state.playlist);
+        if (sessionIndex !== null) {
+            if (sessionIndex !== state.currentIndex) {
+                this.onTrackChange?.(sessionIndex);
             }
             return true;
         }
