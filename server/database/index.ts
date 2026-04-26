@@ -559,6 +559,86 @@ export async function initDB(): Promise<Pool> {
           ALTER TABLE playlists ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT FALSE;
         EXCEPTION WHEN OTHERS THEN null;
         END $$;
+
+        -- ==========================================
+        -- JAMBASE / CONCERTS
+        -- ==========================================
+
+        DO $$
+        BEGIN
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS jambase_id TEXT;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+        CREATE INDEX IF NOT EXISTS artists_jambase_id_idx ON artists(jambase_id);
+
+        CREATE TABLE IF NOT EXISTS user_artist_subscriptions (
+          user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+          artist_id UUID REFERENCES artists(id) ON DELETE CASCADE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, artist_id)
+        );
+        CREATE INDEX IF NOT EXISTS uas_user_id_idx ON user_artist_subscriptions(user_id);
+        CREATE INDEX IF NOT EXISTS uas_artist_id_idx ON user_artist_subscriptions(artist_id);
+
+        -- 'explicit' = user manually subscribed; 'auto' = added by auto-add.
+        -- Distinguishing the two lets us avoid evicting explicit picks during
+        -- auto-refresh and lets the UI show an "auto" badge.
+        DO $$
+        BEGIN
+          ALTER TABLE user_artist_subscriptions ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'explicit';
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+
+        -- When a user removes an auto-added artist, record it here so the
+        -- next auto-add run doesn't immediately re-add the same artist.
+        CREATE TABLE IF NOT EXISTS user_dismissed_auto_artists (
+          user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+          artist_id UUID REFERENCES artists(id) ON DELETE CASCADE,
+          dismissed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (user_id, artist_id)
+        );
+        CREATE INDEX IF NOT EXISTS udaa_user_id_idx ON user_dismissed_auto_artists(user_id);
+
+        CREATE TABLE IF NOT EXISTS concert_events (
+          jambase_event_id TEXT PRIMARY KEY,
+          artist_id UUID REFERENCES artists(id) ON DELETE CASCADE,
+          event_date DATE NOT NULL,
+          event_datetime TIMESTAMPTZ,
+          venue_name TEXT,
+          venue_city TEXT,
+          venue_region TEXT,
+          venue_country TEXT,
+          venue_lat DOUBLE PRECISION,
+          venue_lng DOUBLE PRECISION,
+          ticket_url TEXT,
+          price_min NUMERIC,
+          price_max NUMERIC,
+          price_currency TEXT,
+          status TEXT,
+          raw_json JSONB,
+          fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS concert_events_artist_id_idx ON concert_events(artist_id);
+        CREATE INDEX IF NOT EXISTS concert_events_event_date_idx ON concert_events(event_date);
+        CREATE INDEX IF NOT EXISTS concert_events_artist_date_idx ON concert_events(artist_id, event_date);
+
+        -- Per-artist fetch marker so we know "we checked, nothing here" vs "never checked".
+        -- Without this, an artist with zero upcoming shows would be re-fetched on every visit.
+        CREATE TABLE IF NOT EXISTS artist_concerts_cache (
+          artist_id UUID PRIMARY KEY REFERENCES artists(id) ON DELETE CASCADE,
+          jambase_id TEXT,
+          events_count INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        -- Monthly API counter. One row per calendar month (e.g. '2026-04').
+        -- Lazy reset: first call of a new month inserts a fresh row.
+        CREATE TABLE IF NOT EXISTS concerts_api_usage (
+          year_month TEXT PRIMARY KEY,
+          count INTEGER NOT NULL DEFAULT 0,
+          last_call_at TIMESTAMPTZ
+        );
       `);
 
       client.release();
@@ -1970,4 +2050,302 @@ export async function setUserSetting(userId: string, key: string, value: any) {
 export async function deleteUserSettings(userId: string) {
   const db = await initDB();
   await db.query('DELETE FROM user_settings WHERE user_id = $1', [userId]);
+}
+
+// ==========================================
+// CONCERTS / JAMBASE
+// ==========================================
+
+export type ConcertEventRow = {
+  jambase_event_id: string;
+  artist_id: string;
+  event_date: string;
+  event_datetime: string | null;
+  venue_name: string | null;
+  venue_city: string | null;
+  venue_region: string | null;
+  venue_country: string | null;
+  venue_lat: number | null;
+  venue_lng: number | null;
+  ticket_url: string | null;
+  price_min: number | null;
+  price_max: number | null;
+  price_currency: string | null;
+  status: string | null;
+  raw_json: any;
+  fetched_at: string;
+};
+
+export async function getArtistSubscriptions(userId: string) {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT a.id, a.name, a.image_url, a.mbid, a.jambase_id, uas.created_at
+    FROM user_artist_subscriptions uas
+    JOIN artists a ON a.id = uas.artist_id
+    WHERE uas.user_id = $1
+    ORDER BY a.name ASC
+  `, [userId]);
+  return res.rows;
+}
+
+export async function countArtistSubscriptions(userId: string): Promise<number> {
+  const db = await initDB();
+  const res = await db.query('SELECT COUNT(*)::int AS c FROM user_artist_subscriptions WHERE user_id = $1', [userId]);
+  return (res.rows[0] as any)?.c ?? 0;
+}
+
+export async function isSubscribedToArtist(userId: string, artistId: string): Promise<boolean> {
+  const db = await initDB();
+  const res = await db.query(
+    'SELECT 1 FROM user_artist_subscriptions WHERE user_id = $1 AND artist_id = $2 LIMIT 1',
+    [userId, artistId]
+  );
+  return res.rows.length > 0;
+}
+
+export async function addArtistSubscription(userId: string, artistId: string) {
+  const db = await initDB();
+  await db.query(`
+    INSERT INTO user_artist_subscriptions (user_id, artist_id)
+    VALUES ($1, $2)
+    ON CONFLICT (user_id, artist_id) DO NOTHING
+  `, [userId, artistId]);
+}
+
+export async function removeArtistSubscription(userId: string, artistId: string) {
+  const db = await initDB();
+  await db.query(
+    'DELETE FROM user_artist_subscriptions WHERE user_id = $1 AND artist_id = $2',
+    [userId, artistId]
+  );
+}
+
+export async function setArtistJambaseId(artistId: string, jambaseId: string | null) {
+  const db = await initDB();
+  await db.query('UPDATE artists SET jambase_id = $1 WHERE id = $2', [jambaseId, artistId]);
+}
+
+// Library-only artist search — used by the LiveMusicTab subscription picker.
+// Returns artists that have at least one track in the library, ranked by user
+// play count (top played first), then alphabetically.
+export async function searchLibraryArtists(userId: string, query: string, limit: number = 20) {
+  const db = await initDB();
+  const q = `%${query.trim().toLowerCase()}%`;
+  const res = await db.query(`
+    SELECT a.id, a.name, a.image_url, a.mbid,
+           COALESCE(SUM(ups.play_count), 0)::int AS user_plays
+    FROM artists a
+    JOIN tracks t ON t.artist_id = a.id
+    LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
+    WHERE LOWER(a.name) LIKE $2
+    GROUP BY a.id, a.name, a.image_url, a.mbid
+    ORDER BY user_plays DESC, a.name ASC
+    LIMIT $3
+  `, [userId, q, limit]);
+  return res.rows;
+}
+
+// Top played artists in this user's library — used to seed the subscription picker
+// with one-click suggestions before the user types anything.
+export async function getUserTopArtists(userId: string, limit: number = 10) {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT a.id, a.name, a.image_url, a.mbid,
+           SUM(ups.play_count)::int AS user_plays,
+           MAX(ups.last_played_at) AS last_played_at
+    FROM user_playback_stats ups
+    JOIN tracks t ON t.id = ups.track_id
+    JOIN artists a ON a.id = t.artist_id
+    WHERE ups.user_id = $1
+    GROUP BY a.id, a.name, a.image_url, a.mbid
+    ORDER BY user_plays DESC
+    LIMIT $2
+  `, [userId, limit]);
+  return res.rows;
+}
+
+// Cache marker for "we fetched this artist's events at time X, got N results".
+// Distinct from concert_events because an artist with zero shows would have no
+// events row, leaving us no way to tell "never fetched" from "checked, empty".
+export async function getArtistConcertsCache(artistId: string) {
+  const db = await initDB();
+  const res = await db.query(
+    'SELECT artist_id, jambase_id, events_count, last_error, fetched_at FROM artist_concerts_cache WHERE artist_id = $1',
+    [artistId]
+  );
+  return res.rows[0] || null;
+}
+
+export async function upsertArtistConcertsCache(artistId: string, opts: { jambaseId?: string | null; eventsCount?: number; lastError?: string | null }) {
+  const db = await initDB();
+  await db.query(`
+    INSERT INTO artist_concerts_cache (artist_id, jambase_id, events_count, last_error, fetched_at)
+    VALUES ($1, $2, $3, $4, NOW())
+    ON CONFLICT (artist_id) DO UPDATE SET
+      jambase_id = COALESCE(EXCLUDED.jambase_id, artist_concerts_cache.jambase_id),
+      events_count = EXCLUDED.events_count,
+      last_error = EXCLUDED.last_error,
+      fetched_at = NOW()
+  `, [artistId, opts.jambaseId ?? null, opts.eventsCount ?? 0, opts.lastError ?? null]);
+}
+
+// Replace this artist's cached events. Done in a transaction so a partial
+// failure can't leave the cache in a half-rebuilt state.
+export async function replaceArtistEvents(artistId: string, events: Omit<ConcertEventRow, 'fetched_at'>[]) {
+  const db = await initDB();
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM concert_events WHERE artist_id = $1', [artistId]);
+    for (const e of events) {
+      await client.query(`
+        INSERT INTO concert_events (
+          jambase_event_id, artist_id, event_date, event_datetime,
+          venue_name, venue_city, venue_region, venue_country,
+          venue_lat, venue_lng, ticket_url,
+          price_min, price_max, price_currency, status, raw_json
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+        ON CONFLICT (jambase_event_id) DO UPDATE SET
+          event_date = EXCLUDED.event_date,
+          event_datetime = EXCLUDED.event_datetime,
+          venue_name = EXCLUDED.venue_name,
+          venue_city = EXCLUDED.venue_city,
+          venue_region = EXCLUDED.venue_region,
+          venue_country = EXCLUDED.venue_country,
+          venue_lat = EXCLUDED.venue_lat,
+          venue_lng = EXCLUDED.venue_lng,
+          ticket_url = EXCLUDED.ticket_url,
+          price_min = EXCLUDED.price_min,
+          price_max = EXCLUDED.price_max,
+          price_currency = EXCLUDED.price_currency,
+          status = EXCLUDED.status,
+          raw_json = EXCLUDED.raw_json,
+          fetched_at = NOW()
+      `, [
+        e.jambase_event_id, e.artist_id, e.event_date, e.event_datetime,
+        e.venue_name, e.venue_city, e.venue_region, e.venue_country,
+        e.venue_lat, e.venue_lng, e.ticket_url,
+        e.price_min, e.price_max, e.price_currency, e.status,
+        e.raw_json ? JSON.stringify(e.raw_json) : null,
+      ]);
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Upcoming events for an artist, soonest first, future-dated only.
+export async function getUpcomingEventsForArtist(artistId: string, limit: number = 50) {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT * FROM concert_events
+    WHERE artist_id = $1 AND event_date >= CURRENT_DATE
+    ORDER BY event_date ASC
+    LIMIT $2
+  `, [artistId, limit]);
+  return res.rows as ConcertEventRow[];
+}
+
+// Hub feed: every upcoming event for any artist this user is subscribed to,
+// optionally constrained by a bounding box derived from the user's location +
+// radius. The radius filter is done in SQL to avoid hauling thousands of rows.
+export async function getHubEventsForUser(
+  userId: string,
+  opts: { lat?: number | null; lng?: number | null; radiusKm?: number | null; limit?: number } = {}
+) {
+  const db = await initDB();
+  const limit = opts.limit ?? 30;
+  const params: any[] = [userId];
+  let geoFilter = '';
+  if (
+    typeof opts.lat === 'number' && Number.isFinite(opts.lat) &&
+    typeof opts.lng === 'number' && Number.isFinite(opts.lng) &&
+    typeof opts.radiusKm === 'number' && opts.radiusKm > 0
+  ) {
+    // Cheap bounding-box prefilter, then haversine for the precise distance
+    // sort. Avoids PostGIS as a dependency.
+    const lat = opts.lat;
+    const lng = opts.lng;
+    const radius = opts.radiusKm;
+    const latDelta = radius / 111; // ~111 km per degree latitude
+    const lngDelta = radius / (Math.cos((lat * Math.PI) / 180) * 111 || 1);
+    params.push(lat - latDelta, lat + latDelta, lng - lngDelta, lng + lngDelta);
+    params.push(lat, lng, radius);
+    geoFilter = `
+      AND ce.venue_lat BETWEEN $2 AND $3
+      AND ce.venue_lng BETWEEN $4 AND $5
+      AND (
+        6371 * 2 * ASIN(SQRT(
+          POWER(SIN(RADIANS(ce.venue_lat - $6) / 2), 2) +
+          COS(RADIANS($6)) * COS(RADIANS(ce.venue_lat)) *
+          POWER(SIN(RADIANS(ce.venue_lng - $7) / 2), 2)
+        ))
+      ) <= $8
+    `;
+  }
+  params.push(limit);
+  const limitParam = `$${params.length}`;
+  const res = await db.query(`
+    SELECT ce.*, a.name AS artist_name, a.image_url AS artist_image_url
+    FROM concert_events ce
+    JOIN user_artist_subscriptions uas ON uas.artist_id = ce.artist_id
+    JOIN artists a ON a.id = ce.artist_id
+    WHERE uas.user_id = $1
+      AND ce.event_date >= CURRENT_DATE
+      ${geoFilter}
+    ORDER BY ce.event_date ASC
+    LIMIT ${limitParam}
+  `, params);
+  return res.rows;
+}
+
+// Atomic monthly counter. Returns the new count if the call is allowed, or
+// null if the hard cap is reached. Single statement, so concurrent callers
+// can't overshoot the cap by more than the number of in-flight increments
+// that lost the WHERE-clause race.
+export async function incrementConcertsApiUsage(opts: { cap?: number | null } = {}): Promise<number | null> {
+  const db = await initDB();
+  const yearMonth = new Date().toISOString().slice(0, 7); // 'YYYY-MM'
+  const cap = typeof opts.cap === 'number' && opts.cap > 0 ? opts.cap : null;
+
+  // First, ensure the row exists for this month.
+  await db.query(`
+    INSERT INTO concerts_api_usage (year_month, count, last_call_at)
+    VALUES ($1, 0, NULL)
+    ON CONFLICT (year_month) DO NOTHING
+  `, [yearMonth]);
+
+  // Then, conditionally increment with a cap check inside the same statement.
+  if (cap !== null) {
+    const res = await db.query(`
+      UPDATE concerts_api_usage
+      SET count = count + 1, last_call_at = NOW()
+      WHERE year_month = $1 AND count < $2
+      RETURNING count
+    `, [yearMonth, cap]);
+    if (res.rows.length === 0) return null;
+    return (res.rows[0] as any).count as number;
+  } else {
+    const res = await db.query(`
+      UPDATE concerts_api_usage
+      SET count = count + 1, last_call_at = NOW()
+      WHERE year_month = $1
+      RETURNING count
+    `, [yearMonth]);
+    return (res.rows[0] as any).count as number;
+  }
+}
+
+export async function getConcertsApiUsage(yearMonth?: string) {
+  const db = await initDB();
+  const ym = yearMonth || new Date().toISOString().slice(0, 7);
+  const res = await db.query(
+    'SELECT year_month, count, last_call_at FROM concerts_api_usage WHERE year_month = $1',
+    [ym]
+  );
+  return res.rows[0] || { year_month: ym, count: 0, last_call_at: null };
 }
