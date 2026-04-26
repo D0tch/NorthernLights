@@ -12,14 +12,14 @@ router.get('/settings', async (req, res) => {
     const userId = req.user?.userId;
 
     // System-level (server-wide) settings
-    const serverKeys = ['audioAnalysisCpu', 'scannerConcurrency', 'hubGenerationSchedule', 'llmBaseUrl', 'llmApiKey', 'llmModelName', 'genreMatrixLastRun', 'genreMatrixLastResult', 'genreMatrixProgress', 'geniusApiKey', 'lastFmApiKey', 'lastFmSharedSecret', 'musicBrainzEnabled', 'musicBrainzClientId', 'musicBrainzClientSecret', 'musicBrainzConnected', 'musicBrainzRedirectUri', 'providerArtistImage', 'providerArtistBio', 'providerAlbumArt', 'autoFolderWalk', 'mbdbLastImport'];
+    const serverKeys = ['audioAnalysisCpu', 'scannerConcurrency', 'hubGenerationSchedule', 'llmBaseUrl', 'llmApiKey', 'llmModelName', 'genreMatrixLastRun', 'genreMatrixLastResult', 'genreMatrixProgress', 'geniusApiKey', 'lastFmApiKey', 'lastFmSharedSecret', 'musicBrainzEnabled', 'musicBrainzClientId', 'musicBrainzClientSecret', 'musicBrainzConnected', 'musicBrainzRedirectUri', 'providerArtistImage', 'providerArtistBio', 'providerAlbumArt', 'autoFolderWalk', 'mbdbLastImport', 'jambaseEnabled', 'jambaseMaxSubscriptionsPerUser', 'jambaseCacheTtlDays', 'jambaseMonthlyCap', 'jambaseHardStop'];
     const settings: Record<string, any> = {};
     for (const k of serverKeys) {
       settings[k] = await getSystemSetting(k);
     }
 
     // User-level settings (includes Last.fm which is per-user)
-    const allUserKeys = ['discoveryLevel', 'genreStrictness', 'artistAmnesiaLimit', 'llmPlaylistDiversity', 'llmVetoMode', 'llmGenreCohesion', 'llmDiscoveryBias', 'llmArtistSpread', 'genrePenaltyCurve', 'llmRecoveryStrength', 'llmAdjacentReach', 'llmTracksPerPlaylist', 'llmPlaylistCount', 'lastFmScrobbleEnabled', 'lastFmConnected', 'lastFmUsername', 'listenBrainzScrobbleEnabled', 'listenBrainzConnected', 'listenBrainzUsername'];
+    const allUserKeys = ['discoveryLevel', 'genreStrictness', 'artistAmnesiaLimit', 'llmPlaylistDiversity', 'llmVetoMode', 'llmGenreCohesion', 'llmDiscoveryBias', 'llmArtistSpread', 'genrePenaltyCurve', 'llmRecoveryStrength', 'llmAdjacentReach', 'llmTracksPerPlaylist', 'llmPlaylistCount', 'lastFmScrobbleEnabled', 'lastFmConnected', 'lastFmUsername', 'listenBrainzScrobbleEnabled', 'listenBrainzConnected', 'listenBrainzUsername', 'concertsEnabled', 'concertsLat', 'concertsLng', 'concertsLocationLabel', 'concertsRadiusKm'];
     const userOnlyKeys = ['lastFmConnected', 'lastFmUsername', 'lastFmScrobbleEnabled', 'listenBrainzConnected', 'listenBrainzUsername', 'listenBrainzScrobbleEnabled'];
     if (userId) {
       for (const k of allUserKeys) {
@@ -59,8 +59,8 @@ router.post('/settings', async (req, res) => {
     const userId = req.user?.userId;
     const settings = req.body;
 
-    const userKeys = new Set(['discoveryLevel', 'genreStrictness', 'artistAmnesiaLimit', 'llmPlaylistDiversity', 'llmVetoMode', 'llmGenreCohesion', 'llmDiscoveryBias', 'llmArtistSpread', 'genrePenaltyCurve', 'llmRecoveryStrength', 'llmAdjacentReach', 'llmTracksPerPlaylist', 'llmPlaylistCount', 'lastFmScrobbleEnabled', 'listenBrainzScrobbleEnabled']);
-    const serverKeys = new Set(['llmBaseUrl', 'llmApiKey', 'llmModelName', 'hubGenerationSchedule', 'audioAnalysisCpu', 'scannerConcurrency', 'geniusApiKey', 'lastFmApiKey', 'lastFmSharedSecret', 'musicBrainzEnabled', 'musicBrainzClientId', 'musicBrainzClientSecret', 'musicBrainzRedirectUri', 'providerArtistImage', 'providerArtistBio', 'providerAlbumArt', 'autoFolderWalk']);
+    const userKeys = new Set(['discoveryLevel', 'genreStrictness', 'artistAmnesiaLimit', 'llmPlaylistDiversity', 'llmVetoMode', 'llmGenreCohesion', 'llmDiscoveryBias', 'llmArtistSpread', 'genrePenaltyCurve', 'llmRecoveryStrength', 'llmAdjacentReach', 'llmTracksPerPlaylist', 'llmPlaylistCount', 'lastFmScrobbleEnabled', 'listenBrainzScrobbleEnabled', 'concertsEnabled', 'concertsLat', 'concertsLng', 'concertsLocationLabel', 'concertsRadiusKm']);
+    const serverKeys = new Set(['llmBaseUrl', 'llmApiKey', 'llmModelName', 'hubGenerationSchedule', 'audioAnalysisCpu', 'scannerConcurrency', 'geniusApiKey', 'lastFmApiKey', 'lastFmSharedSecret', 'musicBrainzEnabled', 'musicBrainzClientId', 'musicBrainzClientSecret', 'musicBrainzRedirectUri', 'providerArtistImage', 'providerArtistBio', 'providerAlbumArt', 'autoFolderWalk', 'jambaseEnabled', 'jambaseMaxSubscriptionsPerUser', 'jambaseCacheTtlDays', 'jambaseMonthlyCap', 'jambaseHardStop']);
     // Keys that are written by OAuth2/connect flows server-side, not exposed to frontend
     const protectedKeys = new Set(['musicBrainzAccessToken', 'musicBrainzRefreshToken', 'musicBrainzTokenExpiresAt', 'musicBrainzConnected', 'musicBrainzUsername', 'lastFmSessionKey', 'lastFmUsername', 'lastFmConnected', 'listenBrainzUserToken', 'listenBrainzUsername', 'listenBrainzConnected']);
 

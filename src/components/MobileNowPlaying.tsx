@@ -1,6 +1,6 @@
 import { usePlayerStore } from '../store/index';
 import { useState, useEffect } from 'react';
-import { X, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Repeat1, Infinity as InfinityIcon, ListMusic, Cast, FileText } from 'lucide-react';
+import { X, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Repeat1, Infinity as InfinityIcon, ListMusic, Cast, FileText, Speaker } from 'lucide-react';
 import ProgressBar from './ProgressBar';
 import { useSwipe } from '../hooks/useSwipe';
 import { castManager } from '../utils/CastManager';
@@ -27,6 +27,11 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
   const isInfinityMode = usePlayerStore((s) => s.isInfinityMode);
   const toggleInfinityMode = usePlayerStore((s) => s.toggleInfinityMode);
   const setIsSidebarOpen = usePlayerStore((s) => s.setIsSidebarOpen);
+  const audioOutputSupported = usePlayerStore((s) => s.audioOutputSupported);
+  const audioOutputActive = usePlayerStore((s) => s.audioOutputActive);
+  const audioOutputDeviceLabel = usePlayerStore((s) => s.audioOutputDeviceLabel);
+  const audioOutputSelecting = usePlayerStore((s) => s.audioOutputSelecting);
+  const selectAudioOutput = usePlayerStore((s) => s.selectAudioOutput);
 
   const [castConnected, setCastConnected] = useState(castManager.isConnected());
   const [castDeviceName, setCastDeviceName] = useState('');
@@ -131,6 +136,14 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
               </span>
             </div>
           )}
+          {!castConnected && audioOutputActive && (
+            <div className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-full bg-[var(--color-primary)]/10 border border-[var(--color-primary)]/20 max-w-full">
+              <Speaker size={14} className="text-[var(--color-primary)]" style={{ filter: 'drop-shadow(0 0 3px var(--color-primary))' }} />
+              <span className="text-xs text-[var(--color-primary)] font-medium truncate">
+                Playing on {audioOutputDeviceLabel || 'selected output'}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Progress Bar */}
@@ -195,7 +208,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
         </div>
 
         {/* Secondary controls row */}
-        <div className="flex items-center justify-center gap-8 mt-6">
+        <div className="flex items-center justify-center gap-4 mt-6">
           <button
             onClick={() => { setIsSidebarOpen(true); }}
             aria-label="Open play queue"
@@ -230,6 +243,22 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
             <InfinityIcon size={16} />
             Infinity
           </button>
+
+          {audioOutputSupported && (
+            <button
+              onClick={() => { void selectAudioOutput(); }}
+              disabled={castConnected || audioOutputSelecting}
+              aria-label={audioOutputActive ? `Playing on ${audioOutputDeviceLabel || 'selected output'}` : 'Choose audio output'}
+              className="w-10 h-10 flex items-center justify-center rounded-full active:scale-90 transition-ui disabled:opacity-40"
+              style={{
+                color: audioOutputActive ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                filter: audioOutputActive ? 'drop-shadow(0 0 4px var(--color-primary))' : 'none',
+              }}
+              title={audioOutputActive ? `Playing on ${audioOutputDeviceLabel || 'selected output'}` : 'Choose audio output'}
+            >
+              <Speaker size={22} />
+            </button>
+          )}
 
           <button
             onClick={() => castConnected ? castManager.disconnect() : castManager.requestSession()}

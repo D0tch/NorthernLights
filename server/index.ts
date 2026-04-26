@@ -32,6 +32,7 @@ import albumsRoutes from './routes/albums.routes';
 import genresRoutes from './routes/genres.routes';
 import mediaRoutes from './routes/media.routes';
 import providersRoutes from './routes/providers.routes';
+import concertsRoutes from './routes/concerts.routes';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -160,6 +161,9 @@ app.use('/api', mediaRoutes);
 
 // Providers (Genius proxy)
 app.use('/api', providersRoutes);
+
+// Concerts / Jambase
+app.use('/api', concertsRoutes);
 
 // Recommend (Infinity Mode next track)
 app.post('/api/recommend', async (req, res) => {

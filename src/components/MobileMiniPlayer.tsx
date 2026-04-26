@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { usePlayerStore } from '../store/index';
-import { Play, Pause, SkipForward, Cast } from 'lucide-react';
+import { Play, Pause, SkipForward, Cast, Speaker } from 'lucide-react';
 import { useSwipe } from '../hooks/useSwipe';
 import MobileNowPlaying from './MobileNowPlaying';
 
@@ -14,6 +14,11 @@ const MobileMiniPlayer = () => {
   const nextTrack = usePlayerStore((s) => s.nextTrack);
   const prevTrack = usePlayerStore((s) => s.prevTrack);
   const castConnected = usePlayerStore((s) => s.castConnected);
+  const audioOutputSupported = usePlayerStore((s) => s.audioOutputSupported);
+  const audioOutputActive = usePlayerStore((s) => s.audioOutputActive);
+  const audioOutputDeviceLabel = usePlayerStore((s) => s.audioOutputDeviceLabel);
+  const audioOutputSelecting = usePlayerStore((s) => s.audioOutputSelecting);
+  const selectAudioOutput = usePlayerStore((s) => s.selectAudioOutput);
 
   const currentTrack = currentIndex !== null ? playlist[currentIndex] : null;
   const isPlaying = playbackState === 'playing';
@@ -32,6 +37,11 @@ const MobileMiniPlayer = () => {
   const handleNext = (e: React.MouseEvent) => {
     e.stopPropagation();
     nextTrack();
+  };
+
+  const handleAudioOutput = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    void selectAudioOutput();
   };
 
   const flashSwipe = (dir: 'left' | 'right') => {
@@ -93,6 +103,21 @@ const MobileMiniPlayer = () => {
               </span>
               {castConnected && (
                 <Cast size={14} className="flex-shrink-0 text-[var(--color-primary)]" style={{ filter: 'drop-shadow(0 0 3px var(--color-primary))' }} />
+              )}
+              {!castConnected && audioOutputSupported && (
+                <button
+                  onClick={handleAudioOutput}
+                  disabled={audioOutputSelecting}
+                  className="flex-shrink-0 transition-colors disabled:opacity-50"
+                  style={{
+                    color: audioOutputActive ? 'var(--color-primary)' : 'var(--color-text-muted)',
+                    filter: audioOutputActive ? 'drop-shadow(0 0 3px var(--color-primary))' : 'none',
+                  }}
+                  title={audioOutputActive ? `Playing on ${audioOutputDeviceLabel || 'selected output'}` : 'Choose audio output'}
+                  aria-label={audioOutputActive ? `Playing on ${audioOutputDeviceLabel || 'selected output'}` : 'Choose audio output'}
+                >
+                  <Speaker size={14} />
+                </button>
               )}
             </div>
             <div className="text-xs text-[var(--color-text-muted)] truncate leading-tight mt-0.5">

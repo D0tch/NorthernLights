@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { usePlayerStore } from '../store/index';
-import { Globe, User, Palette, Folder, Play, Cpu, LogOut, Search, X, Users, Database, Brain } from 'lucide-react';
+import { Globe, User, Palette, Folder, Play, Cpu, LogOut, Search, X, Users, Database, Brain, Ticket } from 'lucide-react';
 
 interface SettingsModalProps {
     onClose: () => void;
@@ -16,6 +16,7 @@ const GenAiTab = React.lazy(() => import('./settings/GenAiTab').then(module => (
 const GenreMatrixTab = React.lazy(() => import('./settings/GenreMatrixTab').then(module => ({ default: module.GenreMatrixTab })));
 const DatabaseTab = React.lazy(() => import('./settings/DatabaseTab').then(module => ({ default: module.DatabaseTab })));
 const MetadataTab = React.lazy(() => import('./settings/MetadataTab').then(module => ({ default: module.MetadataTab })));
+const LiveMusicTab = React.lazy(() => import('./settings/LiveMusicTab').then(module => ({ default: module.LiveMusicTab })));
 const AdminDashboard = React.lazy(() => import('./settings/AdminDashboard').then(module => ({ default: module.AdminDashboard })));
 
 const SettingsTabFallback: React.FC = () => (
@@ -63,6 +64,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
 
     const tabs = [
         { id: 'My Account', label: 'My Account', category: 'User Settings' },
+        { id: 'Live Music', label: 'Live Music', category: 'User Settings' },
         { id: 'Appearance', label: 'Appearance', category: 'App Settings' },
         ...(isAdmin ? [
             { id: 'Library', label: 'Library', category: 'App Settings' },
@@ -85,7 +87,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         // Also search within common setting labels for this tab
         if (tab.id === 'Appearance') return 'light dark theme'.includes(query);
         if (tab.id === 'Library') return 'folder path scan library stats analysis'.includes(query);
-        if (tab.id === 'Metadata') return 'genius musicbrainz lastfm provider album bio image api mapping keys'.includes(query);
+        if (tab.id === 'Metadata') return 'genius musicbrainz lastfm jambase provider album bio image api mapping keys concerts tour live'.includes(query);
+        if (tab.id === 'Live Music') return 'concerts tour live tickets jambase events location subscribe artists'.includes(query);
         if (tab.id === 'Playback') return 'infinity discovery genre artist amnesia matrix llm playlist diversity blend tracks wander'.includes(query);
         if (tab.id === 'System') return 'cpu audio analysis hub schedule auto-start'.includes(query);
         if (tab.id === 'GenAI') return 'llm api host model key'.includes(query);
@@ -119,7 +122,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                     <div className="w-full bg-[var(--color-surface)] border-b border-[var(--glass-border)] pt-[env(safe-area-inset-top)] z-10 shrink-0">
                         <div className="flex items-center gap-2 overflow-x-auto hide-scrollbar px-3 pt-4 pb-3">
                             {filteredTabs.map(tab => {
-                                const Icon = tab.id === 'My Account' ? User : 
+                                const Icon = tab.id === 'My Account' ? User :
+                                    tab.id === 'Live Music' ? Ticket :
                                     tab.id === 'Appearance' ? Palette :
                                     tab.id === 'Library' ? Folder :
                                     tab.id === 'Metadata' ? Globe :
@@ -188,7 +192,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                                         <h4 className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider pl-3 mb-2">{group}</h4>
                                         <div className="flex flex-col gap-0.5">
                                             {groupTabs.map(tab => {
-                                                const Icon = tab.id === 'My Account' ? User : 
+                                                const Icon = tab.id === 'My Account' ? User :
+                                                            tab.id === 'Live Music' ? Ticket :
                                                             tab.id === 'Appearance' ? Palette :
                                                             tab.id === 'Library' ? Folder :
                                                             tab.id === 'Metadata' ? Globe :
@@ -247,6 +252,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                         <div className="max-w-2xl mx-auto w-full relative z-10">
                             <React.Suspense fallback={<SettingsTabFallback />}>
                                 {activeTab === 'My Account' && <AccountTab onClose={handleClose} />}
+                                {activeTab === 'Live Music' && <LiveMusicTab />}
                                 {activeTab === 'Appearance' && <AppearanceTab />}
                                 {isAdmin && activeTab === 'Library' && <LibraryTab />}
                                 {isAdmin && activeTab === 'Metadata' && <MetadataTab />}
