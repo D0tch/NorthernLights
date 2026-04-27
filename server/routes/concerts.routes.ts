@@ -14,6 +14,10 @@ import {
   getHubEventsForUser,
   getArtistConcertsCache,
   getUserSetting,
+  dismissAutoArtist,
+  undismissAutoArtist,
+  getDismissedAutoArtists,
+  getAutoAddCandidates,
 } from '../database';
 import {
   isJambaseEnabled,
@@ -25,6 +29,29 @@ import {
 } from '../services/jambase.service';
 
 const router = Router();
+
+// Fill the user's empty subscription slots with their top-played artists.
+// No-op if auto-add is disabled, or if all slots are already filled.
+// Newly added subscriptions kick off a background cache warm-up so the Hub
+// card has data ready next time the user opens it.
+async function runAutoAddForUser(userId: string): Promise<{ added: number; skipped: string }> {
+  const enabled = await getUserSetting(userId, 'concertsAutoAddEnabled');
+  if (enabled !== true) return { added: 0, skipped: 'disabled' };
+
+  const max = ((await getSystemSetting('jambaseMaxSubscriptionsPerUser')) as number | null) ?? 10;
+  const current = await countArtistSubscriptions(userId);
+  const slots = max - current;
+  if (slots <= 0) return { added: 0, skipped: 'no-slots' };
+
+  const candidates = await getAutoAddCandidates(userId, slots);
+  let added = 0;
+  for (const c of candidates) {
+    await addArtistSubscription(userId, (c as any).id, 'auto');
+    refreshArtistConcertsIfStale((c as any).id).catch(() => {});
+    added += 1;
+  }
+  return { added, skipped: '' };
+}
 
 // ─── Admin: connection / status / usage ──────────────────────────────
 
@@ -116,7 +143,62 @@ router.delete('/concerts/subscriptions/:artistId', requireAuth, async (req, res)
   try {
     const userId = req.user!.userId;
     const artistId = String(req.params.artistId);
-    await removeArtistSubscription(userId, artistId);
+    const removedSource = await removeArtistSubscription(userId, artistId);
+    // If the row was auto-added, dismiss it so the next auto-add run doesn't
+    // immediately put it back. Explicit removals leave the dismissed list
+    // alone — the user might just want to re-add later.
+    if (removedSource === 'auto') {
+      await dismissAutoArtist(userId, artistId);
+    }
+    // Re-fill the freed slot with the next-best candidate (no-op if disabled).
+    runAutoAddForUser(userId).catch(() => {});
+    res.json({ status: 'ok', dismissedAuto: removedSource === 'auto' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── User: auto-add controls ─────────────────────────────────────────
+
+router.post('/concerts/auto-add/refresh', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const result = await runAutoAddForUser(userId);
+    res.json({ status: 'ok', ...result });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/concerts/auto-add/candidates', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const limit = Math.min(parseInt((req.query.limit as string) || '10', 10) || 10, 30);
+    const candidates = await getAutoAddCandidates(userId, limit);
+    res.json({ candidates });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/concerts/auto-add/dismissed', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const dismissed = await getDismissedAutoArtists(userId);
+    res.json({ dismissed });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/concerts/auto-add/undismiss/:artistId', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user!.userId;
+    const artistId = String(req.params.artistId);
+    await undismissAutoArtist(userId, artistId);
+    // After un-dismissing, re-run auto-add so this artist can re-enter the
+    // candidate pool immediately if a slot is open.
+    runAutoAddForUser(userId).catch(() => {});
     res.json({ status: 'ok' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });

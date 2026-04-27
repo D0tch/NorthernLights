@@ -246,6 +246,7 @@ export interface PlayerState {
   concertsLng: number | null;
   concertsLocationLabel: string;
   concertsRadiusKm: number;
+  concertsAutoAddEnabled: boolean;
 
   isSidebarCollapsed: boolean;
   setIsSidebarCollapsed: (collapsed: boolean) => void;
@@ -671,6 +672,7 @@ export const usePlayerStore = create<PlayerState>()(
         concertsLng: null as number | null,
         concertsLocationLabel: '',
         concertsRadiusKm: 50,
+        concertsAutoAddEnabled: false as boolean,
         authToken: null as string | null,
         streamingQuality: 'auto' as 'auto' | '64k' | '128k' | '160k' | '320k' | 'source',
         playbackDebugLogging: false as boolean,
@@ -887,7 +889,8 @@ export const usePlayerStore = create<PlayerState>()(
                 concertsLat: typeof data.concertsLat === 'number' ? data.concertsLat : null,
                 concertsLng: typeof data.concertsLng === 'number' ? data.concertsLng : null,
                 concertsLocationLabel: data.concertsLocationLabel || '',
-                concertsRadiusKm: typeof data.concertsRadiusKm === 'number' ? data.concertsRadiusKm : 50
+                concertsRadiusKm: typeof data.concertsRadiusKm === 'number' ? data.concertsRadiusKm : 50,
+                concertsAutoAddEnabled: data.concertsAutoAddEnabled ?? false
               });
 
               // Auto-validate LLM connection if credentials exist
@@ -956,7 +959,8 @@ export const usePlayerStore = create<PlayerState>()(
                 concertsLat: state.concertsLat,
                 concertsLng: state.concertsLng,
                 concertsLocationLabel: state.concertsLocationLabel,
-                concertsRadiusKm: state.concertsRadiusKm
+                concertsRadiusKm: state.concertsRadiusKm,
+                concertsAutoAddEnabled: state.concertsAutoAddEnabled
               };
               await fetch('/api/settings', {
                  method: 'POST',

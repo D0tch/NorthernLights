@@ -2076,10 +2076,12 @@ export type ConcertEventRow = {
   fetched_at: string;
 };
 
+export type SubscriptionSource = 'explicit' | 'auto';
+
 export async function getArtistSubscriptions(userId: string) {
   const db = await initDB();
   const res = await db.query(`
-    SELECT a.id, a.name, a.image_url, a.mbid, a.jambase_id, uas.created_at
+    SELECT a.id, a.name, a.image_url, a.mbid, a.jambase_id, uas.created_at, uas.source
     FROM user_artist_subscriptions uas
     JOIN artists a ON a.id = uas.artist_id
     WHERE uas.user_id = $1
@@ -2103,21 +2105,89 @@ export async function isSubscribedToArtist(userId: string, artistId: string): Pr
   return res.rows.length > 0;
 }
 
-export async function addArtistSubscription(userId: string, artistId: string) {
+// If a user explicitly subscribes to an artist that was previously auto-added,
+// promote it to 'explicit' so a later auto-refresh doesn't dislodge it.
+export async function addArtistSubscription(userId: string, artistId: string, source: SubscriptionSource = 'explicit') {
   const db = await initDB();
   await db.query(`
-    INSERT INTO user_artist_subscriptions (user_id, artist_id)
+    INSERT INTO user_artist_subscriptions (user_id, artist_id, source)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (user_id, artist_id) DO UPDATE SET
+      source = CASE
+        WHEN user_artist_subscriptions.source = 'explicit' THEN 'explicit'
+        WHEN EXCLUDED.source = 'explicit' THEN 'explicit'
+        ELSE user_artist_subscriptions.source
+      END
+  `, [userId, artistId, source]);
+}
+
+// Returns the source of the row that was deleted (or null if no row existed),
+// so the caller can decide whether to dismiss for auto-add purposes.
+export async function removeArtistSubscription(userId: string, artistId: string): Promise<SubscriptionSource | null> {
+  const db = await initDB();
+  const res = await db.query(
+    'DELETE FROM user_artist_subscriptions WHERE user_id = $1 AND artist_id = $2 RETURNING source',
+    [userId, artistId]
+  );
+  return res.rows.length > 0 ? ((res.rows[0] as any).source as SubscriptionSource) : null;
+}
+
+// ─── Auto-add: dismissed list ──────────────────────────────────────
+
+export async function dismissAutoArtist(userId: string, artistId: string) {
+  const db = await initDB();
+  await db.query(`
+    INSERT INTO user_dismissed_auto_artists (user_id, artist_id)
     VALUES ($1, $2)
     ON CONFLICT (user_id, artist_id) DO NOTHING
   `, [userId, artistId]);
 }
 
-export async function removeArtistSubscription(userId: string, artistId: string) {
+export async function undismissAutoArtist(userId: string, artistId: string) {
   const db = await initDB();
   await db.query(
-    'DELETE FROM user_artist_subscriptions WHERE user_id = $1 AND artist_id = $2',
+    'DELETE FROM user_dismissed_auto_artists WHERE user_id = $1 AND artist_id = $2',
     [userId, artistId]
   );
+}
+
+export async function getDismissedAutoArtists(userId: string) {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT a.id, a.name, a.image_url, d.dismissed_at
+    FROM user_dismissed_auto_artists d
+    JOIN artists a ON a.id = d.artist_id
+    WHERE d.user_id = $1
+    ORDER BY d.dismissed_at DESC
+  `, [userId]);
+  return res.rows;
+}
+
+// Returns top-played artists for a user that are eligible to be auto-added:
+// not already subscribed and not on the dismissed list. Used by the auto-add
+// orchestrator and (for transparency) by a "what would auto-add do?" preview.
+export async function getAutoAddCandidates(userId: string, limit: number = 20) {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT a.id, a.name, a.image_url, a.mbid,
+           SUM(ups.play_count)::int AS user_plays,
+           MAX(ups.last_played_at) AS last_played_at
+    FROM user_playback_stats ups
+    JOIN tracks t ON t.id = ups.track_id
+    JOIN artists a ON a.id = t.artist_id
+    LEFT JOIN user_artist_subscriptions s
+      ON s.user_id = ups.user_id AND s.artist_id = a.id
+    LEFT JOIN user_dismissed_auto_artists d
+      ON d.user_id = ups.user_id AND d.artist_id = a.id
+    WHERE ups.user_id = $1
+      AND s.artist_id IS NULL
+      AND d.artist_id IS NULL
+    GROUP BY a.id, a.name, a.image_url, a.mbid
+    HAVING SUM(ups.play_count) >= 3
+    ORDER BY user_plays DESC
+    LIMIT $2
+  `, [userId, limit]);
+  return res.rows;
 }
 
 export async function setArtistJambaseId(artistId: string, jambaseId: string | null) {

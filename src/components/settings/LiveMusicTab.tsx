@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useToast } from '../../hooks/useToast';
-import { Ticket, MapPin, Search as SearchIcon, X, Loader2, Headphones, AlertTriangle } from 'lucide-react';
+import { Ticket, MapPin, Search as SearchIcon, X, Loader2, Headphones, AlertTriangle, Sparkles, RotateCw, Undo2 } from 'lucide-react';
 
 type SubscribedArtist = {
     id: string;
@@ -10,6 +10,14 @@ type SubscribedArtist = {
     mbid: string | null;
     jambase_id?: string | null;
     created_at?: string;
+    source?: 'explicit' | 'auto';
+};
+
+type DismissedArtist = {
+    id: string;
+    name: string;
+    image_url: string | null;
+    dismissed_at: string;
 };
 
 type LibraryArtist = {
@@ -26,6 +34,7 @@ export const LiveMusicTab: React.FC = () => {
     const concertsLng = usePlayerStore(s => s.concertsLng);
     const concertsLocationLabel = usePlayerStore(s => s.concertsLocationLabel);
     const concertsRadiusKm = usePlayerStore(s => s.concertsRadiusKm);
+    const concertsAutoAddEnabled = usePlayerStore(s => s.concertsAutoAddEnabled);
     const setSettings = usePlayerStore(s => s.setSettings);
     const getAuthHeader = usePlayerStore(s => s.getAuthHeader);
     const { addToast } = useToast();
@@ -47,14 +56,23 @@ export const LiveMusicTab: React.FC = () => {
     const [subs, setSubs] = useState<SubscribedArtist[]>([]);
     const [maxSubs, setMaxSubs] = useState(10);
     const [subsLoading, setSubsLoading] = useState(true);
+    const [dismissed, setDismissed] = useState<DismissedArtist[]>([]);
+    const [autoRefreshing, setAutoRefreshing] = useState(false);
 
     const loadSubs = useCallback(async () => {
         try {
-            const res = await fetch('/api/concerts/subscriptions', { headers: getAuthHeader() });
-            if (res.ok) {
-                const data = await res.json();
+            const [subsRes, dismissedRes] = await Promise.all([
+                fetch('/api/concerts/subscriptions', { headers: getAuthHeader() }),
+                fetch('/api/concerts/auto-add/dismissed', { headers: getAuthHeader() }),
+            ]);
+            if (subsRes.ok) {
+                const data = await subsRes.json();
                 setSubs(data.subscriptions || []);
                 setMaxSubs(data.max ?? 10);
+            }
+            if (dismissedRes.ok) {
+                const data = await dismissedRes.json();
+                setDismissed(data.dismissed || []);
             }
         } catch {}
         finally {
@@ -63,6 +81,44 @@ export const LiveMusicTab: React.FC = () => {
     }, [getAuthHeader]);
 
     useEffect(() => { loadSubs(); }, [loadSubs]);
+
+    const refreshAutoAdd = useCallback(async (silent = false) => {
+        setAutoRefreshing(true);
+        try {
+            const res = await fetch('/api/concerts/auto-add/refresh', { method: 'POST', headers: getAuthHeader() });
+            if (res.ok) {
+                const data = await res.json();
+                if (!silent) {
+                    if (data.added > 0) addToast(`Added ${data.added} top-played artist${data.added === 1 ? '' : 's'}`, 'success');
+                    else if (data.skipped === 'no-slots') addToast('All subscription slots are full', 'info');
+                    else if (data.skipped === 'disabled') addToast('Auto-add is disabled', 'info');
+                    else addToast('No new candidates to add', 'info');
+                }
+                loadSubs();
+            }
+        } catch (e: any) {
+            if (!silent) addToast(e?.message || 'Failed to refresh', 'error');
+        } finally {
+            setAutoRefreshing(false);
+        }
+    }, [getAuthHeader, addToast, loadSubs]);
+
+    const undismiss = async (artistId: string) => {
+        try {
+            const res = await fetch(`/api/concerts/auto-add/undismiss/${artistId}`, { method: 'POST', headers: getAuthHeader() });
+            if (res.ok) loadSubs();
+        } catch {}
+    };
+
+    const toggleAutoAdd = async () => {
+        const next = !concertsAutoAddEnabled;
+        setSettings({ concertsAutoAddEnabled: next });
+        await persist({ concertsAutoAddEnabled: next });
+        if (next) {
+            // Fire-and-fill — pick up top played artists into the empty slots.
+            refreshAutoAdd(false);
+        }
+    };
 
     const subscribed = useMemo(() => new Set(subs.map(s => s.id)), [subs]);
 
@@ -94,7 +150,11 @@ export const LiveMusicTab: React.FC = () => {
                 headers: getAuthHeader(),
             });
             if (res.ok) {
-                setSubs(prev => prev.filter(s => s.id !== artistId));
+                // Reload from server — the server may have just dismissed this
+                // artist (if it was auto-added) and re-filled the slot with a
+                // different top-played artist, so optimistic local state would
+                // diverge.
+                loadSubs();
             } else {
                 const data = await res.json().catch(() => ({}));
                 addToast(data.error || 'Failed to unsubscribe', 'error');
@@ -377,6 +437,39 @@ export const LiveMusicTab: React.FC = () => {
                         </div>
                     </div>
 
+                    {/* Auto-subscribe to favourites */}
+                    <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 mb-6 shadow-sm">
+                        <div className="flex items-start justify-between gap-3 mb-1">
+                            <div className="flex-1 min-w-0">
+                                <h4 className="text-sm font-semibold text-[var(--color-text-primary)] flex items-center gap-1.5">
+                                    <Sparkles size={14} className="text-[var(--color-primary)]" />
+                                    Auto-subscribe to my favourites
+                                </h4>
+                                <p className="text-xs text-[var(--color-text-muted)] mt-1 leading-relaxed">
+                                    Fills empty slots with your most-played artists. We&apos;ll never replace artists you added manually, and removing an auto-pick keeps it from coming back.
+                                </p>
+                            </div>
+                            <button
+                                onClick={toggleAutoAdd}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 mt-1 ${concertsAutoAddEnabled ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}
+                                aria-label="Toggle auto-add"
+                                aria-pressed={concertsAutoAddEnabled}
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${concertsAutoAddEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                            </button>
+                        </div>
+                        {concertsAutoAddEnabled && (
+                            <button
+                                onClick={() => refreshAutoAdd(false)}
+                                disabled={autoRefreshing}
+                                className="mt-3 inline-flex items-center gap-1.5 text-xs font-semibold text-[var(--color-primary)] hover:underline disabled:opacity-50"
+                            >
+                                {autoRefreshing ? <Loader2 size={12} className="animate-spin" /> : <RotateCw size={12} />}
+                                Refresh suggestions now
+                            </button>
+                        )}
+                    </div>
+
                     {/* Subscribed artists */}
                     <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 mb-6 shadow-sm">
                         <div className="flex items-baseline justify-between mb-3">
@@ -394,28 +487,40 @@ export const LiveMusicTab: React.FC = () => {
                             </p>
                         ) : (
                             <div className="flex flex-wrap gap-2">
-                                {subs.map(s => (
-                                    <div
-                                        key={s.id}
-                                        className="inline-flex items-center gap-2 pl-1 pr-1 py-1 rounded-full bg-[var(--color-bg)] border border-[var(--glass-border)]"
-                                    >
-                                        <div className="w-7 h-7 rounded-full bg-[var(--color-surface)] overflow-hidden flex-shrink-0">
-                                            {s.image_url ? (
-                                                <img src={s.image_url} alt="" className="w-full h-full object-cover" loading="lazy" />
-                                            ) : (
-                                                <div className="w-full h-full flex items-center justify-center text-[var(--color-text-muted)]"><Headphones size={12} /></div>
-                                            )}
-                                        </div>
-                                        <span className="text-sm font-medium text-[var(--color-text-primary)] max-w-[160px] truncate">{s.name}</span>
-                                        <button
-                                            onClick={() => unsubscribe(s.id)}
-                                            className="w-8 h-8 flex items-center justify-center rounded-full text-[var(--color-text-muted)] hover:text-red-500 hover:bg-red-500/10 transition-colors flex-shrink-0"
-                                            aria-label={`Remove ${s.name}`}
+                                {subs.map(s => {
+                                    const isAuto = s.source === 'auto';
+                                    return (
+                                        <div
+                                            key={s.id}
+                                            className={`inline-flex items-center gap-2 pl-1 pr-1 py-1 rounded-full border ${isAuto ? 'bg-[var(--color-primary)]/5 border-[var(--color-primary)]/25' : 'bg-[var(--color-bg)] border-[var(--glass-border)]'}`}
                                         >
-                                            <X size={14} />
-                                        </button>
-                                    </div>
-                                ))}
+                                            <div className="w-7 h-7 rounded-full bg-[var(--color-surface)] overflow-hidden flex-shrink-0">
+                                                {s.image_url ? (
+                                                    <img src={s.image_url} alt="" className="w-full h-full object-cover" loading="lazy" />
+                                                ) : (
+                                                    <div className="w-full h-full flex items-center justify-center text-[var(--color-text-muted)]"><Headphones size={12} /></div>
+                                                )}
+                                            </div>
+                                            <span className="text-sm font-medium text-[var(--color-text-primary)] max-w-[160px] truncate">{s.name}</span>
+                                            {isAuto && (
+                                                <span
+                                                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full bg-[var(--color-primary)]/15 text-[var(--color-primary)] text-[9px] font-bold uppercase tracking-wider"
+                                                    title="Added automatically based on your top played artists"
+                                                >
+                                                    <Sparkles size={9} />
+                                                    Auto
+                                                </span>
+                                            )}
+                                            <button
+                                                onClick={() => unsubscribe(s.id)}
+                                                className="w-8 h-8 flex items-center justify-center rounded-full text-[var(--color-text-muted)] hover:text-red-500 hover:bg-red-500/10 transition-colors flex-shrink-0"
+                                                aria-label={`Remove ${s.name}`}
+                                            >
+                                                <X size={14} />
+                                            </button>
+                                        </div>
+                                    );
+                                })}
                             </div>
                         )}
 
@@ -426,6 +531,44 @@ export const LiveMusicTab: React.FC = () => {
                             </div>
                         )}
                     </div>
+
+                    {/* Dismissed auto-picks — only render when there are some, since
+                        most users won't ever need this and an empty section is clutter */}
+                    {dismissed.length > 0 && (
+                        <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 mb-6 shadow-sm">
+                            <div className="flex items-baseline justify-between mb-1">
+                                <h4 className="text-sm font-semibold text-[var(--color-text-primary)]">Won&apos;t auto-add</h4>
+                                <span className="text-xs text-[var(--color-text-muted)] tabular-nums">{dismissed.length}</span>
+                            </div>
+                            <p className="text-xs text-[var(--color-text-muted)] mb-3">
+                                These artists were removed from auto-add. They&apos;ll stay out of suggestions unless you allow them again.
+                            </p>
+                            <div className="flex flex-wrap gap-2">
+                                {dismissed.map(d => (
+                                    <button
+                                        key={d.id}
+                                        onClick={() => undismiss(d.id)}
+                                        className="inline-flex items-center gap-2 pl-1 pr-3 py-1 rounded-full bg-[var(--color-bg)] border border-dashed border-[var(--glass-border)] hover:border-[var(--color-primary)] hover:bg-[var(--color-primary)]/5 transition-colors group"
+                                        title="Allow this artist to be auto-added again"
+                                        aria-label={`Allow ${d.name} to be auto-added again`}
+                                    >
+                                        <div className="w-7 h-7 rounded-full bg-[var(--color-surface)] overflow-hidden flex-shrink-0 opacity-70 group-hover:opacity-100 transition-opacity">
+                                            {d.image_url ? (
+                                                <img src={d.image_url} alt="" className="w-full h-full object-cover" loading="lazy" />
+                                            ) : (
+                                                <div className="w-full h-full flex items-center justify-center text-[var(--color-text-muted)]"><Headphones size={12} /></div>
+                                            )}
+                                        </div>
+                                        <span className="text-sm font-medium text-[var(--color-text-secondary)] max-w-[140px] truncate">{d.name}</span>
+                                        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-primary)] opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <Undo2 size={10} />
+                                            Allow
+                                        </span>
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
 
                     {/* Library lookup */}
                     <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 shadow-sm">
