@@ -90,25 +90,35 @@ export const OnTourSticker: React.FC<{ visible: boolean }> = ({ visible }) => {
     );
 };
 
+function parseCalendarDate(value: string | null | undefined): Date | null {
+    const match = value?.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!match) return null;
+    const [, y, m, d] = match;
+    const date = new Date(Number(y), Number(m) - 1, Number(d));
+    return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function extractWallTime(value: string | null | undefined): string | null {
+    const match = value?.match(/T(\d{2}):(\d{2})/);
+    if (!match) return null;
+    const [, hh, mm] = match;
+    if (hh === '00' && mm === '00') return null;
+    const hour = parseInt(hh, 10);
+    if (!Number.isFinite(hour)) return null;
+    const ampm = hour >= 12 ? 'pm' : 'am';
+    const h12 = hour % 12 || 12;
+    return `${h12}:${mm}${ampm}`;
+}
+
 function formatDateParts(dateStr: string, datetime: string | null): { weekday: string; month: string; day: string; time: string | null } {
-    const d = new Date(datetime || `${dateStr}T00:00:00`);
-    if (!Number.isFinite(d.getTime())) {
-        return { weekday: '', month: '', day: dateStr, time: null };
+    const d = parseCalendarDate(dateStr) || parseCalendarDate(datetime);
+    if (!d) {
+        return { weekday: '', month: '', day: dateStr.slice(0, 10) || '--', time: null };
     }
     const weekday = d.toLocaleDateString(undefined, { weekday: 'short' });
     const month = d.toLocaleDateString(undefined, { month: 'short' });
     const day = String(d.getDate());
-    let time: string | null = null;
-    if (datetime && datetime.length > 10) {
-        const hh = datetime.slice(11, 13);
-        const mm = datetime.slice(14, 16);
-        if (hh && mm && !(hh === '00' && mm === '00')) {
-            const hour = parseInt(hh, 10);
-            const ampm = hour >= 12 ? 'pm' : 'am';
-            const h12 = hour % 12 || 12;
-            time = `${h12}:${mm}${ampm}`;
-        }
-    }
+    const time = extractWallTime(datetime) || extractWallTime(dateStr);
     return { weekday, month, day, time };
 }
 
@@ -127,18 +137,18 @@ const MiniEventCard: React.FC<{ event: ArtistEvent }> = ({ event }) => {
 
     return (
         <div className="
-            relative flex items-stretch gap-3
+            relative flex min-h-[96px] items-stretch gap-2.5 md:gap-3
             bg-[var(--color-surface)]
             border border-[var(--glass-border)]
             rounded-xl
-            p-3
+            p-2.5 md:p-3
             hover:border-[var(--color-primary)]/40 hover:shadow-sm
-            transition-all
+            transition-ui
         ">
             {/* Date block — calendar/poster style */}
             <div className="
                 flex flex-col items-center justify-center
-                shrink-0 w-16
+                shrink-0 w-14 md:w-16
                 bg-[var(--color-bg)]
                 rounded-lg
                 border border-[var(--glass-border)]
@@ -171,11 +181,11 @@ const MiniEventCard: React.FC<{ event: ArtistEvent }> = ({ event }) => {
                 )}
                 <div className="flex items-center gap-2 text-xs text-[var(--color-text-muted)] mt-0.5">
                     {time && (
-                        <span className="tabular-nums">{time}</span>
+                        <span className="hidden md:inline tabular-nums">{time}</span>
                     )}
                     {price && (
                         <>
-                            {time && <span aria-hidden="true">·</span>}
+                            {time && <span className="hidden md:inline" aria-hidden="true">·</span>}
                             <span className="tabular-nums">{price}</span>
                         </>
                     )}
@@ -222,9 +232,12 @@ export const UpcomingShows: React.FC<UpcomingShowsProps> = ({ events, loading, s
                         Upcoming shows
                     </h3>
                 </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="flex gap-3 overflow-x-auto pb-1 snap-x snap-mandatory">
                     {[0, 1, 2].map(i => (
-                        <div key={i} className="h-[88px] rounded-xl bg-[var(--color-surface-variant)] animate-pulse" />
+                        <div
+                            key={i}
+                            className="h-[96px] min-w-[78vw] snap-start rounded-xl bg-[var(--color-surface-variant)] animate-pulse md:min-w-[calc((100%-1.5rem)/3)]"
+                        />
                     ))}
                 </div>
             </section>
@@ -251,8 +264,12 @@ export const UpcomingShows: React.FC<UpcomingShowsProps> = ({ events, loading, s
                     </span>
                 )}
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {visible.map(e => <MiniEventCard key={e.jambase_event_id} event={e} />)}
+            <div className="flex gap-3 overflow-x-auto pb-1 snap-x snap-mandatory">
+                {visible.map(e => (
+                    <div key={e.jambase_event_id} className="min-w-[78vw] snap-start md:min-w-[calc((100%-1.5rem)/3)]">
+                        <MiniEventCard event={e} />
+                    </div>
+                ))}
             </div>
         </section>
     );

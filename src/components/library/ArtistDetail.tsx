@@ -1,4 +1,4 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { TrackInfo } from '../../utils/fileSystem';
@@ -116,12 +116,85 @@ function formatCompactCount(raw?: string): string | null {
   return value.toLocaleString();
 }
 
+type SimilarArtist = {
+    id: string;
+    name: string;
+    imageUrl?: string;
+    trackCount: number;
+    albumCount: number;
+    analyzedTracks: number;
+    matchScore: number;
+};
+
+const SimilarArtistsSection: React.FC<{ artists: SimilarArtist[]; loading: boolean }> = ({ artists, loading }) => {
+    if (loading) {
+        return (
+            <section className="mb-12">
+                <h3 className="font-semibold text-xl tracking-wide text-[var(--color-text-secondary)] mb-4 md:mb-6 border-b border-[var(--glass-border)] pb-2 flex items-center gap-2">
+                    <Users className="w-4 h-4 text-[var(--color-primary)] opacity-60" />
+                    Similar artists
+                </h3>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                    {[0, 1, 2, 3].map(i => (
+                        <div key={i} className="h-[154px] rounded-xl bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                    ))}
+                </div>
+            </section>
+        );
+    }
+
+    if (artists.length === 0) return null;
+
+    return (
+        <section className="mb-12">
+            <h3 className="font-semibold text-xl tracking-wide text-[var(--color-text-secondary)] mb-4 md:mb-6 border-b border-[var(--glass-border)] pb-2 flex items-center gap-2">
+                <Users className="w-4 h-4 text-[var(--color-primary)] opacity-60" />
+                Similar artists
+            </h3>
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+                {artists.map(artist => (
+                    <Link
+                        key={artist.id}
+                        to={`/library/artist/${artist.id}`}
+                        state={{ backLabel: 'Back to Artist' }}
+                        className="group rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-3 transition-ui hover:border-[var(--color-primary)]/40 hover:bg-[var(--glass-bg-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
+                    >
+                        <div className="flex items-start gap-3">
+                            <div className="h-14 w-14 shrink-0 overflow-hidden rounded-full border border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/10">
+                                {artist.imageUrl ? (
+                                    <img src={artist.imageUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                                ) : (
+                                    <div className="flex h-full w-full items-center justify-center">
+                                        <ArtistInitial name={artist.name} className="text-xl text-[var(--color-primary)] opacity-55" />
+                                    </div>
+                                )}
+                            </div>
+                            <div className="min-w-0 flex-1">
+                                <div className="truncate text-sm font-semibold text-[var(--color-text-primary)] transition-colors group-hover:text-[var(--color-primary)]">
+                                    {artist.name}
+                                </div>
+                                <div className="mt-1 text-xs text-[var(--color-text-muted)] tabular-nums">
+                                    {artist.matchScore}% match
+                                </div>
+                            </div>
+                        </div>
+                        <div className="mt-3 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-[var(--color-text-muted)]">
+                            <span>{artist.trackCount} track{artist.trackCount !== 1 ? 's' : ''}</span>
+                            {artist.albumCount > 0 && <span>{artist.albumCount} album{artist.albumCount !== 1 ? 's' : ''}</span>}
+                        </div>
+                    </Link>
+                ))}
+            </div>
+        </section>
+    );
+};
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export const ArtistDetail: React.FC = () => {
     const { artistId } = useParams<{ artistId: string }>();
     const navigate = useNavigate();
-    const { library, artists, setPlaylist } = usePlayerStore();
+    const { library, artists, setPlaylist, getAuthHeader } = usePlayerStore();
 
     // Find artist info from entity list
     const artistInfo = useMemo(() => artists.find(a => a.id === artistId), [artists, artistId]);
@@ -134,7 +207,7 @@ export const ArtistDetail: React.FC = () => {
         return track?.mbArtistId || null;
     }, [library, artistId]);
 
-    const { imageUrl, bio, disambiguation, area, type, lifeSpan, links, genres, communityTags, listeners, members, isLoading: artistLoading } = useArtistData(artistName, mbArtistId);
+    const { imageUrl, artworkUrl, bio, disambiguation, area, type, lifeSpan, links, genres, communityTags, listeners, members, isLoading: artistLoading } = useArtistData(artistName, mbArtistId);
     const { onTour, events: upcomingEvents, loading: concertsLoading, stale: concertsStale } = useArtistConcerts(artistId);
     const { tracks: externalTopTracks } = useArtistTopTracks(artistName, {
         enabled: !!artistName,
@@ -143,7 +216,33 @@ export const ArtistDetail: React.FC = () => {
     const [bioExpanded, setBioExpanded] = useState(false);
     const [linksMenuOpen, setLinksMenuOpen] = useState(false);
     const [popularExpanded, setPopularExpanded] = useState(false);
+    const [similarArtists, setSimilarArtists] = useState<SimilarArtist[]>([]);
+    const [similarArtistsLoading, setSimilarArtistsLoading] = useState(false);
     const linksButtonRef = useRef<HTMLButtonElement>(null);
+
+    useEffect(() => {
+        if (!artistId) {
+            setSimilarArtists([]);
+            setSimilarArtistsLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+        setSimilarArtistsLoading(true);
+        fetch(`/api/artists/${artistId}/similar?limit=8`, { headers: getAuthHeader() })
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+                if (!cancelled) setSimilarArtists(Array.isArray(data?.artists) ? data.artists : []);
+            })
+            .catch(() => {
+                if (!cancelled) setSimilarArtists([]);
+            })
+            .finally(() => {
+                if (!cancelled) setSimilarArtistsLoading(false);
+            });
+
+        return () => { cancelled = true; };
+    }, [artistId, getAuthHeader]);
 
     // Tracks where this artist is the PRIMARY / album artist
     const primaryTracks = useMemo(() => {
@@ -313,7 +412,7 @@ export const ArtistDetail: React.FC = () => {
 
     return (
         <div className="artist-detail page-container relative">
-            {imageUrl && <FadedHeroImage src={imageUrl} />}
+            {artworkUrl && <FadedHeroImage src={artworkUrl} variant="wide" />}
             <div className="relative z-10">
                 <BackButton onClick={() => navigate(-1)} />
 
@@ -329,15 +428,12 @@ export const ArtistDetail: React.FC = () => {
                     )}
 
                     <div className="flex-1">
-                        <h1 className="font-bold text-4xl md:text-6xl lg:text-7xl tracking-tight mb-2 text-[var(--color-text-primary)]">
-                            {artistName}
-                        </h1>
-
-                        {onTour && (
-                            <div className="mb-3">
-                                <OnTourSticker visible={onTour} />
-                            </div>
-                        )}
+                        <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-2">
+                            <h1 className="font-bold text-4xl md:text-6xl lg:text-7xl tracking-tight text-[var(--color-text-primary)]">
+                                {artistName}
+                            </h1>
+                            <OnTourSticker visible={onTour} />
+                        </div>
 
                         {/* Band members */}
                         {members && members.length > 0 && (
@@ -532,13 +628,13 @@ export const ArtistDetail: React.FC = () => {
                         </div>
 
                         {/* Column headers */}
-                        <div className="grid grid-cols-[28px_44px_minmax(0,1fr)_56px_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_140px_92px] gap-2 md:gap-3 px-2 md:px-4 py-3 border-b border-black/5 dark:border-white/10 font-semibold text-xs uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
+                        <div className="grid grid-cols-[24px_40px_minmax(0,1fr)] md:grid-cols-[34px_52px_minmax(0,1.7fr)_minmax(160px,1fr)_120px_56px] gap-2 md:gap-3 px-1.5 md:px-4 py-3 border-b border-black/5 dark:border-white/10 font-semibold text-xs uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
                             <div className="text-center md:text-left">#</div>
                             <div aria-hidden="true" />
                             <div>Title</div>
                             <div className="hidden md:block">Album</div>
                             <div className="hidden md:block">Last.fm plays</div>
-                            <div className="text-right md:text-left">Time</div>
+                            <div className="hidden md:block text-right">Time</div>
                         </div>
 
                         <div className="space-y-0.5">
@@ -546,7 +642,7 @@ export const ArtistDetail: React.FC = () => {
                                 <div
                                     key={track.id}
                                     onClick={() => setPlaylist(popularLibraryTracks.map(entry => entry.track), index)}
-                                    className="grid grid-cols-[28px_44px_minmax(0,1fr)_56px_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_140px_92px] gap-2 md:gap-3 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
+                                    className="grid grid-cols-[24px_40px_minmax(0,1fr)] md:grid-cols-[34px_52px_minmax(0,1.7fr)_minmax(160px,1fr)_120px_56px] gap-2 md:gap-3 px-1.5 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
                                 >
                                     {/* Rank */}
                                     <div className="text-center md:text-left text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums">
@@ -554,7 +650,7 @@ export const ArtistDetail: React.FC = () => {
                                     </div>
 
                                     {/* Art */}
-                                    <div className="w-11 h-11 shrink-0 overflow-hidden rounded-lg border border-black/10 dark:border-white/10 bg-black/10 dark:bg-white/10">
+                                    <div className="h-10 w-10 md:h-11 md:w-11 shrink-0 overflow-hidden rounded-lg border border-black/10 dark:border-white/10 bg-black/10 dark:bg-white/10">
                                         {track.artUrl ? (
                                             <img src={track.artUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
                                         ) : (
@@ -593,7 +689,7 @@ export const ArtistDetail: React.FC = () => {
                                     </div>
 
                                     {/* Duration */}
-                                    <div className="text-[var(--color-text-muted)] text-sm tabular-nums text-right md:text-left">
+                                    <div className="hidden md:block text-[var(--color-text-muted)] text-sm tabular-nums text-right">
                                         {formatTime(track.duration, '--:--')}
                                     </div>
                                 </div>
@@ -677,6 +773,8 @@ export const ArtistDetail: React.FC = () => {
                     </div>
                 </div>
             )}
+
+            <SimilarArtistsSection artists={similarArtists} loading={similarArtistsLoading} />
             </div>
         </div>
     );
