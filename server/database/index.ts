@@ -258,6 +258,12 @@ export async function initDB(): Promise<Pool> {
           WHEN OTHERS THEN null; 
         END $$;
 
+        DO $$
+        BEGIN
+          ALTER TABLE playlists ADD COLUMN IF NOT EXISTS generation_source TEXT;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+
         CREATE TABLE IF NOT EXISTS playlist_tracks (
           playlist_id TEXT REFERENCES playlists(id) ON DELETE CASCADE,
           track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE,
@@ -436,6 +442,7 @@ export async function initDB(): Promise<Pool> {
         DO $$
         BEGIN
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS image_url TEXT;
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS artwork_url TEXT;
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS bio TEXT;
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS mbid TEXT;
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS last_updated BIGINT DEFAULT 0;
@@ -930,17 +937,15 @@ export async function addTrack(track: any) {
   ]);
 
   if (track.audioFeatures) {
-    const vector7dStr = `[${track.audioFeatures.acoustic_vector.slice(0, 7).join(',')}]`;
     const vector8dStr = `[${track.audioFeatures.acoustic_vector.join(',')}]`;
     await db.query(`
-      INSERT INTO track_features (track_id, bpm, acoustic_vector, acoustic_vector_8d)
-      VALUES ($1, $2, $3, $4)
+      INSERT INTO track_features (track_id, bpm, acoustic_vector_8d)
+      VALUES ($1, $2, $3)
       ON CONFLICT (track_id) DO UPDATE SET
         bpm = EXCLUDED.bpm,
-        acoustic_vector = EXCLUDED.acoustic_vector,
         acoustic_vector_8d = EXCLUDED.acoustic_vector_8d
-      WHERE track_features.bpm IS DISTINCT FROM EXCLUDED.bpm OR track_features.acoustic_vector IS DISTINCT FROM EXCLUDED.acoustic_vector
-    `, [id, track.audioFeatures.bpm, vector7dStr, vector8dStr]);
+      WHERE track_features.bpm IS DISTINCT FROM EXCLUDED.bpm OR track_features.acoustic_vector_8d IS DISTINCT FROM EXCLUDED.acoustic_vector_8d
+    `, [id, track.audioFeatures.bpm, vector8dStr]);
   }
 }
 
@@ -949,30 +954,23 @@ export async function clearTracks() {
   await db.query('DELETE FROM tracks');
 }
 
-export async function addTrackFeatures(trackId: string, audioFeatures: { bpm: number; acoustic_vector: number[]; embedding_vector?: number[]; mfcc_vector?: number[]; is_simulated?: boolean }) {
+export async function addTrackFeatures(trackId: string, audioFeatures: { bpm: number; acoustic_vector: number[]; embedding_vector?: number[]; is_simulated?: boolean }) {
   const db = await initDB();
-  // Legacy column expects 7D, old column expects 8D, new column expects 8-10D
-  const vector7dStr = `[${audioFeatures.acoustic_vector.slice(0, 7).join(',')}]`;
   const vector8dStr = `[${audioFeatures.acoustic_vector.slice(0, 8).join(',')}]`;
-  const vectorStr = `[${audioFeatures.acoustic_vector.join(',')}]`;
   const simulated = audioFeatures.is_simulated ?? false;
   const embStr = audioFeatures.embedding_vector && audioFeatures.embedding_vector.length > 0
     ? `[${audioFeatures.embedding_vector.join(',')}]`
     : null;
-  // mfcc_vector is fully deprecated in favour of 1280D EffNet embeddings
-  const mfccStr = null;
 
   await db.query(`
-    INSERT INTO track_features (track_id, bpm, acoustic_vector, acoustic_vector_8d, mfcc_vector, embedding_vector, is_simulated)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    INSERT INTO track_features (track_id, bpm, acoustic_vector_8d, embedding_vector, is_simulated)
+    VALUES ($1, $2, $3, $4, $5)
     ON CONFLICT (track_id) DO UPDATE SET
       bpm = EXCLUDED.bpm,
-      acoustic_vector = EXCLUDED.acoustic_vector,
       acoustic_vector_8d = EXCLUDED.acoustic_vector_8d,
-      mfcc_vector = EXCLUDED.mfcc_vector,
       embedding_vector = EXCLUDED.embedding_vector,
       is_simulated = EXCLUDED.is_simulated
-  `, [trackId, audioFeatures.bpm, vector7dStr, vector8dStr, mfccStr, embStr, simulated]);
+  `, [trackId, audioFeatures.bpm, vector8dStr, embStr, simulated]);
 }
 
 export async function getTracksWithoutFeatures(): Promise<{ id: string; filePath: Buffer; title: string; artist: string | null }[]> {
@@ -982,25 +980,6 @@ export async function getTracksWithoutFeatures(): Promise<{ id: string; filePath
     FROM tracks t
     LEFT JOIN track_features tf ON t.id = tf.track_id
     WHERE tf.track_id IS NULL
-    ORDER BY t.title
-  `);
-  return res.rows.map((r: any) => ({
-    id: r.id,
-    filePath: Buffer.from(r.path, 'base64'),
-    title: r.title,
-    artist: r.artist || null,
-  }));
-}
-
-// Tracks that have acoustic_vector but are missing mfcc_vector (for background MFCC migration)
-export async function getTracksWithoutMfcc(): Promise<{ id: string; filePath: Buffer; title: string; artist: string | null }[]> {
-  const db = await initDB();
-  const res = await db.query(`
-    SELECT t.id, t.path, t.title, t.artist
-    FROM tracks t
-    JOIN track_features tf ON t.id = tf.track_id
-    WHERE tf.acoustic_vector IS NOT NULL
-      AND tf.mfcc_vector IS NULL
     ORDER BY t.title
   `);
   return res.rows.map((r: any) => ({
@@ -1342,6 +1321,78 @@ export async function getTracksByArtist(artistId: string) {
   return res.rows.map(mapTrackRow);
 }
 
+export async function getSimilarArtistsByAudioProfile(artistId: string, limit: number = 8) {
+  const db = await initDB();
+  const safeLimit = Math.max(1, Math.min(24, Math.floor(limit)));
+  const res = await db.query(`
+    WITH target AS (
+      SELECT
+        AVG(tf.acoustic_vector_8d) AS musicnn_profile,
+        AVG(tf.embedding_vector) AS effnet_profile,
+        COUNT(tf.acoustic_vector_8d) AS analyzed_tracks
+      FROM tracks t
+      JOIN track_features tf ON tf.track_id = t.id
+      WHERE t.artist_id = $1
+        AND tf.acoustic_vector_8d IS NOT NULL
+        AND LOWER(TRIM(COALESCE(t.album_artist, t.artist, ''))) NOT IN ('various artists', 'various', 'unknown artist', '???')
+    ),
+    candidates AS (
+      SELECT
+        a.id,
+        a.name,
+        a.image_url,
+        COUNT(DISTINCT t.id)::int AS track_count,
+        COUNT(DISTINCT t.album_id)::int AS album_count,
+        COUNT(tf.acoustic_vector_8d)::int AS analyzed_tracks,
+        AVG(tf.acoustic_vector_8d) AS musicnn_profile,
+        AVG(tf.embedding_vector) AS effnet_profile
+      FROM artists a
+      JOIN tracks t ON t.artist_id = a.id
+      JOIN track_features tf ON tf.track_id = t.id
+      WHERE a.id <> $1
+        AND tf.acoustic_vector_8d IS NOT NULL
+        AND LOWER(TRIM(a.name)) NOT IN ('various artists', 'various', 'unknown artist', '???')
+      GROUP BY a.id, a.name, a.image_url
+      HAVING COUNT(tf.acoustic_vector_8d) >= 2
+    ),
+    scored AS (
+      SELECT
+        c.*,
+        CASE
+          WHEN target.effnet_profile IS NOT NULL AND c.effnet_profile IS NOT NULL
+            THEN ((c.musicnn_profile <-> target.musicnn_profile) * 0.35) + ((c.effnet_profile <=> target.effnet_profile) * 0.65)
+          ELSE c.musicnn_profile <-> target.musicnn_profile
+        END AS distance
+      FROM candidates c
+      CROSS JOIN target
+      WHERE target.analyzed_tracks > 0
+    )
+    SELECT
+      id,
+      name,
+      image_url,
+      track_count,
+      album_count,
+      analyzed_tracks,
+      distance,
+      GREATEST(0, LEAST(100, ROUND(100 / (1 + distance * 18))))::int AS match_score
+    FROM scored
+    ORDER BY distance ASC, track_count DESC, name ASC
+    LIMIT $2
+  `, [artistId, safeLimit]);
+
+  return res.rows.map((row: any) => ({
+    id: row.id,
+    name: row.name,
+    imageUrl: row.image_url || undefined,
+    trackCount: row.track_count || 0,
+    albumCount: row.album_count || 0,
+    analyzedTracks: row.analyzed_tracks || 0,
+    distance: typeof row.distance === 'number' ? row.distance : Number(row.distance),
+    matchScore: row.match_score || 0,
+  }));
+}
+
 export async function getTracksByAlbum(albumId: string) {
   const db = await initDB();
   const res = await db.query('SELECT * FROM tracks WHERE album_id = $1 ORDER BY track_number ASC NULLS LAST', [albumId]);
@@ -1473,13 +1524,26 @@ export async function migrateEntityIds() {
 // PLAYLISTS API 
 // ==========================================
 
-export async function createPlaylist(id: string, title: string, description: string | null = null, isLlmGenerated: boolean = false, userId: string | null = null, isSystem: boolean = false) {
+export async function createPlaylist(
+  id: string,
+  title: string,
+  description: string | null = null,
+  isLlmGenerated: boolean = false,
+  userId: string | null = null,
+  isSystem: boolean = false,
+  generationSource?: 'manual' | 'hub' | 'custom' | 'system'
+) {
   const db = await initDB();
+  const source = generationSource ?? (isSystem ? 'system' : isLlmGenerated ? 'hub' : 'manual');
   await db.query(`
-    INSERT INTO playlists (id, title, description, created_at, is_llm_generated, user_id, is_system)
-    VALUES ($1, $2, $3, NOW(), $4, $5, $6)
-    ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, description = EXCLUDED.description, is_system = EXCLUDED.is_system
-  `, [id, title, description, isLlmGenerated, userId, isSystem]);
+    INSERT INTO playlists (id, title, description, created_at, is_llm_generated, user_id, is_system, generation_source)
+    VALUES ($1, $2, $3, NOW(), $4, $5, $6, $7)
+    ON CONFLICT (id) DO UPDATE SET
+      title = EXCLUDED.title,
+      description = EXCLUDED.description,
+      is_system = EXCLUDED.is_system,
+      generation_source = EXCLUDED.generation_source
+  `, [id, title, description, isLlmGenerated, userId, isSystem, source]);
 }
 
 export async function addTracksToPlaylist(playlistId: string, trackIds: string[]) {
@@ -1524,24 +1588,44 @@ export async function deleteOldLlmPlaylists(maxAgeMs: number, userId: string | n
     // User-scoped cleanup
     await db.query(`
       DELETE FROM playlist_tracks
-      WHERE playlist_id IN (SELECT id FROM playlists WHERE is_llm_generated = TRUE AND pinned = FALSE AND created_at < to_timestamp($1 / 1000.0) AND user_id = $2)
+      WHERE playlist_id IN (
+        SELECT id FROM playlists
+        WHERE is_llm_generated = TRUE
+          AND COALESCE(generation_source, 'hub') = 'hub'
+          AND pinned = FALSE
+          AND created_at < to_timestamp($1 / 1000.0)
+          AND user_id = $2
+      )
     `, [threshold, userId]);
 
     const res = await db.query(`
       DELETE FROM playlists
-      WHERE is_llm_generated = TRUE AND pinned = FALSE AND created_at < to_timestamp($1 / 1000.0) AND user_id = $2
+      WHERE is_llm_generated = TRUE
+        AND COALESCE(generation_source, 'hub') = 'hub'
+        AND pinned = FALSE
+        AND created_at < to_timestamp($1 / 1000.0)
+        AND user_id = $2
     `, [threshold, userId]);
     return res.rowCount;
   } else {
     // Global cleanup (backward compat)
     await db.query(`
       DELETE FROM playlist_tracks
-      WHERE playlist_id IN (SELECT id FROM playlists WHERE is_llm_generated = TRUE AND pinned = FALSE AND created_at < to_timestamp($1 / 1000.0))
+      WHERE playlist_id IN (
+        SELECT id FROM playlists
+        WHERE is_llm_generated = TRUE
+          AND COALESCE(generation_source, 'hub') = 'hub'
+          AND pinned = FALSE
+          AND created_at < to_timestamp($1 / 1000.0)
+      )
     `, [threshold]);
 
     const res = await db.query(`
       DELETE FROM playlists
-      WHERE is_llm_generated = TRUE AND pinned = FALSE AND created_at < to_timestamp($1 / 1000.0)
+      WHERE is_llm_generated = TRUE
+        AND COALESCE(generation_source, 'hub') = 'hub'
+        AND pinned = FALSE
+        AND created_at < to_timestamp($1 / 1000.0)
     `, [threshold]);
     return res.rowCount;
   }
@@ -1560,6 +1644,7 @@ export async function getPlaylists(userId: string | null = null) {
     isLlmGenerated: row.is_llm_generated,
     isSystem: row.is_system,
     pinned: row.pinned,
+    generationSource: row.generation_source || (row.is_system ? 'system' : row.is_llm_generated ? 'hub' : 'manual'),
     createdAt: new Date(row.created_at).getTime(),
   }));
 }
@@ -1743,18 +1828,18 @@ export async function getSubGenreMappings(): Promise<Record<string, string>> {
   return mappings;
 }
 
-export async function getGenrePathFromKNN(acoustic8D: number[], mfcc?: number[]): Promise<string | null> {
+export async function getGenrePathFromKNN(acoustic8D: number[], embedding?: number[]): Promise<string | null> {
   if (acoustic8D.some(v => !isFinite(v))) return null;
-  if (mfcc && mfcc.some(v => !isFinite(v))) mfcc = undefined;
+  if (embedding && (embedding.length !== 1280 || embedding.some(v => !isFinite(v)))) embedding = undefined;
 
   const db = await initDB();
   const acousticStr = `[${acoustic8D.join(',')}]`;
-  const mfccStr = mfcc ? `[${mfcc.join(',')}]` : null;
+  const embeddingStr = embedding ? `[${embedding.join(',')}]` : null;
   
-  // Tier 3: KNN Timbre Fallback. 
+  // Tier 3: KNN audio fallback.
   // Finds the most common hierarchical path among the 10 mathematically 
-  // closest matches using 21D distance (Acoustic 8D + MFCC 13D) or 8D distance fallback.
-  const query = mfccStr 
+  // closest matches using MusiCNN 8D + EffNet 1280D, or 8D distance fallback.
+  const query = embeddingStr
     ? `
     WITH neighbors AS (
       SELECT sm.path
@@ -1762,8 +1847,8 @@ export async function getGenrePathFromKNN(acoustic8D: number[], mfcc?: number[])
       JOIN track_features tf ON t.id = tf.track_id
       JOIN subgenre_mappings sm ON lower(trim(t.genre)) = sm.sub_genre
       WHERE tf.acoustic_vector_8d IS NOT NULL 
-        AND tf.mfcc_vector IS NOT NULL
-      ORDER BY (tf.acoustic_vector_8d <-> $1::vector) + (tf.mfcc_vector <-> $2::vector) ASC
+        AND tf.embedding_vector IS NOT NULL
+      ORDER BY (tf.acoustic_vector_8d <-> $1::vector) + (tf.embedding_vector <=> $2::vector) ASC
       LIMIT 10
     )
     SELECT path, COUNT(*) as frequency
@@ -1789,7 +1874,7 @@ export async function getGenrePathFromKNN(acoustic8D: number[], mfcc?: number[])
     LIMIT 1
   `;
 
-  const params = mfccStr ? [acousticStr, mfccStr] : [acousticStr];
+  const params = embeddingStr ? [acousticStr, embeddingStr] : [acousticStr];
   const res = await db.query(query, params);
 
   if (res.rows.length > 0) {
