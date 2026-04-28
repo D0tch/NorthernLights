@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# NorthernLights Installer for Ubuntu/Debian
+# Aurora Media Server installer for Ubuntu/Debian
 # Usage: curl -fsSL https://raw.githubusercontent.com/destroptor-spec/NorthernLights/main/install.sh | bash
 
 REPO_URL="https://github.com/destroptor-spec/NorthernLights.git"
@@ -24,7 +24,7 @@ fail()  { err "$*"; exit 1; }
 # ─── Pre-flight checks ───────────────────────────────────────────────
 
 if [ "$(id -u)" -eq 0 ]; then
-  fail "Do not run this script as root. PM2 startup requires a regular user account."
+  fail "Do not run this script as root. Run it as the user that should own and run Aurora."
 fi
 
 if [ ! -f /etc/os-release ]; then
@@ -59,13 +59,17 @@ info "Checking system dependencies..."
 
 $SUDO apt-get update -qq
 
+info "Installing base packages..."
+$SUDO apt-get install -y ca-certificates curl gnupg git ffmpeg bzip2 tar openssl
+ok "Base packages installed"
+
 # Node.js 20.x via NodeSource
 if has node; then
   NODE_VER=$(node -v | sed 's/v//' | cut -d. -f1)
-  if [ "$NODE_VER" -ge 18 ]; then
+  if [ "$NODE_VER" -ge 20 ]; then
     ok "Node.js $(node -v) already installed"
   else
-    warn "Node.js $(node -v) is too old (< 18). Installing Node.js 20.x..."
+    warn "Node.js $(node -v) is too old (< 20). Installing Node.js 20.x..."
     curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
     $SUDO apt-get install -y nodejs
   fi
@@ -76,22 +80,6 @@ else
 fi
 ok "Node.js $(node -v)"
 
-# Git
-if has git; then
-  ok "Git already installed"
-else
-  info "Installing git..."
-  $SUDO apt-get install -y git
-fi
-
-# FFmpeg (includes ffprobe for audio analysis)
-if has ffmpeg && has ffprobe; then
-  ok "FFmpeg and ffprobe already installed"
-else
-  info "Installing ffmpeg (includes ffprobe for audio analysis)..."
-  $SUDO apt-get install -y ffmpeg
-fi
-
 # uv (Fast Python package manager for reliable ML environments)
 export PATH="$HOME/.local/bin:$PATH"
 if has uv; then
@@ -100,22 +88,6 @@ else
   info "Installing uv..."
   curl -LsSf https://astral.sh/uv/install.sh | sh
   export PATH="$HOME/.local/bin:$PATH"
-fi
-
-# curl (required by MBDB service)
-if has curl; then
-  ok "curl already installed"
-else
-  info "Installing curl..."
-  $SUDO apt-get install -y curl
-fi
-
-# bzip2 (required by MBDB service)
-if has bzip2; then
-  ok "bzip2 already installed"
-else
-  info "Installing bzip2..."
-  $SUDO apt-get install -y bzip2
 fi
 
 # Container runtime (prefer podman, fallback to docker)
@@ -186,13 +158,17 @@ fi
 # ─── Build ────────────────────────────────────────────────────────────
 
 info "Installing dependencies..."
-npm install
+if [ -f package-lock.json ]; then
+  npm ci
+else
+  npm install
+fi
 ok "Dependencies installed"
 
 info "Setting up Python virtual environment for ML Extractor..."
 uv venv --python 3.11 .venv
 uv pip install essentia-tensorflow
-ok "Python ML environment configured via uv"
+ok "Python ML environment configured via uv (MusiCNN + Discogs-EffNet)"
 
 info "Building application..."
 npm run build
@@ -201,14 +177,20 @@ ok "Build complete"
 # ─── PM2 setup ────────────────────────────────────────────────────────
 
 # Stop existing instance if running
-if pm2 describe northernlights &>/dev/null; then
+if pm2 describe aurora &>/dev/null; then
   info "Stopping existing PM2 process..."
+  pm2 stop aurora || true
+  pm2 delete aurora || true
+fi
+
+if pm2 describe northernlights &>/dev/null; then
+  info "Migrating old PM2 process name northernlights -> aurora..."
   pm2 stop northernlights || true
   pm2 delete northernlights || true
 fi
 
 info "Starting server with PM2..."
-pm2 start "npx tsx server/index.ts" --name northernlights
+pm2 start "npx tsx server/index.ts" --name aurora
 pm2 save
 
 ok "Server started"
@@ -233,8 +215,9 @@ fi
 
 echo ""
 echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║        NorthernLights (V18) installed successfully!            ║${NC}"
-echo -e "${GREEN}║  Features: AI playlists • 20D analysis • Genre Taxonomy        ║${NC}"
+PACKAGE_VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "unknown")
+echo -e "${GREEN}║        Aurora Media Server installed successfully              ║${NC}"
+echo -e "${GREEN}║        Version: ${PACKAGE_VERSION}                                      ║${NC}"
 echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -249,8 +232,8 @@ echo -e "  1. Open the URL above in your browser"
 echo -e "  2. Click ${CYAN}Create Database${NC} to start PostgreSQL"
 echo -e "  3. Follow the Setup Wizard to create your admin account"
 echo -e "  4. Map your music folders in Settings → Library"
-echo -e "  5. The four-phase scanner will: walk → metadata → analysis → taxonomy"
+echo -e "  5. Scan your library, then import MusicBrainz and run Genre Matrix when ready"
 echo ""
 echo -e "  ${YELLOW}To update later:${NC}"
-echo -e "  ${CYAN}cd ~/NorthernLights && git pull && npm install && npm run build && pm2 restart northernlights${NC}"
+echo -e "  ${CYAN}cd ~/NorthernLights && git pull && npm ci && npm run build && pm2 restart aurora${NC}"
 echo ""

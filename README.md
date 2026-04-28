@@ -1,163 +1,130 @@
-# NorthernLights (Aurora Media Server)
+# Aurora Media Server
 
-A modern, self-hosted web music player built with React, Vite, Tailwind CSS, and Express. Stream your beautifully organized local music library from anywhere over the web.
+Aurora is a self-hosted web music player for local libraries. It scans folders on your server, streams your files through a React web app, enriches metadata from external providers, and builds library-aware AI playlists from your own collection.
 
-> 📖 **Deploying to a Server?** Read the comprehensive [Production Setup Guide](docs/production_guide.md) for step-by-step instructions on PM2, Systemd, reverse proxies, and firewall configurations.
+The project lives in the `NorthernLights` repository, but the product name in the app is Aurora.
 
-## One-Liner Install (Ubuntu/Debian)
+## Status
 
-Installs everything — Node.js, Podman, FFmpeg, PM2 — and starts the server:
+Current release: `1.0.0-beta.3`
+
+Aurora is ready for early self-hosted production use. Expect fast iteration and occasional migrations before the first stable `1.0.0` release.
+
+## Quick Install
+
+Ubuntu and Debian users can install the runtime dependencies, clone the repository, build the app, create the Python ML environment, and start Aurora under PM2 with:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/destroptor-spec/NorthernLights/main/install.sh | bash
 ```
 
-Then open the URL it prints to finish setup in the browser.
+Open the URL printed by the installer, create the database from the setup screen, then create the first admin account.
 
-> **Other systems (Fedora, macOS, Windows):** See [Getting Started](#getting-started) below for manual setup.
+For manual deployment, reverse proxy setup, backups, and update procedures, see [docs/production_guide.md](docs/production_guide.md).
 
-## Quick Setup (Manual)
+## Core Features
 
-If you prefer to install manually or are on a non-Debian system:
+- Local-library streaming for MP3, FLAC, OGG/Opus, M4A/AAC, WAV, and FFmpeg-backed WMA.
+- Browser, mobile, PWA, and Chromecast playback through HLS.
+- Multi-user accounts with JWT authentication and invite-based registration.
+- PostgreSQL plus pgvector storage, managed through Podman or Docker.
+- Three-phase scanning: filesystem walk, metadata extraction, and audio analysis.
+- MusiCNN 8D acoustic vectors plus 1280D Discogs-EffNet embeddings for similarity.
+- MusicBrainz genre ontology import and local genre mapping.
+- AI Hub playlists and prompt-generated playlists using local library health, genre paths, acoustic similarity, EffNet embeddings, diversity controls, and banned-genre handling.
+- External metadata integrations for Last.fm, Genius, MusicBrainz, ListenBrainz, and JamBase where configured.
+- Artist detail pages with popular local tracks, upcoming shows, hero artwork, and similar artists.
+- Playlist management with manual playlists, durable prompt-generated playlists, and transient Hub playlists.
+- Light/dark themes, route-based navigation, global search, queue editing, loved tracks, scrobbling, and local audio output selection.
 
-Just want the raw commands to get the app running immediately in production?
+## Requirements
+
+Minimum recommended server:
+
+- Ubuntu 22.04+ or Debian 12+ for the one-line installer.
+- Node.js 20 or newer.
+- FFmpeg and ffprobe.
+- Podman or Docker for PostgreSQL/pgvector.
+- 4 GB RAM minimum, 8 GB+ recommended for larger libraries.
+- 4 GB swap recommended on small VPS instances.
+- Enough disk for your music, PostgreSQL data, MusicBrainz import work files, and HLS temp files.
+
+The installer uses `uv` to create a Python 3.11 virtual environment for Essentia TensorFlow analysis. Manual installs should do the same.
+
+## Manual Setup
 
 ```bash
 git clone https://github.com/destroptor-spec/NorthernLights.git
 cd NorthernLights
-npm install
+cp .env.example .env
+npm ci
 curl -LsSf https://astral.sh/uv/install.sh | sh
-source $HOME/.local/bin/env
+export PATH="$HOME/.local/bin:$PATH"
 uv venv --python 3.11 .venv
 uv pip install essentia-tensorflow
-cp .env.example .env
 npm run build
-pm2 start "npx tsx server/index.ts" --name northernlights
-# Then open http://<your-server-ip>:3001 to finish setup in the UI Wizard
+npx tsx server/index.ts
 ```
 
-## Features
+Then open `http://localhost:3001`.
 
-- **URL-Based Navigation & Deep Linking**: Full React Router integration with meaningful URLs (`/library/artist/:id`, `/library/album/:id`, `/library/genre/:id`). Browser back/forward navigation works natively. Bookmark or share direct links to any artist, album, or genre page.
-- **UUID Entity System**: Artists, albums, and genres each have unique UUIDs with proper database tables. Multi-artist tracks (e.g. "Skrillex ft. Metallica") are split into individual artist entities, each with their own page showing where they appear.
-- **Modular Settings Architecture**: A fully refactored settings interface deconstructed into domain-specific modules (Account, Library, Database, Playback, AI). Features encapsulated polling and logic instantiation per-tab for optimized performance and a snappier user experience.
-- **Reactive Scanner UI**: Real-time library scanning feedback with reactive phase transitions (Walk → Metadata → Analysis). Monitor exactly what the server is processing with zero UI lag, powered by a dedicated SSE status stream.
-- **Gapless Playback**: Custom `PlaybackManager` supporting HTTP range requests to seamlessly stream high-quality audio files from your server to your browser.
-- **AI-Driven Playlists & Vector Recommendations**: Connect to local or cloud LLMs (like LM Studio or OpenAI) to generate hyper-personalized playlists via natural language. The current Hub engine is **library-relative**: it profiles the local library, compiles each LLM concept into locally-supported genre paths, adapts vectors to local feature percentiles, and builds playlists from explicit `core`, `adjacent`, `root`, `acoustic`, `discovery`, and `bridge` pools. Retrieval uses a hybrid **1288-dimensional** search (**8D acoustic semantic** + **1280D Discogs-EffNet** embeddings) on top of the **MusicBrainz** hierarchy, then applies a constrained diversity selector with song deduplication, artist spread controls, cluster penalties, recovery ladders, banned-genre handling, and per-playlist diagnostics. Fully tunable from Playback settings with `Genre Cohesion`, `Playlist Diversity`, `Discovery Bias`, `Artist Spread`, `Recovery Strength`, `Adjacent Reach`, and `Banned Genre Handling`.
-- **MusicBrainz Integration**: Native support for importing the official MusicBrainz genre ontology (~2,000+ genres). Includes a 3-step categorization pipeline (Direct SQL Match, LLM Batch Processing, and KNN/Artist Fallback) to map your library's tags to a standardized global hierarchy with zero token cost for core traversal.
-- **Playlist Management**: Create and delete playlists manually or via AI generation. Drag-and-drop track reordering with persistent queue state. **Pin** AI-generated playlists to protect them from auto-cleanup.
-- **Self-Cleaning Library**: Folder removal automatically purges orphaned album, artist, and genre entities. Includes a safety-net for path-encoding mismatches to ensure no "ghost" tracks or forbidden paths remain in the database.
-- **Global Search**: Instant search across artists, albums, and tracks with clickable results that navigate directly to entity pages.
-- **Advanced Play Queue & Context Menus**: Drag-and-drop track reordering, global "Play Next" and "Add to Playlist" context menus anywhere a track is visible.
-- **Rich External Metadata**: Native integrations with the **Last.fm** and **Genius** APIs to automatically fetch missing album artwork, high-resolution artist hero imagery, and rich biographies seamlessly on the frontend.
-- **Dynamic User Interface**: Premium "glassy" design system with frosted glass effects and interactive pill buttons. Features a custom **Canvas-based Waveform Progress Bar** that decodes audio peaks on-the-fly.
-- **Theme Parity**: Native Light and Dark mode support with carefully tuned contrast and theme-aware UI components.
-- **Cross-Device Ready**: Progressive Web App (PWA) compatible with a mobile-first design — edge-to-edge mini player, bottom tab navigation, full-screen Now Playing view with swipe gestures, and safe-area support for notched devices. Desktop keeps the premium floating player pill. **Google Cast (Chromecast)** support for streaming audio to cast devices.
-- **Production Secure**: Features path sanitization, express-based security policies, Basic API Authentication, and graceful Database failure handling to safely put your library on the public internet.
-- **Universal Format Support**: Native support for **MP3, FLAC, OGG, M4A, AAC, and WAV**. Seamless on-the-fly transcoding for **WMA (Windows Media Audio)** using FFmpeg.
+The setup flow will let you create the PostgreSQL container if one is not already running.
 
+## Configuration
 
-## Tech Stack
+Copy `.env.example` to `.env` and review at least:
 
-### Frontend
-- React 18
-- Vite
-- React Router DOM (URL-based routing)
-- Zustand (with Persist Middleware)
-- Tailwind CSS & Framer Motion
-- Lucide React (Icons)
+- `PORT`: default `3001`.
+- `ALLOWED_ORIGINS`: comma-separated browser origins allowed by CORS.
+- `DB_*`: PostgreSQL connection settings.
+- `DB_CONTAINER_NAME` and `DB_DATA_DIR`: managed database container settings.
+- `MBDB_WORK_DIR`: temporary MusicBrainz import workspace.
+- `SERVER_URL`: public base URL for OAuth callbacks when behind a reverse proxy.
+- `CAST_RECEIVER_APP_ID` and `CAST_RECEIVER_ORIGIN`: optional Chromecast custom receiver settings.
 
-### Backend
-- Node.js & Express
-- PostgreSQL (`pg` + `pgvector` via Podman/Docker)
-- music-metadata (Tag parsing)
-- Essentia.js WASM + FFmpeg (Audio feature extraction)
-- MusicBrainz (Hierarchical Taxonomy)
-- Basic Auth Middleware (Secure streaming)
+Most provider keys and AI settings can also be configured from the app settings UI.
 
-## Supported Formats
+## Production
 
-| Format | Support Type | Notes |
-| :--- | :--- | :--- |
-| **MP3** | Native | Full range/seek support |
-| **FLAC** | Native | Lossless, full range/seek support |
-| **OGG** | Native | Vorbis/Opus, full range/seek support |
-| **M4A / AAC** | Native | Full range/seek support |
-| **WAV** | Native | Full range/seek support |
-| **WMA** | Transcoded | **Requires FFmpeg** on server. Seek support currently disabled. |
+Recommended production shape:
 
+1. Run Aurora as an unprivileged user.
+2. Keep PostgreSQL data outside the repo or in a backed-up `DB_DATA_DIR`.
+3. Run the Node server with PM2 or systemd.
+4. Put Nginx, Caddy, or another TLS reverse proxy in front of port `3001`.
+5. Set `SERVER_URL` and `ALLOWED_ORIGINS` to your public HTTPS URL.
+6. Back up PostgreSQL data and `.env`.
 
-## Getting Started
+See [docs/production_guide.md](docs/production_guide.md) for concrete commands.
 
-### Prerequisites
-- Node.js (v18+ recommended)
-- `npm` or `yarn` (includes `bottleneck` for robust external API rate limiting)
-- **uv** (Optional but highly recommended) — *A fast Python package manager. Automatically fetched during setup to provide an isolated Python 3.11 environment since the ML models require specific Python versions.*
-- **FFmpeg** (v4.0+ recommended) — *Required for on-the-fly transcoding of non-native formats and ML audio extraction.*
-- **Podman** or **Docker** — *Required for the automatic PostgreSQL database container. The app auto-detects which is available (Podman preferred).*
+## Updating
 
-### Setup
+```bash
+cd ~/NorthernLights
+git pull
+npm ci
+uv pip install essentia-tensorflow
+npm run build
+pm2 restart aurora
+```
 
-1. **Clone the repository:**
-   ```bash
-   git clone <repository-url>
-   cd "Music App"
-   ```
+If you use the installer defaults, the PM2 process may be named `aurora` or `northernlights` depending on when it was installed. Check with `pm2 list`.
 
-2. **Database Container:**
-   - NorthernLights automatically manages its own PostgreSQL container using Podman or Docker. 
-   - No manual setup is required; the server will attempt to connect and start the container automatically on boot. 
-   - If the container does not exist, you can create it with a single click in the UI Setup Wizard.
+## Development
 
-3. **Install dependencies and ML Environment:**
-   ```bash
-   npm install
-   curl -LsSf https://astral.sh/uv/install.sh | sh
-   source $HOME/.local/bin/env
-   uv venv --python 3.11 .venv
-   uv pip install essentia-tensorflow
-   ```
+```bash
+npm install
+npm run dev
+```
 
-4. **Configure Environment Variables:**
-   - Copy `.env.example` to `.env`
-   ```bash
-   cp .env.example .env
-   ```
-   - Edit the `.env` file to set your PostgreSQL connection details and CORS origins.
+Development runs Vite and the Express server concurrently. Production builds are served by the Express server from `dist/`.
 
-5. **Running Locally (Development):**
-   ```bash
-   npm run dev
-   ```
-   This will concurrently start the Vite frontend server on `http://localhost:3000` and the Express backend on port `3001` (or whichever port specified in `.env`).
+Before submitting changes:
 
-6. **First-Time Setup:**
-   - Open the app in your browser. The Setup Wizard will guide you through creating your first admin account.
-   - After setup, use the Settings gear icon to manage your library, invite users, and configure integrations.
-
-## Settings & Integrations
-
-Once the app is running:
-1. Open the **Settings Modal** using the gear icon.
-2. Under "Library Paths", enter the absolute path to your music folders on your server/computer to index them.
-3. Under "External Providers", input your **Last.fm API Key** and **Genius Access Token** to automatically enrich your artists and genres with high-quality images and bios.
-
-## Deployment
-
-*(See the [Production Setup Guide](docs/production_guide.md) for complete production strategies)*
-
-To safely host NorthernLights on a public domain:
-1. Ensure your `.env` contains secure credentials.
-2. Ensure `ALLOWED_ORIGINS` in your `.env` lists your public domain URL (e.g., `https://music.yourdomain.com`).
-3. Build the frontend:
-   ```bash
-   npm run build
-   ```
-   This compiles everything into a `dist/` directory.
-4. Serve the application using `pm2` or Docker to keep the Express server running eternally:
-   ```bash
-    npx tsx server/index.ts
-    ```
+```bash
+npx tsc --noEmit
+npx vite build
+```
 
 ## License
 

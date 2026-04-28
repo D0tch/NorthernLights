@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { hasUsers, createUser, getUserByUsername, updateUser, deleteUser, updateLastLogin, createInvite, getInvite, isInviteValid, incrementInviteUses } from '../database';
 import { hashPassword, verifyPassword, generateToken } from '../services/auth.service';
+import { queueLlmHubRefreshForUser } from '../services/hubRefresh.service';
 
 const router = Router();
 
@@ -60,6 +61,7 @@ router.post('/login', async (req, res) => {
 
     await updateLastLogin(user.id);
     const token = await generateToken({ userId: user.id, username: user.username, role: user.role });
+    queueLlmHubRefreshForUser(user.id, 'login');
     res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
   } catch (error) {
     console.error('Login error:', error);
