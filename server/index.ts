@@ -284,7 +284,7 @@ async function runAutoWalk() {
     const { runSyncWalk } = await import('./routes/library.routes');
 
     const enabled = await getSystemSetting('autoFolderWalk');
-    if (enabled !== 'true') return;
+    if (enabled !== true && enabled !== 'true') return;
 
     if (scanStatus.isScanning) {
       console.log('[Auto-Walk] Skipping — scan already in progress');

@@ -83,6 +83,7 @@ export default defineConfig({
         ]
       },
       workbox: {
+        clientsClaim: true,
         runtimeCaching: [
           {
             // HLS transport stream segments — immutable chunks used by browser playback.

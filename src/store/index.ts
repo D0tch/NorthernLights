@@ -122,7 +122,7 @@ export interface Playlist {
   description: string | null;
   isLlmGenerated: boolean;
   isSystem?: boolean;
-  generationSource?: 'manual' | 'hub' | 'custom' | 'system';
+  generationSource?: 'manual' | 'hub' | 'custom' | 'system' | 'on-repeat' | 'repeat-rewind' | 'daylist' | 'artist-radio' | 'seasonal-rewind' | 'year-rewind';
   pinned?: boolean;
   createdAt?: number;
   tracks: TrackInfo[];
@@ -170,6 +170,7 @@ export interface PlayerState {
   libraryFolders: string[];
   isLibraryLoading: boolean;
   playlists: Playlist[];
+  isPlaylistsLoading: boolean;
 
   // Entity State (for navigation)
   artists: EntityInfo[];
@@ -629,6 +630,7 @@ export const usePlayerStore = create<PlayerState>()(
         libraryFolders: [] as string[],
         isLibraryLoading: false as boolean,
         playlists: [] as Playlist[],
+        isPlaylistsLoading: false as boolean,
         artists: [] as EntityInfo[],
         albums: [] as EntityInfo[],
         genres: [] as EntityInfo[],
@@ -1117,6 +1119,7 @@ export const usePlayerStore = create<PlayerState>()(
         },
 
         fetchPlaylistsFromServer: async () => {
+           set({ isPlaylistsLoading: true });
            try {
               const authHeaders = (get() as any).getAuthHeader();
               const res = await fetch('/api/playlists', { headers: authHeaders });
@@ -1146,6 +1149,8 @@ export const usePlayerStore = create<PlayerState>()(
               }
            } catch (e) {
               console.error("Failed to fetch playlists from server", e);
+           } finally {
+              set({ isPlaylistsLoading: false });
            }
         },
 

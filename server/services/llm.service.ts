@@ -2,7 +2,7 @@ import OpenAI from 'openai';
 import { getSystemSetting } from '../database';
 import { getGenreVocabulary } from './genreMatrix.service';
 
-async function getLlmConfig() {
+export async function getLlmConfig() {
   const apiKey = (await getSystemSetting('llmApiKey')) || process.env.LLM_API_KEY || 'dummy-key';
   const baseUrl = (await getSystemSetting('llmBaseUrl')) || process.env.LLM_BASE_URL || 'https://api.openai.com/v1';
   const modelName = (await getSystemSetting('llmModelName')) || process.env.LLM_MODEL_NAME || 'gpt-4';
@@ -12,7 +12,7 @@ async function getLlmConfig() {
 // Robustly extract the first valid JSON object or array from an LLM response.
 // Many local providers (LM Studio, Ollama) don't honour response_format and wrap
 // JSON in markdown fences or add preamble text. This handles all common cases.
-function extractJson(text: string): any {
+export function extractJson(text: string): any {
   // 1. Try parsing the whole string first (clean case)
   try { return JSON.parse(text); } catch { }
 
@@ -61,7 +61,7 @@ export async function generateHubConcepts(
   // Fetch MBDB vocabulary to constrain LLM genre choices
   const vocabulary = await getGenreVocabulary();
   const vocabStr = vocabulary.length > 0
-    ? `\nYou MUST only use genre names from this vocabulary for "target_genres" and "banned_genres":\n${vocabulary.join(', ')}\n`
+    ? `\nYou MUST only use genre names from this vocabulary for "target_genres" and "banned_genres":\n${vocabulary.join(', ')}\nPrefer specific library-supported genres from the vocabulary over broad root genres. Use broad roots only when no specific vocabulary term fits.\n`
     : '';
 
   const prompt = `
@@ -73,8 +73,8 @@ Using this context, generate ${conceptCount} Hub playlist concepts. Each concept
 IMPORTANT: Each concept must be DIVERSE from the others. Vary the energy, mood, and acoustic profile significantly between concepts. Do not create similar-sounding playlists.
 The vector array must precisely match this order: [energy, brightness, percussiveness, chromagram, instrumentalness, acousticness, danceability, tempo].
 - tempo: normalized BPM where 0.0 = 60 BPM (slow), 0.5 = 120 BPM (moderate), 1.0 = 200+ BPM (fast)
-You must also include "target_genres": an array of 2-3 standard broad genre keywords that best match the playlist's mood and concept.
-You must also include "banned_genres": an array of 2-5 genre keywords that should be ABSOLUTELY EXCLUDED from this playlist. These are genres that clash with the playlist's mood (e.g., a "Club Fever" playlist should ban "rock", "country", "classical").
+You must also include "target_genres": an array of 2-4 genre names that best match the playlist's mood and concept. Prefer specific, library-supported genre names so the recommendation engine can anchor the playlist locally.
+You must also include "banned_genres": an array of 2-5 genre names that should be ABSOLUTELY EXCLUDED from this playlist. These are genres that clash with the playlist's mood (e.g., a "Club Fever" playlist should ban "rock", "country", "classical").
 Only output valid JSON matching this schema:
 {
   "hub_collections": [
@@ -195,7 +195,7 @@ export async function generateCustomPlaylist(userPrompt: string): Promise<HubCol
   // Fetch MBDB vocabulary to constrain LLM genre choices
   const vocabulary = await getGenreVocabulary();
   const vocabStr = vocabulary.length > 0
-    ? `\nYou MUST only use genre names from this vocabulary for "target_genres" and "banned_genres":\n${vocabulary.join(', ')}\n`
+    ? `\nYou MUST only use genre names from this vocabulary for "target_genres" and "banned_genres":\n${vocabulary.join(', ')}\nPrefer specific library-supported genres from the vocabulary over broad root genres. Use broad roots only when no specific vocabulary term fits.\n`
     : '';
 
   const prompt = `
@@ -216,8 +216,8 @@ The vector array is an 8-dimensional fingerprint: [energy, brightness, percussiv
 Choose values that PRECISELY match the mood of the user's description. 
 For example: "chill" or "wind-down" → low energy (0.1-0.3), high acousticness (0.6-0.9), low percussiveness (0.1-0.3), low danceability (0.1-0.3).
 
-You must also include "target_genres": an array of 2-3 standard broad genre keywords that best match the user's request.
-You must also include "banned_genres": an array of 2-5 genre keywords that should be ABSOLUTELY EXCLUDED from this playlist. These are genres that clash with the playlist's mood.
+You must also include "target_genres": an array of 2-4 genre names that best match the user's request. Prefer specific, library-supported genre names so the recommendation engine can anchor the playlist locally.
+You must also include "banned_genres": an array of 2-5 genre names that should be ABSOLUTELY EXCLUDED from this playlist. These are genres that clash with the playlist's mood.
 
 Only output valid JSON matching this schema exactly:
 {
