@@ -4,8 +4,6 @@ Aurora is a self-hosted web music player for local libraries. It scans folders o
 
 The project lives in the `NorthernLights` repository, but the product name in the app is Aurora Media Server / NorthernLights Media Player.
 
-[![Buy Me a Coffee at ko-fi.com](https://storage.ko-fi.com/cdn/kofi6.png?v=6)](https://ko-fi.com/X8X51YLFS8)
-
 ## Status
 
 Current release: `1.0.0-beta.3`
@@ -127,6 +125,8 @@ Before submitting changes:
 npx tsc --noEmit
 npx vite build
 ```
+
+[![Buy Me a Coffee at ko-fi.com](https://storage.ko-fi.com/cdn/kofi6.png?v=6)](https://ko-fi.com/X8X51YLFS8)
 
 ## License
 
