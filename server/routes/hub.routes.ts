@@ -1,91 +1,10 @@
 import { Router } from 'express';
-import { getSystemSetting, getUserSetting, getPlaylists, deleteOldLlmPlaylists, getUserRecentTracks, listUsers } from '../database';
-import { generateHubConcepts, generateCustomPlaylist, HubCollection } from '../services/llm.service';
+import { getPlaylists } from '../database';
+import { generateCustomPlaylist } from '../services/llm.service';
 import { getHubCollections } from '../services/recommendation.service';
-import { dbConnected } from '../state';
+import { getLlmPlaylistSettings, queueLlmHubRefreshForUser, runLlmHubRegeneration } from '../services/hubRefresh.service';
 
 const router = Router();
-
-// Internal helper: generate LLM playlists if config is present and cache is stale
-async function runLlmHubRegeneration(userId: string, opts: { force?: boolean } = {}) {
-  const llmBaseUrl = (await getSystemSetting('llmBaseUrl')) || process.env.LLM_BASE_URL || '';
-
-  if (!llmBaseUrl) {
-    return { skipped: true, reason: 'No LLM base URL configured' };
-  }
-
-  const fourHoursMs = 4 * 60 * 60 * 1000;
-  const maxAgeMs = opts.force ? 0 : fourHoursMs;
-  const deletedCount = await deleteOldLlmPlaylists(maxAgeMs, userId);
-  if (deletedCount && deletedCount > 0) {
-    console.log(`[LLM Hub] ${opts.force ? 'Reset' : 'Cleaned up'} ${deletedCount} LLM playlist(s) for user ${userId}`);
-  }
-
-  const existingPlaylists = await getPlaylists(userId);
-
-  const hasRecentLlm = existingPlaylists.some((pl: any) =>
-    pl.isLlmGenerated && (Date.now() - pl.createdAt) < fourHoursMs
-  );
-
-  if (hasRecentLlm && !opts.force) {
-    return { skipped: true, reason: 'Recent LLM playlists exist (< 4h old)' };
-  }
-
-  const recentTracks = await getUserRecentTracks(userId, 10);
-  const historySummary = recentTracks.map((t: any) => `${t.title} by ${t.artist}`).join(', ');
-
-  const timeOfDay = new Date().getHours() < 12 ? 'morning' : new Date().getHours() < 18 ? 'afternoon' : 'evening';
-
-  const llmPlaylistCountRaw = await getUserSetting(userId, 'llmPlaylistCount');
-  const llmPlaylistCount = llmPlaylistCountRaw ? Number(llmPlaylistCountRaw) : 3;
-
-  const genreCohesionRaw = await getUserSetting(userId, 'llmGenreCohesion');
-  const legacyGenreBlendRaw = genreCohesionRaw === null ? await getUserSetting(userId, 'genreBlendWeight') : null;
-  const discoveryBiasRaw = await getUserSetting(userId, 'llmDiscoveryBias');
-  const artistSpreadRaw = await getUserSetting(userId, 'llmArtistSpread');
-  const penaltyCurveRaw = await getUserSetting(userId, 'genrePenaltyCurve');
-  const recoveryStrengthRaw = await getUserSetting(userId, 'llmRecoveryStrength');
-  const adjacentReachRaw = await getUserSetting(userId, 'llmAdjacentReach');
-  const tracksPerRaw = await getUserSetting(userId, 'llmTracksPerPlaylist');
-  const diversityRaw = await getUserSetting(userId, 'llmPlaylistDiversity');
-  const vetoModeRaw = await getUserSetting(userId, 'llmVetoMode');
-
-  const hubSettings = {
-    llmGenreCohesion: genreCohesionRaw !== null ? Number(genreCohesionRaw) : (legacyGenreBlendRaw !== null ? Number(legacyGenreBlendRaw) : 50),
-    llmDiscoveryBias: discoveryBiasRaw !== null ? Number(discoveryBiasRaw) : 45,
-    llmArtistSpread: artistSpreadRaw !== null ? Number(artistSpreadRaw) : 70,
-    genrePenaltyCurve: penaltyCurveRaw !== null ? Number(penaltyCurveRaw) : 50,
-    llmRecoveryStrength: recoveryStrengthRaw !== null ? Number(recoveryStrengthRaw) : 50,
-    llmAdjacentReach: adjacentReachRaw !== null ? Number(adjacentReachRaw) : 50,
-    llmTracksPerPlaylist: tracksPerRaw !== null ? Number(tracksPerRaw) : 10,
-    llmPlaylistDiversity: diversityRaw !== null ? Number(diversityRaw) : 50,
-    llmVetoMode: vetoModeRaw === 'adaptive' ? 'adaptive' as const : 'hard' as const,
-  };
-
-  let validConcepts: HubCollection[] = [];
-  let attempts = 0;
-  const MAX_ATTEMPTS = 3;
-
-  while (validConcepts.length < llmPlaylistCount && attempts < MAX_ATTEMPTS) {
-    const needed = llmPlaylistCount - validConcepts.length;
-    const concepts: HubCollection[] = await generateHubConcepts({ timeOfDay, historySummary, count: needed });
-
-    if (concepts.length > 0) {
-      await getHubCollections(concepts, userId, hubSettings);
-      const kept = concepts.filter(c => !(c as any).dropped);
-      validConcepts.push(...kept);
-      
-      if (kept.length < concepts.length) {
-         console.warn(`[LLM Hub] (Attempt ${attempts + 1}/${MAX_ATTEMPTS}) ${concepts.length - kept.length} concepts dropped. Retrying...`);
-         if (attempts < MAX_ATTEMPTS - 1) await new Promise(r => setTimeout(r, 2000)); // Backoff
-      }
-    }
-    attempts++;
-  }
-
-  console.log(`[LLM Hub] Generated and saved ${validConcepts.length} playlist(s) for user ${userId} (${timeOfDay})`);
-  return { generated: validConcepts.length };
-}
 
 // Get Hub Data (per-user)
 router.get('/', async (req, res) => {
@@ -93,6 +12,7 @@ router.get('/', async (req, res) => {
     const userId = req.user?.userId;
     if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
+    queueLlmHubRefreshForUser(userId, 'hub-view');
     const collections = await getHubCollections([], userId);
     res.json({ collections });
   } catch (error) {
@@ -108,7 +28,7 @@ router.post('/regenerate', async (req, res) => {
     if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
     const { force } = req.body;
-    const result = await runLlmHubRegeneration(userId, { force: !!force });
+    const result = await runLlmHubRegeneration(userId, { force: !!force, source: 'manual' });
     res.json(result);
   } catch (error) {
     console.error('Hub regeneration error:', error);
@@ -126,27 +46,9 @@ router.post('/generate-custom', async (req, res) => {
     if (!prompt || typeof prompt !== 'string' || !prompt.trim()) {
       return res.status(400).json({ error: 'A prompt is required' });
     }
-    const genreCohesionRaw = userId ? await getUserSetting(userId, 'llmGenreCohesion') : null;
-    const legacyGenreBlendRaw = userId && genreCohesionRaw === null ? await getUserSetting(userId, 'genreBlendWeight') : null;
-    const discoveryBiasRaw = userId ? await getUserSetting(userId, 'llmDiscoveryBias') : null;
-    const artistSpreadRaw = userId ? await getUserSetting(userId, 'llmArtistSpread') : null;
-    const penaltyCurveRaw = userId ? await getUserSetting(userId, 'genrePenaltyCurve') : null;
-    const recoveryStrengthRaw = userId ? await getUserSetting(userId, 'llmRecoveryStrength') : null;
-    const adjacentReachRaw = userId ? await getUserSetting(userId, 'llmAdjacentReach') : null;
-    const tracksPerRaw = userId ? await getUserSetting(userId, 'llmTracksPerPlaylist') : null;
-    const diversityRaw = userId ? await getUserSetting(userId, 'llmPlaylistDiversity') : null;
-    const vetoModeRaw = userId ? await getUserSetting(userId, 'llmVetoMode') : null;
-    const hubSettings = {
-      llmGenreCohesion: genreCohesionRaw !== null ? Number(genreCohesionRaw) : (legacyGenreBlendRaw !== null ? Number(legacyGenreBlendRaw) : 50),
-      llmDiscoveryBias: discoveryBiasRaw !== null ? Number(discoveryBiasRaw) : 45,
-      llmArtistSpread: artistSpreadRaw !== null ? Number(artistSpreadRaw) : 70,
-      genrePenaltyCurve: penaltyCurveRaw !== null ? Number(penaltyCurveRaw) : 50,
-      llmRecoveryStrength: recoveryStrengthRaw !== null ? Number(recoveryStrengthRaw) : 50,
-      llmAdjacentReach: adjacentReachRaw !== null ? Number(adjacentReachRaw) : 50,
-      llmTracksPerPlaylist: tracksPerRaw !== null ? Number(tracksPerRaw) : 10,
-      llmPlaylistDiversity: diversityRaw !== null ? Number(diversityRaw) : 50,
-      llmVetoMode: vetoModeRaw === 'adaptive' ? 'adaptive' as const : 'hard' as const,
-    };
+    const hubSettings = await getLlmPlaylistSettings(userId);
+    const existingPlaylists = await getPlaylists(userId);
+    const existingIds = new Set(existingPlaylists.map((playlist: any) => playlist.id));
 
     let playlist = null;
     let attempts = 0;
@@ -157,8 +59,11 @@ router.post('/generate-custom', async (req, res) => {
         continue;
       }
       
-      const saved = await getHubCollections([concept], userId, hubSettings);
-      playlist = saved.find(c => c.isLlmGenerated && c.title === (concept.title || concept.section));
+      const saved = await getHubCollections([concept], userId, {
+        ...hubSettings,
+        llmGenerationSource: 'custom',
+      });
+      playlist = saved.find((candidate: any) => candidate.isLlmGenerated && candidate.id && !existingIds.has(candidate.id));
       
       if (!playlist || (concept as any).dropped) {
         console.warn(`[LLM Hub] Custom concept failed/dropped on attempt ${attempts + 1}. Retrying...`);
@@ -179,31 +84,5 @@ router.post('/generate-custom', async (req, res) => {
     res.status(500).json({ error: 'Failed to generate custom playlist' });
   }
 });
-
-// Schedule: Re-run LLM hub regeneration periodically (per-user)
-const LLM_HUB_INTERVAL_MS = 60 * 60 * 1000;
-setInterval(async () => {
-  try {
-    if (!dbConnected) return;
-    const schedule = await getSystemSetting('hubGenerationSchedule') || 'Daily';
-    if (schedule === 'Manual Only') return;
-
-    console.log('[LLM Hub] Scheduled refresh check...');
-    try {
-      const users = await listUsers();
-      for (const user of users) {
-        try {
-          await runLlmHubRegeneration(user.id);
-        } catch (e) {
-          console.error(`[LLM Hub] Scheduled refresh failed for user ${user.username}:`, e);
-        }
-      }
-    } catch (e) {
-      console.error('[LLM Hub] Scheduled refresh failed:', e);
-    }
-  } catch (e) {
-    console.error('[LLM Hub] Scheduled interval error:', e);
-  }
-}, LLM_HUB_INTERVAL_MS);
 
 export default router;
