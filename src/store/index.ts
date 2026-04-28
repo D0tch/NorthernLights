@@ -58,6 +58,40 @@ const dedupeTrackIds = (trackIds: string[]): string[] => {
   return result;
 };
 
+const normalizeHubGenerationSchedule = (value: unknown): string => {
+  const schedule = typeof value === 'string' ? value : '';
+  return ['Manual Only', 'Hourly', 'Every 2 Hours', 'Every 4 Hours', 'Daily'].includes(schedule)
+    ? schedule
+    : 'Daily';
+};
+
+const normalizeMbdbLastImport = (value: unknown): PlayerState['mbdbLastImported'] => {
+  if (!value) return null;
+
+  let parsed = value;
+  if (typeof value === 'string') {
+    try {
+      parsed = JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+
+  if (!parsed || typeof parsed !== 'object') return null;
+  const info = parsed as Partial<NonNullable<PlayerState['mbdbLastImported']>>;
+  const counts = (info.counts || {}) as Partial<NonNullable<PlayerState['mbdbLastImported']>['counts']>;
+
+  return {
+    timestamp: Number(info.timestamp || 0),
+    duration: Number(info.duration || 0),
+    counts: {
+      genres: Number(counts.genres || 0),
+      aliases: Number(counts.aliases || 0),
+      links: Number(counts.links || 0),
+    },
+  };
+};
+
 const hydratePlaylistTracks = (
   trackIds: string[],
   library: TrackInfo[],
@@ -88,6 +122,7 @@ export interface Playlist {
   description: string | null;
   isLlmGenerated: boolean;
   isSystem?: boolean;
+  generationSource?: 'manual' | 'hub' | 'custom' | 'system';
   pinned?: boolean;
   createdAt?: number;
   tracks: TrackInfo[];
@@ -192,6 +227,7 @@ export interface PlayerState {
   musicBrainzConnected: boolean;
   musicBrainzRedirectUri: string;
   providerArtistImage: 'lastfm' | 'genius' | 'musicbrainz';
+  providerArtistArtwork: 'genius' | 'none';
   providerArtistBio: 'lastfm' | 'genius';
   providerAlbumArt: 'lastfm' | 'genius' | 'musicbrainz';
   authToken: string | null; // JWT token
@@ -337,6 +373,7 @@ export interface PlayerState {
   setMusicBrainzConnected: (connected: boolean) => void;
   setMusicBrainzRedirectUri: (uri: string) => void;
   setProviderArtistImage: (provider: 'lastfm' | 'genius' | 'musicbrainz') => void;
+  setProviderArtistArtwork: (provider: 'genius' | 'none') => void;
   setProviderArtistBio: (provider: 'lastfm' | 'genius') => void;
   setProviderAlbumArt: (provider: 'lastfm' | 'genius' | 'musicbrainz') => void;
   setLlmConnected: (connected: boolean) => void;
@@ -660,6 +697,7 @@ export const usePlayerStore = create<PlayerState>()(
         musicBrainzConnected: false as boolean,
         musicBrainzRedirectUri: '',
         providerArtistImage: 'lastfm' as 'lastfm' | 'genius' | 'musicbrainz',
+        providerArtistArtwork: 'genius' as 'genius' | 'none',
         providerArtistBio: 'lastfm' as 'lastfm' | 'genius',
         providerAlbumArt: 'lastfm' as 'lastfm' | 'genius' | 'musicbrainz',
         jambaseEnabled: false as boolean,
@@ -854,11 +892,11 @@ export const usePlayerStore = create<PlayerState>()(
                 llmPlaylistCount: data.llmPlaylistCount !== undefined ? data.llmPlaylistCount : 3,
                 audioAnalysisCpu: data.audioAnalysisCpu || 'Balanced',
                 scannerConcurrency: data.scannerConcurrency || 'SSD',
-                hubGenerationSchedule: data.hubGenerationSchedule || 'Daily',
+                hubGenerationSchedule: normalizeHubGenerationSchedule(data.hubGenerationSchedule),
                 llmBaseUrl: data.llmBaseUrl || '',
                 llmApiKey: data.llmApiKey || '',
                 llmModelName: data.llmModelName || '',
-                mbdbLastImported: data.mbdbLastImport || null,
+                mbdbLastImported: normalizeMbdbLastImport(data.mbdbLastImport),
                 genreMatrixLastRun: data.genreMatrixLastRun || null,
                 genreMatrixLastResult: data.genreMatrixLastResult || null,
                 genreMatrixProgress: data.genreMatrixProgress || null,
@@ -877,6 +915,7 @@ export const usePlayerStore = create<PlayerState>()(
                 musicBrainzConnected: data.musicBrainzConnected ?? false,
                 musicBrainzRedirectUri: data.musicBrainzRedirectUri || '',
                 providerArtistImage: data.providerArtistImage || 'lastfm',
+                providerArtistArtwork: data.providerArtistArtwork || 'genius',
                 providerArtistBio: data.providerArtistBio || 'lastfm',
                 providerAlbumArt: data.providerAlbumArt || 'lastfm',
                 autoFolderWalk: data.autoFolderWalk === 'true' || data.autoFolderWalk === true,
@@ -947,6 +986,7 @@ export const usePlayerStore = create<PlayerState>()(
                 musicBrainzClientSecret: state.musicBrainzClientSecret,
                 musicBrainzRedirectUri: state.musicBrainzRedirectUri,
                 providerArtistImage: state.providerArtistImage,
+                providerArtistArtwork: state.providerArtistArtwork,
                 providerArtistBio: state.providerArtistBio,
                 providerAlbumArt: state.providerAlbumArt,
                 autoFolderWalk: state.autoFolderWalk,
@@ -1729,6 +1769,7 @@ export const usePlayerStore = create<PlayerState>()(
         setMusicBrainzConnected: (connected: boolean) => set({ musicBrainzConnected: connected }),
         setMusicBrainzRedirectUri: (uri: string) => set({ musicBrainzRedirectUri: uri }),
         setProviderArtistImage: (provider: 'lastfm' | 'genius' | 'musicbrainz') => set({ providerArtistImage: provider }),
+        setProviderArtistArtwork: (provider: 'genius' | 'none') => set({ providerArtistArtwork: provider }),
         setProviderArtistBio: (provider: 'lastfm' | 'genius') => set({ providerArtistBio: provider }),
         setProviderAlbumArt: (provider: 'lastfm' | 'genius' | 'musicbrainz') => set({ providerAlbumArt: provider }),
         setLlmConnected: (connected: boolean) => set({ llmConnected: connected }),
@@ -1804,6 +1845,7 @@ export const usePlayerStore = create<PlayerState>()(
         musicBrainzRedirectUri: state.musicBrainzRedirectUri,
         llmConnected: state.llmConnected,
         providerArtistImage: state.providerArtistImage,
+        providerArtistArtwork: state.providerArtistArtwork,
         providerArtistBio: state.providerArtistBio,
         providerAlbumArt: state.providerAlbumArt,
         authToken: state.authToken,
