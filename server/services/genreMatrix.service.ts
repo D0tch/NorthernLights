@@ -279,8 +279,8 @@ export class GenreMatrixService {
         }
       }
 
-      // --- TIER 3: KNN TIMBRE FALLBACK ---
-      console.log(`[GenreMatrix] Tier 3: Running KNN Timbre Recovery (21D) for remaining tracks...`);
+      // --- TIER 3: KNN AUDIO FALLBACK ---
+      console.log(`[GenreMatrix] Tier 3: Running KNN audio recovery (MusiCNN + EffNet) for remaining tracks...`);
       let knnCount = 0;
 
       // Collect tracks needing KNN and batch-fetch features in one query
@@ -298,26 +298,28 @@ export class GenreMatrixService {
           const trackIds = tracksNeedingKnn.map(t => t.trackId);
           const placeholders = trackIds.map((_, i) => `$${i + 1}`).join(',');
           const featuresRes = await queryWithRetry(`
-            SELECT tf.track_id, tf.acoustic_vector_8d, tf.mfcc_vector
+            SELECT tf.track_id, tf.acoustic_vector_8d, tf.embedding_vector
             FROM track_features tf
             WHERE tf.track_id IN (${placeholders})
               AND tf.acoustic_vector_8d IS NOT NULL
           `, trackIds);
 
-          const featureMap = new Map<string, { vec8: number[], vecMfcc?: number[] }>();
+          const featureMap = new Map<string, { vec8: number[], embedding?: number[] }>();
           for (const row of featuresRes.rows) {
               const vec8 = JSON.parse(row.acoustic_vector_8d);
               if (vec8.some((v: number) => !isFinite(v))) continue;
-              const rawMfcc = row.mfcc_vector ? JSON.parse(row.mfcc_vector) : undefined;
-              const vecMfcc = rawMfcc && rawMfcc.some((v: number) => !isFinite(v)) ? undefined : rawMfcc;
-              featureMap.set(row.track_id, { vec8, vecMfcc });
+              const rawEmbedding = row.embedding_vector ? JSON.parse(row.embedding_vector) : undefined;
+              const embedding = rawEmbedding && rawEmbedding.length === 1280 && !rawEmbedding.some((v: number) => !isFinite(v))
+                ? rawEmbedding
+                : undefined;
+              featureMap.set(row.track_id, { vec8, embedding });
           }
 
           for (const { trackId, effectiveKey } of tracksNeedingKnn) {
               if (mappings[effectiveKey]) continue; // May have been set by earlier iteration
               const features = featureMap.get(trackId);
               if (!features) continue;
-              const knnPath = await getGenrePathFromKNN(features.vec8, features.vecMfcc);
+              const knnPath = await getGenrePathFromKNN(features.vec8, features.embedding);
               if (knnPath) {
                   await upsertSubGenreMapping(effectiveKey, knnPath);
                   mappings[effectiveKey] = knnPath;

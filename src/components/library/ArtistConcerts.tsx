@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { Ticket, MapPin, Calendar, ArrowRight, AlertTriangle } from 'lucide-react';
+import { HorizontalScrollRail } from '../HorizontalScrollRail';
 
 export type ArtistEvent = {
     jambase_event_id: string;
@@ -77,8 +78,8 @@ export const OnTourSticker: React.FC<{ visible: boolean }> = ({ visible }) => {
                 rounded-full
                 text-[11px] font-bold uppercase tracking-[0.12em]
                 text-white
-                bg-gradient-to-r from-[var(--color-primary)] to-emerald-500
-                shadow-[0_2px_8px_rgba(16,185,129,0.35)]
+                bg-[var(--color-accent)]
+                shadow-[0_2px_8px_rgba(244,63,94,0.35)]
                 animate-[pulse_3s_ease-in-out_infinite]
             "
             role="status"
@@ -232,7 +233,7 @@ export const UpcomingShows: React.FC<UpcomingShowsProps> = ({ events, loading, s
                         Upcoming shows
                     </h3>
                 </div>
-                <div className="flex gap-3 overflow-x-auto pb-1 snap-x snap-mandatory">
+                <div className="flex gap-3 overflow-x-auto pb-1 snap-x snap-mandatory hide-scrollbar">
                     {[0, 1, 2].map(i => (
                         <div
                             key={i}
@@ -264,13 +265,16 @@ export const UpcomingShows: React.FC<UpcomingShowsProps> = ({ events, loading, s
                     </span>
                 )}
             </div>
-            <div className="flex gap-3 overflow-x-auto pb-1 snap-x snap-mandatory">
+            <HorizontalScrollRail
+                ariaLabel="Upcoming shows"
+                viewportClassName="flex gap-3 overflow-x-auto pb-1 snap-x snap-mandatory"
+            >
                 {visible.map(e => (
                     <div key={e.jambase_event_id} className="min-w-[78vw] snap-start md:min-w-[calc((100%-1.5rem)/3)]">
                         <MiniEventCard event={e} />
                     </div>
                 ))}
-            </div>
+            </HorizontalScrollRail>
         </section>
     );
 };

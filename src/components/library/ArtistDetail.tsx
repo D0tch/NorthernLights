@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { TrackInfo } from '../../utils/fileSystem';
@@ -11,7 +11,7 @@ import { BackButton } from './BackButton';
 import { FadedHeroImage } from './FadedHeroImage';
 import { ArtistInitial } from './ArtistInitial';
 import { formatTime } from '../../utils/formatTime';
-import { ExternalLink, Globe, Users, Mic2, Calendar, Sparkles, Music2, Clock, BookOpen, Play, Headphones, Link2, Disc3 } from 'lucide-react';
+import { ExternalLink, Globe, Users, Mic2, Calendar, Sparkles, Music2, Clock, BookOpen, Play, Headphones, Link2, Disc3, Radio } from 'lucide-react';
 import { ContextMenuFrame, ContextMenuHeader, ContextMenuLink, ContextMenuList, ContextMenuPortal } from '../ContextMenu';
 import { useArtistConcerts, OnTourSticker, UpcomingShows } from './ArtistConcerts';
 
@@ -189,12 +189,36 @@ const SimilarArtistsSection: React.FC<{ artists: SimilarArtist[]; loading: boole
     );
 };
 
+const ArtistDetailSkeleton: React.FC<{ onBack: () => void }> = ({ onBack }) => (
+    <div className="artist-detail page-container relative">
+        <div className="relative z-10">
+            <BackButton onClick={onBack} />
+            <section className="flex flex-col md:flex-row items-center md:items-end gap-8 mb-10 md:mb-14">
+                <div className="w-48 h-48 md:w-64 md:h-64 rounded-full shrink-0 bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                <div className="flex-1 w-full space-y-4 text-center md:text-left">
+                    <div className="h-12 md:h-16 w-3/4 max-w-xl rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+                    <div className="h-4 w-56 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+                    <div className="h-10 w-36 rounded-full bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+                </div>
+            </section>
+            <div className="mb-12 max-w-3xl space-y-2">
+                <div className="h-4 w-full rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                <div className="h-4 w-5/6 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                <div className="h-4 w-2/3 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+            </div>
+            <div className="album-grid">
+                {Array.from({ length: 6 }).map((_, i) => <AlbumCardSkeleton key={i} />)}
+            </div>
+        </div>
+    </div>
+);
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export const ArtistDetail: React.FC = () => {
     const { artistId } = useParams<{ artistId: string }>();
     const navigate = useNavigate();
-    const { library, artists, setPlaylist, getAuthHeader } = usePlayerStore();
+    const { library, artists, setPlaylist, getAuthHeader, isLibraryLoading } = usePlayerStore();
 
     // Find artist info from entity list
     const artistInfo = useMemo(() => artists.find(a => a.id === artistId), [artists, artistId]);
@@ -218,7 +242,30 @@ export const ArtistDetail: React.FC = () => {
     const [popularExpanded, setPopularExpanded] = useState(false);
     const [similarArtists, setSimilarArtists] = useState<SimilarArtist[]>([]);
     const [similarArtistsLoading, setSimilarArtistsLoading] = useState(false);
+    const [radioLoading, setRadioLoading] = useState(false);
     const linksButtonRef = useRef<HTMLButtonElement>(null);
+
+    const handlePlayArtistRadio = async () => {
+        if (!artistId || radioLoading) return;
+        setRadioLoading(true);
+        try {
+            const res = await fetch('/api/hub/artist-radio', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                body: JSON.stringify({ artistId }),
+            });
+            if (!res.ok) throw new Error('Failed to load radio');
+            const { playlist } = await res.json();
+            const tracks = (playlist?.tracks || [])
+                .map((t: any) => library.find(lt => lt.id === t.id) || t)
+                .filter(Boolean);
+            if (tracks.length > 0) setPlaylist(tracks, 0);
+        } catch (e) {
+            console.error('[Artist Radio] Failed to start radio', e);
+        } finally {
+            setRadioLoading(false);
+        }
+    };
 
     useEffect(() => {
         if (!artistId) {
@@ -379,6 +426,16 @@ export const ArtistDetail: React.FC = () => {
         }).slice(0, 10);
     }, [externalTopTracks, primaryTracks, featuredTracks]);
 
+    const hasPopularInLibrary = popularLibraryTracks.length > 0;
+    const popularTrackQueue = useMemo(
+        () => popularLibraryTracks.map(entry => entry.track),
+        [popularLibraryTracks]
+    );
+    const handlePlayPopularTracks = useCallback((startIndex = 0) => {
+        if (popularTrackQueue.length === 0) return;
+        setPlaylist(popularTrackQueue, startIndex);
+    }, [popularTrackQueue, setPlaylist]);
+
     // Merged, deduplicated tags: communityTags take priority; plain genres fill in unique gaps
     const mergedTags = useMemo(() => {
         const result: Array<{ name: string; isCommunity: boolean; providers?: string[]; count?: number }> = [];
@@ -401,6 +458,10 @@ export const ArtistDetail: React.FC = () => {
     }, [genres, communityTags]);
 
     const hasAnyContent = primaryTracks.length > 0 || featuredTracks.length > 0;
+
+    if (isLibraryLoading && (!artistName || !hasAnyContent)) {
+        return <ArtistDetailSkeleton onBack={() => navigate(-1)} />;
+    }
 
     if (!artistName || !hasAnyContent) return (
         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
@@ -512,13 +573,30 @@ export const ArtistDetail: React.FC = () => {
                         <div className="mt-4 mb-4 flex flex-wrap items-center gap-3">
                             <button
                                 type="button"
-                                disabled
-                                title="Artist radio is not ready yet"
-                                className="flex items-center justify-center gap-2 px-8 py-3.5 bg-[var(--color-primary)] text-white font-bold text-sm tracking-widest uppercase rounded-full shadow-[0_4px_24px_rgba(16,185,129,0.22)] opacity-55 cursor-not-allowed w-full sm:w-auto"
+                                onClick={handlePlayArtistRadio}
+                                disabled={!artistId || radioLoading}
+                                title={radioLoading ? 'Building radio…' : 'Play a mix inspired by this artist'}
+                                aria-label={hasPopularInLibrary ? 'Play artist radio' : undefined}
+                                className={`${hasPopularInLibrary ? 'h-12 w-12 px-0 shrink-0' : 'w-full px-8 sm:w-auto'} flex items-center justify-center gap-2 py-3.5 bg-[var(--color-primary)] text-white font-bold text-sm tracking-widest uppercase rounded-full shadow-[0_4px_24px_rgba(16,185,129,0.22)] hover:bg-[var(--color-primary-dark)] hover:scale-[1.02] active:scale-[0.98] disabled:opacity-55 disabled:cursor-not-allowed transition-ui`}
                             >
-                                <Play size={18} fill="currentColor" className="ml-1" />
-                                Play artist radio
+                                {radioLoading ? (
+                                    <span className="w-[18px] h-[18px] rounded-full border-2 border-white/40 border-t-white animate-spin" />
+                                ) : (
+                                    <Radio size={18} />
+                                )}
+                                {!hasPopularInLibrary && (radioLoading ? 'Building…' : 'Play artist radio')}
                             </button>
+
+                            {hasPopularInLibrary && (
+                                <button
+                                    type="button"
+                                    onClick={() => handlePlayPopularTracks(0)}
+                                    className="flex min-w-0 flex-1 items-center justify-center gap-2 rounded-full bg-[var(--color-primary)] px-6 py-3.5 text-sm font-bold uppercase tracking-widest text-white shadow-[0_4px_24px_rgba(16,185,129,0.22)] transition-ui hover:bg-[var(--color-primary-dark)] hover:scale-[1.02] active:scale-[0.98] sm:flex-none"
+                                >
+                                    <Play className="h-4 w-4 shrink-0" fill="currentColor" />
+                                    <span className="truncate">Play {artistName}</span>
+                                </button>
+                            )}
 
                             <button
                                 ref={linksButtonRef}
@@ -611,20 +689,13 @@ export const ArtistDetail: React.FC = () => {
                     </div>
                 </div>
 
-                {popularLibraryTracks.length > 0 && (
+                {hasPopularInLibrary && (
                     <section className="mb-12">
                         <div className="flex items-center justify-between gap-4 mb-4 md:mb-6 border-b border-[var(--glass-border)] pb-2">
                             <h3 className="font-semibold text-xl tracking-wide text-[var(--color-text-secondary)] flex items-center gap-2">
                                 <Sparkles className="w-4 h-4 text-[var(--color-primary)] opacity-70" />
                                 Popular in your library
                             </h3>
-                            <button
-                                onClick={() => setPlaylist(popularLibraryTracks.map(entry => entry.track), 0)}
-                                className="btn btn-primary btn-sm"
-                            >
-                                <Play className="w-3.5 h-3.5" fill="currentColor" />
-                                Play all
-                            </button>
                         </div>
 
                         {/* Column headers */}
@@ -641,7 +712,7 @@ export const ArtistDetail: React.FC = () => {
                             {popularLibraryTracks.slice(0, popularExpanded ? 10 : 5).map(({ track, rank, playcount, listeners }, index) => (
                                 <div
                                     key={track.id}
-                                    onClick={() => setPlaylist(popularLibraryTracks.map(entry => entry.track), index)}
+                                    onClick={() => handlePlayPopularTracks(index)}
                                     className="grid grid-cols-[24px_40px_minmax(0,1fr)] md:grid-cols-[34px_52px_minmax(0,1.7fr)_minmax(160px,1fr)_120px_56px] gap-2 md:gap-3 px-1.5 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
                                 >
                                     {/* Rank */}
