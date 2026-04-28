@@ -24,6 +24,7 @@ import {
   testJambaseConnection,
   getCurrentMonthUsage,
   refreshArtistConcertsIfStale,
+  isCompilationArtistName,
   JambaseBudgetError,
   JambaseConfigError,
 } from '../services/jambase.service';
@@ -116,6 +117,10 @@ router.post('/concerts/subscriptions/:artistId', requireAuth, async (req, res) =
 
     const artist = await getArtistById(artistId);
     if (!artist) return res.status(404).json({ error: 'Artist not found' });
+
+    if (isCompilationArtistName((artist as any).name)) {
+      return res.status(400).json({ error: 'Cannot subscribe to compilation artists' });
+    }
 
     const already = await isSubscribedToArtist(userId, artistId);
     if (already) return res.json({ status: 'ok', alreadySubscribed: true });

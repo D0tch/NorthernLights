@@ -230,11 +230,27 @@ function normalizeEvent(raw: any, artistId: string): Omit<ConcertEventRow, 'fetc
   };
 }
 
+// "Various Artists" and its variants are compilation pseudo-entities, not
+// real touring artists. Never spend a Jambase call on them.
+const COMPILATION_NAMES = new Set(['various artists', 'various', 'va', 'compilation', 'compilations']);
+export function isCompilationArtistName(name: string | null | undefined): boolean {
+  return !!name && COMPILATION_NAMES.has(name.trim().toLowerCase());
+}
+
 // Resolve + fetch + write cache for a single artist. Idempotent — safe to call
 // repeatedly; the freshness check upstream decides whether to invoke this.
 export async function refreshArtistConcerts(artistId: string): Promise<{ count: number; jambaseId: string | null }> {
   const artist: any = await getArtistById(artistId);
   if (!artist) throw new Error(`Artist ${artistId} not found`);
+
+  if (isCompilationArtistName(artist.name)) {
+    await upsertArtistConcertsCache(artistId, {
+      jambaseId: null,
+      eventsCount: 0,
+      lastError: 'Compilation pseudo-artist — concerts not applicable',
+    });
+    return { count: 0, jambaseId: null };
+  }
 
   let jambaseId: string | null = artist.jambase_id || null;
   if (!jambaseId) {

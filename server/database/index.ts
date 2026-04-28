@@ -529,6 +529,16 @@ export async function initDB(): Promise<Pool> {
         CREATE INDEX IF NOT EXISTS ups_user_id_idx ON user_playback_stats(user_id);
         CREATE INDEX IF NOT EXISTS ups_track_id_idx ON user_playback_stats(track_id);
 
+        CREATE TABLE IF NOT EXISTS user_track_play_buckets (
+          user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+          track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE,
+          year_month DATE NOT NULL,
+          play_count INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (user_id, track_id, year_month)
+        );
+        CREATE INDEX IF NOT EXISTS utpb_user_month_idx ON user_track_play_buckets(user_id, year_month);
+        CREATE INDEX IF NOT EXISTS utpb_user_track_idx ON user_track_play_buckets(user_id, track_id);
+
         CREATE TABLE IF NOT EXISTS user_loved_tracks (
           user_id UUID REFERENCES users(id) ON DELETE CASCADE,
           track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE,
@@ -647,6 +657,26 @@ export async function initDB(): Promise<Pool> {
           last_call_at TIMESTAMPTZ
         );
       `);
+
+      // One-time backfill of user_track_play_buckets from user_playback_stats.
+      // Lossy: attributes all historical plays to the month of last_played_at.
+      // Skipped after first run (the table will already contain rows).
+      const bucketProbe = await client.query('SELECT 1 FROM user_track_play_buckets LIMIT 1');
+      if (bucketProbe.rowCount === 0) {
+        const upsProbe = await client.query(
+          `SELECT 1 FROM user_playback_stats WHERE last_played_at IS NOT NULL AND play_count > 0 LIMIT 1`
+        );
+        if ((upsProbe.rowCount ?? 0) > 0) {
+          const result = await client.query(`
+            INSERT INTO user_track_play_buckets (user_id, track_id, year_month, play_count)
+            SELECT user_id, track_id, date_trunc('month', last_played_at)::date, play_count
+            FROM user_playback_stats
+            WHERE last_played_at IS NOT NULL AND play_count > 0
+            ON CONFLICT (user_id, track_id, year_month) DO NOTHING
+          `);
+          console.log(`[DB] Backfilled ${result.rowCount} rows into user_track_play_buckets from user_playback_stats`);
+        }
+      }
 
       client.release();
       pool = instance;
@@ -1531,7 +1561,7 @@ export async function createPlaylist(
   isLlmGenerated: boolean = false,
   userId: string | null = null,
   isSystem: boolean = false,
-  generationSource?: 'manual' | 'hub' | 'custom' | 'system'
+  generationSource?: 'manual' | 'hub' | 'custom' | 'system' | 'on-repeat' | 'repeat-rewind' | 'daylist' | 'artist-radio' | 'seasonal-rewind' | 'year-rewind'
 ) {
   const db = await initDB();
   const source = generationSource ?? (isSystem ? 'system' : isLlmGenerated ? 'hub' : 'manual');
@@ -1548,6 +1578,7 @@ export async function createPlaylist(
 
 export async function addTracksToPlaylist(playlistId: string, trackIds: string[]) {
   const db = await initDB();
+  const uniqueTrackIds = Array.from(new Set(trackIds.filter(Boolean)));
   const existingRes = await db.query(
     `SELECT track_id, added_at FROM playlist_tracks WHERE playlist_id = $1`,
     [playlistId]
@@ -1561,19 +1592,23 @@ export async function addTracksToPlaylist(playlistId: string, trackIds: string[]
 
   await db.query(`DELETE FROM playlist_tracks WHERE playlist_id = $1`, [playlistId]);
   
-  if (trackIds.length > 0) {
+  if (uniqueTrackIds.length > 0) {
     const values: any[] = [];
     const placeholders: string[] = [];
     let paramCount = 1;
 
-    for (let i = 0; i < trackIds.length; i++) {
+    for (let i = 0; i < uniqueTrackIds.length; i++) {
       placeholders.push(`($${paramCount++}, $${paramCount++}, $${paramCount++}, COALESCE($${paramCount++}::timestamptz, NOW()))`);
-      values.push(playlistId, trackIds[i], i, existingAddedAt.get(trackIds[i]) || null);
+      values.push(playlistId, uniqueTrackIds[i], i, existingAddedAt.get(uniqueTrackIds[i]) || null);
     }
 
     await db.query(`
       INSERT INTO playlist_tracks (playlist_id, track_id, sort_order, added_at)
       VALUES ${placeholders.join(', ')}
+      ON CONFLICT (playlist_id, track_id)
+      DO UPDATE SET
+        sort_order = EXCLUDED.sort_order,
+        added_at = COALESCE(playlist_tracks.added_at, EXCLUDED.added_at)
     `, values);
   }
 }
@@ -2046,6 +2081,13 @@ export async function recordPlaybackForUser(userId: string, trackId: string) {
       rating = LEAST(user_playback_stats.rating + 1, 5)
   `, [userId, trackId]);
 
+  await db.query(`
+    INSERT INTO user_track_play_buckets (user_id, track_id, year_month, play_count)
+    VALUES ($1, $2, date_trunc('month', NOW())::date, 1)
+    ON CONFLICT (user_id, track_id, year_month) DO UPDATE SET
+      play_count = user_track_play_buckets.play_count + 1
+  `, [userId, trackId]);
+
   // Removed legacy tracks table update to prevent write amplification bloat.
   // The frontend should rely on user_playback_stats for user-specific telemetry.
 }
@@ -2267,6 +2309,7 @@ export async function getAutoAddCandidates(userId: string, limit: number = 20) {
     WHERE ups.user_id = $1
       AND s.artist_id IS NULL
       AND d.artist_id IS NULL
+      AND LOWER(a.name) NOT IN ('various artists', 'various', 'va', 'compilation', 'compilations')
     GROUP BY a.id, a.name, a.image_url, a.mbid
     HAVING SUM(ups.play_count) >= 3
     ORDER BY user_plays DESC
@@ -2293,6 +2336,7 @@ export async function searchLibraryArtists(userId: string, query: string, limit:
     JOIN tracks t ON t.artist_id = a.id
     LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
     WHERE LOWER(a.name) LIKE $2
+      AND LOWER(a.name) NOT IN ('various artists', 'various', 'va', 'compilation', 'compilations')
     GROUP BY a.id, a.name, a.image_url, a.mbid
     ORDER BY user_plays DESC, a.name ASC
     LIMIT $3
@@ -2312,6 +2356,7 @@ export async function getUserTopArtists(userId: string, limit: number = 10) {
     JOIN tracks t ON t.id = ups.track_id
     JOIN artists a ON a.id = t.artist_id
     WHERE ups.user_id = $1
+      AND LOWER(a.name) NOT IN ('various artists', 'various', 'va', 'compilation', 'compilations')
     GROUP BY a.id, a.name, a.image_url, a.mbid
     ORDER BY user_plays DESC
     LIMIT $2
