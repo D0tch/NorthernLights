@@ -199,6 +199,15 @@
   scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
 
+.hide-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
 /* ─── MATTE GLASS BACKGROUND ─── */
 body {
   font-family: var(--font-body);
@@ -1980,5 +1989,10 @@ body {
     flex: 0 0 85vw;
     max-width: 320px;
     scroll-snap-align: start;
+  }
+
+  .hub-scroll-mobile.hub-scroll-unique > * {
+    flex-basis: min(52vw, 200px);
+    max-width: 200px;
   }
 }

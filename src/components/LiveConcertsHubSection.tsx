@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { usePlayerStore } from '../store';
 import { Ticket, MapPin, Calendar, ArrowRight, Headphones, AlertTriangle } from 'lucide-react';
+import { HorizontalScrollRail } from './HorizontalScrollRail';
 
 type HubEvent = {
     jambase_event_id: string;
@@ -214,10 +215,6 @@ const TicketCard: React.FC<TicketCardProps> = ({ event }) => {
     );
 };
 
-const TicketSkeleton: React.FC = () => (
-    <div className="flex-shrink-0 w-[85vw] max-w-[380px] sm:w-[340px] md:w-[380px] h-[148px] rounded-2xl bg-[var(--color-surface-variant)] animate-pulse" />
-);
-
 export const LiveConcertsHubSection: React.FC = () => {
     const getAuthHeader = usePlayerStore(s => s.getAuthHeader);
     const concertsEnabled = usePlayerStore(s => s.concertsEnabled);
@@ -248,22 +245,7 @@ export const LiveConcertsHubSection: React.FC = () => {
     // Hide entirely when concerts are disabled or there's nothing to show.
     // Empty-state copy here would feel like clutter on the Hub.
     if (!concertsEnabled) return null;
-    if (loading) {
-        return (
-            <section aria-labelledby="live-concerts-heading">
-                <div className="flex items-center gap-2 mb-4">
-                    <Ticket className="w-5 h-5 text-[var(--color-text-muted)]" />
-                    <h2 id="live-concerts-heading" className="text-lg font-semibold text-[var(--color-text-secondary)]">
-                        Favourites live near you
-                    </h2>
-                </div>
-                <div className="flex gap-3 overflow-x-auto hide-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
-                    <TicketSkeleton />
-                    <TicketSkeleton />
-                </div>
-            </section>
-        );
-    }
+    if (loading) return null;
     if (!data || data.events.length === 0) return null;
 
     return (
@@ -282,22 +264,23 @@ export const LiveConcertsHubSection: React.FC = () => {
                     </span>
                 )}
             </div>
-            <div
-                className="
+            <HorizontalScrollRail
+                ariaLabel="Favourites live near you"
+                role="list"
+                viewportClassName="
                     flex gap-3 sm:gap-4
                     overflow-x-auto hide-scrollbar
                     snap-x snap-mandatory
                     -mx-4 px-4 sm:mx-0 sm:px-0
                     pb-2
                 "
-                role="list"
             >
                 {data.events.map(event => (
                     <div role="listitem" key={event.jambase_event_id}>
                         <TicketCard event={event} />
                     </div>
                 ))}
-            </div>
+            </HorizontalScrollRail>
         </section>
     );
 };

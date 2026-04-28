@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../store';
-import { Play, Pin, PinOff, Disc3, Sparkles, Wand2, Compass } from 'lucide-react';
+import { Play, Pin, PinOff, Disc3, Sparkles, Wand2, Compass, Radio, Repeat, Rewind, Sunrise, Sun, Moon, Sunset, User2, ListMusic } from 'lucide-react';
 import type { TrackInfo } from '../utils/fileSystem';
 import type { Playlist } from '../store';
 import { useDominantColor } from '../hooks/useDominantColor';
@@ -9,8 +9,36 @@ import { useExternalImage } from '../hooks/useExternalImage';
 import { useInView } from '../hooks/useInView';
 import { fetchGenreImage } from '../utils/externalImagery';
 import { LiveConcertsHubSection } from './LiveConcertsHubSection';
+import { HorizontalScrollRail } from './HorizontalScrollRail';
 
 type HubCollection = Partial<Playlist> & { tracks: TrackInfo[] };
+
+interface JumpTile {
+  type: 'album' | 'playlist' | 'artist';
+  id: string;
+  title: string;
+  subtitle: string;
+  imageUrl: string | null;
+  lastPlayedAt: number;
+}
+
+interface ArtistRadioCandidate {
+  artistId: string;
+  artistName: string;
+  imageUrl: string | null;
+  recentPlays: number;
+  withArtists: string[];
+}
+
+interface SmartBundle {
+  jumpBackIn: JumpTile[];
+  onRepeat: HubCollection | null;
+  repeatRewind: HubCollection | null;
+  daylist: HubCollection | null;
+  artistRadios: ArtistRadioCandidate[];
+  seasonalRewind: HubCollection | null;
+  yearRewind: HubCollection | null;
+}
 
 let hasPlayedHubCardIntro = false;
 
@@ -23,6 +51,53 @@ const HubCardSkeleton: React.FC = () => (
     </div>
     <div className="h-5 w-3/4 rounded bg-[var(--color-surface-variant)] mb-2" />
     <div className="h-4 w-1/2 rounded bg-[var(--color-surface-variant)]" />
+  </div>
+);
+
+const HubLoadingSkeleton: React.FC = () => (
+  <div className="page-container space-y-8">
+    <header>
+      <div className="h-8 w-24 rounded bg-[var(--color-surface-variant)] animate-pulse" />
+      <div className="h-4 w-48 rounded bg-[var(--color-surface-variant)] animate-pulse mt-2" />
+    </header>
+
+    <section>
+      <div className="h-5 w-32 rounded bg-[var(--color-surface-variant)] animate-pulse mb-4" />
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+        {[1, 2, 3, 4].map((i) => (
+          <div
+            key={i}
+            className="h-[64px] rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] overflow-hidden animate-pulse sm:h-[80px]"
+          >
+            <div className="h-full w-[56px] bg-[var(--color-surface-variant)] sm:w-[80px]" />
+          </div>
+        ))}
+      </div>
+    </section>
+
+    <section>
+      <div className="h-7 w-44 rounded bg-[var(--color-surface-variant)] animate-pulse mb-2" />
+      <div className="h-4 w-64 max-w-full rounded bg-[var(--color-surface-variant)] animate-pulse mb-5" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 lg:gap-6">
+        {[1, 2, 3].map((i) => (
+          <HubCardSkeleton key={i} />
+        ))}
+      </div>
+    </section>
+
+    <section>
+      <div className="h-7 w-40 rounded bg-[var(--color-surface-variant)] animate-pulse mb-2" />
+      <div className="h-4 w-72 max-w-full rounded bg-[var(--color-surface-variant)] animate-pulse mb-5" />
+      <div className="flex gap-3 hide-scrollbar overflow-hidden sm:gap-5">
+        {[1, 2, 3, 4].map((i) => (
+          <div key={i} className="w-[min(52vw,200px)] shrink-0 sm:w-[190px]">
+            <div className="aspect-square rounded-[var(--radius)] bg-[var(--color-surface-variant)] animate-pulse" />
+            <div className="h-4 w-4/5 rounded bg-[var(--color-surface-variant)] animate-pulse mt-3" />
+            <div className="h-3 w-2/3 rounded bg-[var(--color-surface-variant)] animate-pulse mt-2" />
+          </div>
+        ))}
+      </div>
+    </section>
   </div>
 );
 
@@ -265,14 +340,386 @@ const ExploreCard: React.FC<ExploreCardProps> = ({ genre, trackCount, entity, an
   return CardContent;
 };
 
+// ─── Jump Back In: compact mixed tile ─────────────────────────────────
+interface JumpTileCardProps {
+  tile: JumpTile;
+  onActivate: (tile: JumpTile) => void;
+  onPlay: (tile: JumpTile) => void;
+}
+
+// Distinct fallback identity per tile type when no artwork is available.
+function getJumpTileFallback(type: JumpTile['type']): { gradient: string; Icon: React.FC<any> } {
+  if (type === 'artist') {
+    return { gradient: 'linear-gradient(135deg, #4338ca, #6366f1, #8b5cf6)', Icon: User2 };
+  }
+  if (type === 'playlist') {
+    return { gradient: 'linear-gradient(135deg, #047857, #10b981, #14b8a6)', Icon: ListMusic };
+  }
+  return { gradient: 'linear-gradient(135deg, #92400e, #d97706, #f59e0b)', Icon: Disc3 };
+}
+
+const JumpTileCard: React.FC<JumpTileCardProps> = ({ tile, onActivate, onPlay }) => {
+  const fallback = getJumpTileFallback(tile.type);
+  const FallbackIcon = fallback.Icon;
+  return (
+    <div
+      onClick={() => onActivate(tile)}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onActivate(tile);
+        }
+      }}
+      className="group relative flex h-[64px] cursor-pointer items-center gap-2 overflow-hidden rounded-[var(--radius)] border border-[var(--glass-border)] bg-[var(--glass-bg)] text-left backdrop-blur-sm transition-colors hover:bg-[var(--glass-bg-hover)] sm:h-[80px] sm:gap-3"
+      aria-label={`Open ${tile.title}`}
+    >
+      <div className="relative h-[64px] w-[56px] shrink-0 overflow-hidden sm:h-[80px] sm:w-[80px]">
+        {tile.imageUrl ? (
+          <img src={tile.imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" />
+        ) : (
+          <>
+            <div className="absolute inset-0" style={{ background: fallback.gradient }} />
+            <FallbackIcon
+              className="absolute inset-0 m-auto w-7 h-7 text-white/85 drop-shadow"
+              strokeWidth={1.5}
+            />
+          </>
+        )}
+      </div>
+      <div className="min-w-0 flex-1 py-1 pr-2 sm:pr-3">
+        <span className="line-clamp-2 block text-xs font-semibold leading-tight text-[var(--color-text-primary)] transition-colors group-hover:text-[var(--color-primary)] sm:text-base">
+          {tile.title}
+        </span>
+        {tile.type !== 'playlist' && tile.subtitle && (
+          <span className="block text-[11px] text-[var(--color-text-muted)] line-clamp-1 mt-0.5">
+            {tile.subtitle}
+          </span>
+        )}
+      </div>
+      {/* Play button — hover-only, hidden entirely on touch devices */}
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onPlay(tile);
+        }}
+        className="hidden [@media(hover:hover)]:flex absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-[var(--color-primary)] text-white items-center justify-center shadow-lg opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity duration-150 hover:bg-[var(--color-primary-dark)] hover:scale-105 active:scale-95 z-10"
+        aria-label={`Play ${tile.title}`}
+      >
+        <Play className="w-4 h-4 ml-0.5" fill="currentColor" />
+      </button>
+    </div>
+  );
+};
+
+// ─── Time Capsule: seasonal/year rewind tile ──────────────────────────
+interface CapsuleCardProps {
+  collection: HubCollection;
+  onOpen: () => void;
+  onPlay: () => void;
+}
+
+// Maps the leading emoji in the capsule title to a gradient. Keeps the
+// component self-contained without needing the season/year metadata.
+function getCapsuleGradient(title: string | null | undefined): string {
+  const t = title || '';
+  if (t.includes('🌸')) return 'linear-gradient(135deg, #fb7185, #f97316, #fbbf24)';   // spring
+  if (t.includes('☀️')) return 'linear-gradient(135deg, #fbbf24, #f97316, #ec4899)';   // summer
+  if (t.includes('🍂')) return 'linear-gradient(135deg, #f97316, #b45309, #7c2d12)';   // autumn
+  if (t.includes('❄️')) return 'linear-gradient(135deg, #60a5fa, #6366f1, #1e1b4b)';   // winter
+  if (t.includes('🎉')) return 'linear-gradient(135deg, #ec4899, #8b5cf6, #3b82f6)';   // year wrap
+  return 'linear-gradient(135deg, var(--color-primary), #6366f1)';
+}
+
+const CapsuleCard: React.FC<CapsuleCardProps> = ({ collection, onOpen, onPlay }) => {
+  const gradient = getCapsuleGradient(collection.title);
+  return (
+    <div
+      onClick={onOpen}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
+      className="group relative w-[260px] sm:w-[300px] aspect-square rounded-[var(--radius)] overflow-hidden cursor-pointer transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] shrink-0"
+      aria-label={`Open ${collection.title || 'Time capsule'}`}
+      style={{ background: gradient }}
+    >
+      <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent" />
+      <div className="absolute inset-0 flex flex-col justify-between p-5 text-white">
+        <span className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-80">
+          Time capsule
+        </span>
+        <div>
+          <h3 className="font-bold text-2xl leading-tight line-clamp-2 drop-shadow-sm">
+            {collection.title || 'Rewind'}
+          </h3>
+          {collection.description && (
+            <p className="text-sm opacity-90 mt-2 line-clamp-2 drop-shadow-sm">
+              {collection.description}
+            </p>
+          )}
+        </div>
+      </div>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          onPlay();
+        }}
+        className="absolute bottom-4 right-4 w-12 h-12 rounded-full bg-white text-black flex items-center justify-center shadow-lg opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-ui duration-200 hover:scale-110 active:scale-95 z-20"
+        aria-label="Play"
+      >
+        <Play className="w-5 h-5 ml-0.5" fill="currentColor" />
+      </button>
+    </div>
+  );
+};
+
+// ─── Unique Card: unified square-cover tile for "Uniquely yours" ──────
+// Single shape for daylist / on-repeat / repeat-rewind / artist-radio,
+// matching Spotify's row in screenshot 2. The cover treatment varies by
+// kind, but the wrapper geometry stays consistent so the row reads as a
+// single grid.
+type UniqueCardKind = 'daylist' | 'on-repeat' | 'repeat-rewind' | 'artist-radio';
+
+function getDaylistCover(): { gradient: string; Icon: React.FC<any> } {
+  const h = new Date().getHours();
+  if (h < 6) return { gradient: 'linear-gradient(135deg, #1e1b4b, #4338ca)', Icon: Moon };       // late night
+  if (h < 11) return { gradient: 'linear-gradient(135deg, #fed7aa, #fb923c, #f97316)', Icon: Sunrise }; // morning
+  if (h < 16) return { gradient: 'linear-gradient(135deg, #fde68a, #f59e0b, #ef4444)', Icon: Sun };     // midday
+  if (h < 19) return { gradient: 'linear-gradient(135deg, #fb923c, #ec4899, #8b5cf6)', Icon: Sunset };  // evening
+  return { gradient: 'linear-gradient(135deg, #312e81, #1e3a8a, #0c4a6e)', Icon: Moon };          // night
+}
+
+interface UniqueCardProps {
+  kind: UniqueCardKind;
+  title: string;
+  subtitle?: string;
+  imageUrl?: string | null;
+  onClick: () => void;
+  onPlay?: () => void;
+  loading?: boolean;
+}
+
+const UniqueCard: React.FC<UniqueCardProps> = ({
+  kind,
+  title,
+  subtitle,
+  imageUrl,
+  onClick,
+  onPlay,
+  loading = false,
+}) => {
+  let coverContent: React.ReactNode;
+  let badgeLabel: string;
+
+  if (kind === 'daylist') {
+    const { gradient, Icon } = getDaylistCover();
+    coverContent = (
+      <>
+        <div className="absolute inset-0" style={{ background: gradient }} />
+        <Icon className="absolute right-4 bottom-4 w-12 h-12 text-white/85 drop-shadow" strokeWidth={1.5} />
+      </>
+    );
+    badgeLabel = 'Daylist';
+  } else if (kind === 'on-repeat') {
+    coverContent = (
+      <>
+        <div className="absolute inset-0" style={{ background: 'linear-gradient(135deg, #831843, #be185d, #db2777)' }} />
+        <Repeat className="absolute right-4 bottom-4 w-12 h-12 text-white/85 drop-shadow" strokeWidth={1.5} />
+      </>
+    );
+    badgeLabel = 'On Repeat';
+  } else if (kind === 'repeat-rewind') {
+    coverContent = (
+      <>
+        <div className="absolute inset-0" style={{ background: 'linear-gradient(135deg, #1e3a8a, #312e81, #4338ca)' }} />
+        <Rewind className="absolute right-4 bottom-4 w-12 h-12 text-white/85 drop-shadow" strokeWidth={1.5} />
+      </>
+    );
+    badgeLabel = 'Rewind';
+  } else {
+    coverContent = imageUrl ? (
+      <img src={imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" />
+    ) : (
+      <>
+        <div className="absolute inset-0" style={{ background: 'linear-gradient(135deg, #1f2937, #374151)' }} />
+        <Radio className="absolute right-4 bottom-4 w-12 h-12 text-white/70 drop-shadow" strokeWidth={1.5} />
+      </>
+    );
+    badgeLabel = 'Radio';
+  }
+
+  return (
+    <div
+      onClick={onClick}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      aria-disabled={loading}
+      className={`group relative flex w-[min(52vw,200px)] shrink-0 snap-start flex-col gap-2.5 cursor-pointer transition-ui duration-200 hover:-translate-y-0.5 sm:w-[190px] sm:gap-3 ${loading ? 'opacity-60 pointer-events-none' : ''}`}
+      aria-label={`Open ${title}`}
+    >
+      <div className="relative w-full aspect-square rounded-[var(--radius)] overflow-hidden shadow-md ring-1 ring-black/10">
+        {coverContent}
+        <span className="absolute top-2.5 left-2.5 text-[10px] font-bold uppercase tracking-[0.15em] text-white/95 bg-black/35 backdrop-blur-sm px-2 py-0.5 rounded-full">
+          {badgeLabel}
+        </span>
+        {onPlay && (
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onPlay();
+            }}
+            className="absolute bottom-3 left-3 w-10 h-10 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-ui duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95 z-20"
+            aria-label="Play"
+          >
+            <Play className="w-4 h-4 ml-0.5" fill="currentColor" />
+          </button>
+        )}
+      </div>
+      <div className="px-0.5">
+        <p className="font-semibold text-sm text-[var(--color-text-primary)] line-clamp-2 leading-tight group-hover:text-[var(--color-primary)] transition-colors">
+          {title}
+        </p>
+        {subtitle && (
+          <p className="mt-1 line-clamp-2 text-xs leading-snug text-[var(--color-text-muted)]">
+            {subtitle}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+};
+
 export const Hub: React.FC = () => {
-  const { library, setPlaylist, getAuthHeader, togglePin, currentUser, genres: genreEntities, fetchPlaylistsFromServer } = usePlayerStore();
+  const { library, setPlaylist, getAuthHeader, togglePin, currentUser, genres: genreEntities, fetchPlaylistsFromServer, playlists } = usePlayerStore();
   const navigate = useNavigate();
   const [collections, setCollections] = useState<HubCollection[]>([]);
+  const [smartBundle, setSmartBundle] = useState<SmartBundle | null>(null);
+  const [radioLoadingId, setRadioLoadingId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSmartLoading, setIsSmartLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationError, setGenerationError] = useState('');
   const [shouldAnimateCards] = useState(() => !hasPlayedHubCardIntro);
+
+  const resolveTracks = (rawTracks: any[]): TrackInfo[] =>
+    (rawTracks || [])
+      .map((t: any) => library.find((lt) => lt.id === t.id) || t)
+      .filter(Boolean) as TrackInfo[];
+
+  const fetchSmartBundle = async () => {
+    setIsSmartLoading(true);
+    try {
+      const res = await fetch('/api/hub/smart', { headers: getAuthHeader() });
+      if (!res.ok) return;
+      const data = await res.json();
+      const resolve = (raw: any) =>
+        raw ? { ...raw, tracks: resolveTracks(raw.tracks) } : null;
+      const orNull = (col: HubCollection | null) =>
+        col && col.tracks.length > 0 ? col : null;
+      setSmartBundle({
+        jumpBackIn: data.jumpBackIn || [],
+        onRepeat: orNull(resolve(data.onRepeat)),
+        repeatRewind: orNull(resolve(data.repeatRewind)),
+        daylist: orNull(resolve(data.daylist)),
+        artistRadios: (data.artistRadios || []).map((c: any) => ({
+          artistId: c.artistId,
+          artistName: c.artistName,
+          imageUrl: c.imageUrl ?? null,
+          recentPlays: c.recentPlays ?? 0,
+          withArtists: Array.isArray(c.withArtists) ? c.withArtists : [],
+        })),
+        seasonalRewind: orNull(resolve(data.seasonalRewind)),
+        yearRewind: orNull(resolve(data.yearRewind)),
+      });
+    } catch (e) {
+      console.error('Failed to load smart hub', e);
+    } finally {
+      setIsSmartLoading(false);
+    }
+  };
+
+  const handleJumpTile = (tile: JumpTile) => {
+    if (tile.type === 'playlist') {
+      navigate(`/playlists/${tile.id}`);
+    } else if (tile.type === 'artist') {
+      navigate(`/library/artist/${tile.id}`);
+    } else if (tile.type === 'album') {
+      navigate(`/library/album/${encodeURIComponent(tile.id)}`);
+    }
+  };
+
+  const handlePlayJumpTile = (tile: JumpTile) => {
+    let tracks: TrackInfo[] = [];
+    if (tile.type === 'playlist') {
+      const pl = playlists.find((p) => p.id === tile.id);
+      tracks = pl?.tracks || [];
+    } else if (tile.type === 'album') {
+      tracks = library
+        .filter((t: any) => t.albumId === tile.id)
+        .sort((a: any, b: any) => (a.discNumber || 0) - (b.discNumber || 0) || (a.trackNumber || 0) - (b.trackNumber || 0));
+    } else if (tile.type === 'artist') {
+      tracks = library.filter((t: any) => t.artistId === tile.id);
+    }
+    if (tracks.length > 0) setPlaylist(tracks, 0);
+  };
+
+  // Server-side imageUrl is populated for artists (artists.image_url) but
+  // null for albums/playlists. Fill in the gap from the local library /
+  // playlist store, which carries embedded artwork from the audio files.
+  const resolveTileImage = (tile: JumpTile): string | null => {
+    if (tile.imageUrl) return tile.imageUrl;
+    if (tile.type === 'album') {
+      const t = library.find((lt) => (lt as any).albumId === tile.id);
+      return t?.artUrl ?? null;
+    }
+    if (tile.type === 'playlist') {
+      const pl = playlists.find((p) => p.id === tile.id);
+      const firstWithArt = pl?.tracks?.find((tr: any) => tr.artUrl);
+      return firstWithArt?.artUrl ?? null;
+    }
+    if (tile.type === 'artist') {
+      const t = library.find((lt) => (lt as any).artistId === tile.id);
+      return t?.artUrl ?? null;
+    }
+    return null;
+  };
+
+  const handleOpenArtistRadio = async (candidate: ArtistRadioCandidate) => {
+    if (radioLoadingId) return;
+    setRadioLoadingId(candidate.artistId);
+    try {
+      const res = await fetch('/api/hub/artist-radio', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+        body: JSON.stringify({ artistId: candidate.artistId }),
+      });
+      if (!res.ok) throw new Error('Failed to load artist radio');
+      const { playlist } = await res.json();
+      // Make the smart playlist visible to the playlist store before navigating
+      void fetchPlaylistsFromServer();
+      if (playlist?.id) {
+        navigate(`/playlists/${playlist.id}`);
+      }
+    } catch (e) {
+      console.error('[Artist Radio] Failed', e);
+    } finally {
+      setRadioLoadingId(null);
+    }
+  };
 
   const fetchHubData = async () => {
     setIsLoading(true);
@@ -308,6 +755,10 @@ export const Hub: React.FC = () => {
   useEffect(() => {
     if (library.length > 0) {
       fetchHubData();
+      void fetchSmartBundle();
+    } else {
+      setIsLoading(false);
+      setIsSmartLoading(false);
     }
   }, [library]);
 
@@ -380,20 +831,10 @@ export const Hub: React.FC = () => {
       }));
   }, [library, genreEntities]);
 
-  if (isLoading) {
-    return (
-      <div className="page-container space-y-8">
-        <header>
-          <div className="h-8 w-24 rounded bg-[var(--color-surface-variant)] animate-pulse" />
-          <div className="h-4 w-48 rounded bg-[var(--color-surface-variant)] animate-pulse mt-2" />
-        </header>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 lg:gap-6">
-          {[1, 2, 3, 4, 5, 6].map((i) => (
-            <HubCardSkeleton key={i} />
-          ))}
-        </div>
-      </div>
-    );
+  const isInitialLoading = (isLoading || isSmartLoading) && collections.length === 0 && !smartBundle;
+
+  if (isInitialLoading) {
+    return <HubLoadingSkeleton />;
   }
 
   return (
@@ -424,6 +865,24 @@ export const Hub: React.FC = () => {
         <div className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-sm font-medium text-[var(--color-error)]">
           {generationError}
         </div>
+      )}
+
+      {smartBundle && smartBundle.jumpBackIn.length > 0 && (
+        <section>
+          <h2 className="text-lg font-semibold text-[var(--color-text-secondary)] mb-4">
+            Jump back in
+          </h2>
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+            {smartBundle.jumpBackIn.slice(0, 8).map((tile) => (
+              <JumpTileCard
+                key={`${tile.type}:${tile.id}`}
+                tile={{ ...tile, imageUrl: resolveTileImage(tile) }}
+                onActivate={handleJumpTile}
+                onPlay={handlePlayJumpTile}
+              />
+            ))}
+          </div>
+        </section>
       )}
 
       {aiPlaylists.length === 0 && (
@@ -473,7 +932,7 @@ export const Hub: React.FC = () => {
           <p className="text-sm text-[var(--color-text-secondary)] mb-5">
             Curated intelligently for your current vibe
           </p>
-          <div className="flex sm:grid sm:grid-cols-2 lg:grid-cols-3 overflow-x-auto snap-x snap-mandatory gap-4 sm:gap-5 lg:gap-6 hub-scroll-mobile">
+          <div className="flex sm:grid sm:grid-cols-2 lg:grid-cols-3 overflow-x-auto snap-x snap-mandatory gap-4 sm:gap-5 lg:gap-6 hub-scroll-mobile hide-scrollbar">
             {aiPlaylists.map((collection) => (
               <HubCard
                 key={collection.id}
@@ -490,7 +949,118 @@ export const Hub: React.FC = () => {
         </section>
       )}
 
+      {smartBundle && (smartBundle.daylist || smartBundle.onRepeat || smartBundle.repeatRewind || smartBundle.artistRadios.length > 0) && (
+        <section>
+          <h2 className="text-xl sm:text-2xl font-bold text-[var(--color-text-primary)] mb-1">
+            Uniquely yours
+          </h2>
+          <p className="text-sm text-[var(--color-text-secondary)] mb-5">
+            Personalised mixes that update with your listening
+          </p>
+          <HorizontalScrollRail
+            ariaLabel="Uniquely yours"
+            viewportClassName="flex overflow-x-auto snap-x snap-mandatory gap-3 hub-scroll-mobile hub-scroll-unique pb-1 sm:gap-5 sm:pb-2"
+          >
+            {smartBundle.daylist && (
+              <UniqueCard
+                kind="daylist"
+                title={smartBundle.daylist.title || 'Daylist'}
+                subtitle={smartBundle.daylist.description || undefined}
+                onClick={() =>
+                  smartBundle.daylist?.id && navigate(`/playlists/${smartBundle.daylist.id}`)
+                }
+                onPlay={() => smartBundle.daylist && handlePlayCollection(smartBundle.daylist.tracks)}
+              />
+            )}
+            {smartBundle.onRepeat && (
+              <UniqueCard
+                kind="on-repeat"
+                title="On Repeat"
+                subtitle="Songs you love right now"
+                onClick={() =>
+                  smartBundle.onRepeat?.id && navigate(`/playlists/${smartBundle.onRepeat.id}`)
+                }
+                onPlay={() => smartBundle.onRepeat && handlePlayCollection(smartBundle.onRepeat.tracks)}
+              />
+            )}
+            {smartBundle.repeatRewind && (
+              <UniqueCard
+                kind="repeat-rewind"
+                title="Repeat Rewind"
+                subtitle="Your past favorites"
+                onClick={() =>
+                  smartBundle.repeatRewind?.id && navigate(`/playlists/${smartBundle.repeatRewind.id}`)
+                }
+                onPlay={() =>
+                  smartBundle.repeatRewind && handlePlayCollection(smartBundle.repeatRewind.tracks)
+                }
+              />
+            )}
+            {smartBundle.artistRadios.map((candidate) => (
+              <UniqueCard
+                key={candidate.artistId}
+                kind="artist-radio"
+                title={`${candidate.artistName} Radio`}
+                subtitle={
+                  candidate.withArtists && candidate.withArtists.length > 0
+                    ? `With ${candidate.withArtists.join(', ')}`
+                    : 'Inspired by your top artist'
+                }
+                imageUrl={candidate.imageUrl}
+                onClick={() => handleOpenArtistRadio(candidate)}
+                loading={radioLoadingId === candidate.artistId}
+              />
+            ))}
+          </HorizontalScrollRail>
+        </section>
+      )}
+
       <LiveConcertsHubSection />
+
+      {smartBundle && (smartBundle.seasonalRewind || smartBundle.yearRewind) && (
+        <section>
+          <h2 className="text-xl sm:text-2xl font-bold text-[var(--color-text-primary)] mb-1">
+            Time capsules
+          </h2>
+          <p className="text-sm text-[var(--color-text-secondary)] mb-5">
+            Your listening, frozen in moments
+          </p>
+          <HorizontalScrollRail
+            ariaLabel="Time capsules"
+            viewportClassName="flex overflow-x-auto snap-x snap-mandatory gap-4 hub-scroll-mobile pb-2"
+          >
+            {smartBundle.yearRewind && (
+              <div className="snap-start">
+                <CapsuleCard
+                  collection={smartBundle.yearRewind}
+                  onOpen={() =>
+                    smartBundle.yearRewind?.id &&
+                    navigate(`/playlists/${smartBundle.yearRewind.id}`)
+                  }
+                  onPlay={() =>
+                    smartBundle.yearRewind && handlePlayCollection(smartBundle.yearRewind.tracks)
+                  }
+                />
+              </div>
+            )}
+            {smartBundle.seasonalRewind && (
+              <div className="snap-start">
+                <CapsuleCard
+                  collection={smartBundle.seasonalRewind}
+                  onOpen={() =>
+                    smartBundle.seasonalRewind?.id &&
+                    navigate(`/playlists/${smartBundle.seasonalRewind.id}`)
+                  }
+                  onPlay={() =>
+                    smartBundle.seasonalRewind &&
+                    handlePlayCollection(smartBundle.seasonalRewind.tracks)
+                  }
+                />
+              </div>
+            )}
+          </HorizontalScrollRail>
+        </section>
+      )}
 
       {systemCollections.length > 0 && (
         <section>
