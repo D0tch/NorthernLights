@@ -142,6 +142,59 @@ function parseAcousticVector(row: any): number[] | null {
   }
 }
 
+function parseNumericVector(raw: unknown, expectedLength?: number): number[] | null {
+  if (!raw || typeof raw !== 'string') return null;
+
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    if (expectedLength !== undefined && parsed.length !== expectedLength) return null;
+    const vector = parsed.map((value: unknown) => Number(value));
+    if (vector.some((value) => !Number.isFinite(value))) return null;
+    return vector;
+  } catch {
+    return null;
+  }
+}
+
+function buildTasteProfileCentroids(rows: any[]): {
+  acousticVectorStr: string;
+  effnetVectorStr: string | null;
+  acousticCount: number;
+} | null {
+  const acoustic = new Array(8).fill(0);
+  const effnet = new Array(1280).fill(0);
+  let acousticCount = 0;
+  let effnetCount = 0;
+
+  for (const row of rows) {
+    const acousticVector = parseNumericVector(row.acoustic_vector_8d, 8);
+    if (!acousticVector) continue;
+
+    for (let i = 0; i < 8; i++) acoustic[i] += acousticVector[i];
+    acousticCount++;
+
+    const effnetVector = parseNumericVector(row.embedding_vector, 1280);
+    if (effnetVector) {
+      for (let i = 0; i < 1280; i++) effnet[i] += effnetVector[i];
+      effnetCount++;
+    }
+  }
+
+  if (acousticCount === 0) return null;
+
+  const acousticCentroid = acoustic.map((value) => value / acousticCount);
+  const effnetCentroid = effnetCount > 0
+    ? effnet.map((value) => value / effnetCount)
+    : null;
+
+  return {
+    acousticVectorStr: `[${acousticCentroid.join(',')}]`,
+    effnetVectorStr: effnetCentroid ? `[${effnetCentroid.join(',')}]` : null,
+    acousticCount,
+  };
+}
+
 function getAcousticClusterKey(row: any): string {
   const vector = parseAcousticVector(row);
   if (!vector) return 'unknown';
@@ -171,7 +224,8 @@ export async function getHubCollections(
     llmAdjacentReach?: number,
     llmTracksPerPlaylist?: number,
     llmPlaylistDiversity?: number,
-    llmVetoMode?: 'hard' | 'adaptive'
+    llmVetoMode?: 'hard' | 'adaptive',
+    llmGenerationSource?: 'hub' | 'custom'
   } = {}
 ) {
   const hubs: any[] = [];
@@ -747,7 +801,7 @@ export async function getHubCollections(
       // Compute centroid from valid seeds
       const validSeeds = seedRes.rows.filter((r: any) => r.distance <= 1.5);
 
-      // Determine dimension from first valid seed (128D for EffNet, 13D for legacy MFCC)
+      // Determine dimension from the first valid EffNet seed; current embeddings are 1280D.
       const firstVec = JSON.parse(validSeeds[0].vec);
       const dim = firstVec.length;
       const centroid = new Array(dim).fill(0);
@@ -1251,7 +1305,15 @@ export async function getHubCollections(
 
       // Create a formal Playlist record (user-scoped)
       const playlistId = `llm_${Date.now()}_${Math.random().toString(36).substring(7)}`;
-      await createPlaylist(playlistId, concept.title || concept.section, concept.description, true, userId);
+      await createPlaylist(
+        playlistId,
+        concept.title || concept.section,
+        concept.description,
+        true,
+        userId,
+        false,
+        settings.llmGenerationSource ?? 'hub'
+      );
 
       const trackIds = topTracks.map((r: any) => r.id);
       await addTracksToPlaylist(playlistId, trackIds);
@@ -1324,39 +1386,19 @@ export async function getHubCollections(
   if (userId) {
     const userRecentTracks = await getUserRecentTracks(userId, 5);
     if (userRecentTracks.length >= 3) {
-      // Get acoustic vectors for the user's recent tracks
+      // Get MusiCNN and EffNet vectors for the user's recent tracks
       const recentIds = userRecentTracks.map((t: any) => t.id);
       const placeholders = recentIds.map((_, i) => `$${i + 1}`).join(',');
       const vecRes = await queryWithRetry(`
-        SELECT t.id, t.genre, tf.acoustic_vector, tf.acoustic_vector_8d
+        SELECT t.id, t.genre, tf.acoustic_vector_8d, tf.embedding_vector
         FROM tracks t JOIN track_features tf ON t.id = tf.track_id
-        WHERE t.id IN (${placeholders})
+        WHERE t.id IN (${placeholders}) AND tf.acoustic_vector_8d IS NOT NULL
       `, recentIds);
 
-      if (vecRes.rows.length >= 3) {
-        // Compute 8D acoustic centroid
-        let centroid = [0,0,0,0,0,0,0,0];
-        let effnetCentroid: number[] | null = null;
-        let hasMfcc = true;
-        for (const r of vecRes.rows as any[]) {
-          const vec = JSON.parse(r.acoustic_vector_8d || r.acoustic_vector);
-          for(let i=0; i<8; i++) centroid[i] += (vec[i] || 0.5); // Fallback to 0.5 (neutral) instead of undefined/NaN
-          if (r.mfcc_vector) {
-            if (!effnetCentroid) effnetCentroid = new Array(128).fill(0);
-            const mv = JSON.parse(r.mfcc_vector);
-            for(let i=0; i<128; i++) (effnetCentroid as number[])[i] += mv[i];
-          } else {
-            hasMfcc = false;
-          }
-        }
-        centroid = centroid.map(v => v / vecRes.rows.length);
-        const vecStr = `[${centroid.join(',')}]`;
-        if (hasMfcc && effnetCentroid) {
-          effnetCentroid = effnetCentroid.map(v => v / vecRes.rows.length);
-        } else {
-          effnetCentroid = null;
-        }
-        const effnetStr = effnetCentroid ? `[${effnetCentroid.join(',')}]` : null;
+      const profile = buildTasteProfileCentroids(vecRes.rows);
+      if (profile && profile.acousticCount >= 3) {
+        const vecStr = profile.acousticVectorStr;
+        const effnetStr = profile.effnetVectorStr;
         const referenceGenre = (vecRes.rows[0] as any).genre || '';
 
         let upNextRes;
@@ -1386,29 +1428,14 @@ export async function getHubCollections(
       }
     }
   } else {
-    // Fallback: use global tracks table (backward compat)
+    // Fallback: use global tracks table
     const recentTracksRes = await queryWithRetry(
-      'SELECT t.id, t.genre, tf.acoustic_vector, tf.acoustic_vector_8d FROM tracks t JOIN track_features tf ON t.id = tf.track_id WHERE t.last_played_at IS NOT NULL ORDER BY t.last_played_at DESC LIMIT 5'
+      'SELECT t.id, t.genre, tf.acoustic_vector_8d, tf.embedding_vector FROM tracks t JOIN track_features tf ON t.id = tf.track_id WHERE t.last_played_at IS NOT NULL AND tf.acoustic_vector_8d IS NOT NULL ORDER BY t.last_played_at DESC LIMIT 5'
     );
-     if (recentTracksRes.rows.length >= 3) {
-       let centroid = [0,0,0,0,0,0,0,0];
-       let effnetCentroid: number[] | null = null;
-       let hasMfcc = true;
-       for (const r of recentTracksRes.rows as any[]) {
-          const vec = JSON.parse(r.acoustic_vector_8d || r.acoustic_vector);
-          for(let i=0; i<8; i++) centroid[i] += (vec[i] || 0.5);
-          if (r.mfcc_vector) {
-            if (!effnetCentroid) effnetCentroid = new Array(128).fill(0);
-            const mv = JSON.parse(r.mfcc_vector);
-            for(let i=0; i<128; i++) (effnetCentroid as number[])[i] += mv[i];
-          } else { hasMfcc = false; }
-       }
-       centroid = centroid.map(v => v / recentTracksRes.rows.length);
-       const vecStr = `[${centroid.join(',')}]`;
-       if (hasMfcc && effnetCentroid) {
-         effnetCentroid = effnetCentroid.map(v => v / recentTracksRes.rows.length);
-       } else { effnetCentroid = null; }
-       const effnetStr = effnetCentroid ? `[${effnetCentroid.join(',')}]` : null;
+     const profile = buildTasteProfileCentroids(recentTracksRes.rows);
+     if (profile && profile.acousticCount >= 3) {
+       const vecStr = profile.acousticVectorStr;
+       const effnetStr = profile.effnetVectorStr;
        const recentIds = recentTracksRes.rows.map((r:any) => r.id);
        const referenceGenre = (recentTracksRes.rows[0] as any).genre || '';
 
@@ -1487,34 +1514,19 @@ export async function getHubCollections(
   if (userId) {
     const userTopTracks = await getUserTopTracks(userId, 10);
     if (userTopTracks.length > 0) {
-      // Get acoustic vectors for user's top tracks
+      // Get MusiCNN and EffNet vectors for user's top tracks
       const topIds = userTopTracks.map((t: any) => t.id);
       const topPlaceholders = topIds.map((_, i) => `$${i + 1}`).join(',');
       const topVecRes = await queryWithRetry(`
-        SELECT t.id, t.genre, tf.acoustic_vector, tf.acoustic_vector_8d
+        SELECT t.id, t.genre, tf.acoustic_vector_8d, tf.embedding_vector
         FROM tracks t JOIN track_features tf ON t.id = tf.track_id
-        WHERE t.id IN (${topPlaceholders})
+        WHERE t.id IN (${topPlaceholders}) AND tf.acoustic_vector_8d IS NOT NULL
       `, topIds);
 
-      if (topVecRes.rows.length > 0) {
-        let centroid = [0,0,0,0,0,0,0,0];
-        let effnetCentroid: number[] | null = null;
-        let hasMfcc = true;
-        for (const r of topVecRes.rows as any[]) {
-          const vec = JSON.parse(r.acoustic_vector_8d || r.acoustic_vector);
-          for(let i=0; i<8; i++) centroid[i] += (vec[i] || 0.5);
-          if (r.mfcc_vector) {
-            if (!effnetCentroid) effnetCentroid = new Array(128).fill(0);
-            const mv = JSON.parse(r.mfcc_vector);
-            for(let i=0; i<128; i++) (effnetCentroid as number[])[i] += mv[i];
-          } else { hasMfcc = false; }
-        }
-        centroid = centroid.map(v => v / topVecRes.rows.length);
-        const vecStr = `[${centroid.join(',')}]`;
-        if (hasMfcc && effnetCentroid) {
-          effnetCentroid = effnetCentroid.map(v => v / topVecRes.rows.length);
-        } else { effnetCentroid = null; }
-        const effnetStr = effnetCentroid ? `[${effnetCentroid.join(',')}]` : null;
+      const profile = buildTasteProfileCentroids(topVecRes.rows);
+      if (profile) {
+        const vecStr = profile.acousticVectorStr;
+        const effnetStr = profile.effnetVectorStr;
         const referenceGenre = (topVecRes.rows[0] as any).genre || '';
 
         // Find tracks with 0 plays by THIS user
@@ -1549,29 +1561,14 @@ export async function getHubCollections(
       }
     }
   } else {
-    // Fallback: global (backward compat)
+    // Fallback: global
     const topTracksRes = await queryWithRetry(
-      'SELECT t.id, t.genre, tf.acoustic_vector, tf.acoustic_vector_8d, tf.embedding_vector FROM tracks t JOIN track_features tf ON t.id = tf.track_id WHERE t.play_count > 0 ORDER BY t.play_count DESC LIMIT 10'
+      'SELECT t.id, t.genre, tf.acoustic_vector_8d, tf.embedding_vector FROM tracks t JOIN track_features tf ON t.id = tf.track_id WHERE t.play_count > 0 AND tf.acoustic_vector_8d IS NOT NULL ORDER BY t.play_count DESC LIMIT 10'
     );
-    if (topTracksRes.rows.length > 0) {
-       let centroid = [0,0,0,0,0,0,0,0];
-       let effnetCentroid: number[] | null = null;
-       let hasMfcc = true;
-       for (const r of topTracksRes.rows as any[]) {
-          const vec = JSON.parse(r.acoustic_vector_8d || r.acoustic_vector);
-          for(let i=0; i<8; i++) centroid[i] += (vec[i] || 0.5);
-          if (r.mfcc_vector) {
-            if (!effnetCentroid) effnetCentroid = new Array(128).fill(0);
-            const mv = JSON.parse(r.mfcc_vector);
-            for(let i=0; i<128; i++) (effnetCentroid as number[])[i] += mv[i];
-          } else { hasMfcc = false; }
-       }
-       centroid = centroid.map(v => v / topTracksRes.rows.length);
-       const vecStr = `[${centroid.join(',')}]`;
-       if (hasMfcc && effnetCentroid) {
-         effnetCentroid = effnetCentroid.map(v => v / topTracksRes.rows.length);
-       } else { effnetCentroid = null; }
-       const effnetStr = effnetCentroid ? `[${effnetCentroid.join(',')}]` : null;
+    const profile = buildTasteProfileCentroids(topTracksRes.rows);
+    if (profile) {
+       const vecStr = profile.acousticVectorStr;
+       const effnetStr = profile.effnetVectorStr;
        const referenceGenre = (topTracksRes.rows[0] as any).genre || '';
 
        let vaultRes;
@@ -1647,21 +1644,17 @@ export async function calculateNextInfinityTrack(
     // Maintain strict order
     const placeholders = last10Ids.map((_, i) => `$${i + 1}`).join(',');
     const vecRes = await queryWithRetry(`
-      SELECT t.id, tf.acoustic_vector_8d, tf.acoustic_vector, tf.embedding_vector
+      SELECT t.id, tf.acoustic_vector_8d
       FROM tracks t JOIN track_features tf ON t.id = tf.track_id 
-      WHERE t.id IN (${placeholders})
+      WHERE t.id IN (${placeholders}) AND tf.acoustic_vector_8d IS NOT NULL
     `, last10Ids);
-
-    let recentMfccVectors: number[][] = [];
 
     // Map rows back to the ordered last10 array
     for (const id of last10Ids) {
       const row = vecRes.rows.find((r: any) => r.id === id) as any;
-      if (row && (row.acoustic_vector_8d || row.acoustic_vector)) {
-        recentVectors.push(JSON.parse(row.acoustic_vector_8d || row.acoustic_vector));
-        if (row.mfcc_vector) {
-          recentMfccVectors.push(JSON.parse(row.mfcc_vector as string));
-        }
+      const acousticVector = parseNumericVector(row?.acoustic_vector_8d, 8);
+      if (acousticVector) {
+        recentVectors.push(acousticVector);
       }
     }
 
@@ -1717,7 +1710,7 @@ export async function calculateNextInfinityTrack(
 
   const vectorStr = `[${targetVector.join(',')}]`;
 
-  // Compute MFCC timbre centroid (weighted decay, same lambda) for the last-10 window
+  // Compute EffNet embedding centroid (weighted decay, same lambda) for the last-10 window
   let effnetVectorStr: string | null = null;
   if (sessionHistoryTrackIds.length > 0) {
     const last10Ids = sessionHistoryTrackIds.slice(-10);
@@ -1734,14 +1727,17 @@ export async function calculateNextInfinityTrack(
       const orderedEffnet: number[][] = [];
       for (const id of last10Ids) {
         const row = effnetRes.rows.find((r: any) => r.id === id) as any;
-        if (row && row.embedding_vector) orderedEffnet.push(JSON.parse(row.embedding_vector));
+        const embeddingVector = parseNumericVector(row?.embedding_vector, 1280);
+        if (embeddingVector) orderedEffnet.push(embeddingVector);
       }
-      for (let i = 0; i < orderedEffnet.length; i++) {
-        const weight = Math.pow(lambda, orderedEffnet.length - 1 - i);
-        effnetWeightSum += weight;
-        for (let j = 0; j < 1280; j++) effnetTarget[j] += orderedEffnet[i][j] * weight;
+      if (orderedEffnet.length > 0) {
+        for (let i = 0; i < orderedEffnet.length; i++) {
+          const weight = Math.pow(lambda, orderedEffnet.length - 1 - i);
+          effnetWeightSum += weight;
+          for (let j = 0; j < 1280; j++) effnetTarget[j] += orderedEffnet[i][j] * weight;
+        }
+        effnetVectorStr = `[${effnetTarget.map(v => v / effnetWeightSum).join(',')}]`;
       }
-      effnetVectorStr = `[${effnetTarget.map(v => v / effnetWeightSum).join(',')}]`;
     }
   }
 
