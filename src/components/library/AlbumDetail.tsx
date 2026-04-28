@@ -75,6 +75,24 @@ const TrackRowSkeleton: React.FC = () => (
     </div>
 );
 
+const AlbumDetailSkeleton: React.FC<{ onBack: () => void }> = ({ onBack }) => (
+    <div className="flex flex-col overflow-hidden p-4 md:p-8 lg:p-12 flex-1">
+        <div className="shrink-0 mb-6"><BackButton onClick={onBack} /></div>
+        <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12">
+            <div className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+            <div className="flex-1 space-y-3">
+                <div className="h-4 w-16 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                <div className="h-10 w-3/4 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                <div className="h-5 w-1/2 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                <div className="h-10 w-32 rounded-full bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mt-4" />
+            </div>
+        </div>
+        <div className="space-y-0.5">
+            {Array.from({ length: 8 }).map((_, i) => <TrackRowSkeleton key={i} />)}
+        </div>
+    </div>
+);
+
 interface AlbumDiscHeaderRow {
     type: 'disc';
     disc: number;
@@ -191,6 +209,7 @@ export const AlbumDetail: React.FC = () => {
     const navigate = useNavigate();
 
     const library = usePlayerStore(state => state.library);
+    const isLibraryLoading = usePlayerStore(state => state.isLibraryLoading);
     const albums = usePlayerStore(state => state.albums);
     const artists = usePlayerStore(state => state.artists);
     const setPlaylist = usePlayerStore(state => state.setPlaylist);
@@ -363,24 +382,8 @@ export const AlbumDetail: React.FC = () => {
 
     // ── Navigation helpers ─────────────────────────────────────────────────
 
-    if (!albumId) {
-        return (
-            <div className="flex flex-col overflow-hidden p-4 md:p-8 lg:p-12 flex-1">
-                <div className="shrink-0 mb-6"><BackButton onClick={() => navigate(-1)} /></div>
-                <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12">
-                    <div className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl bg-[var(--color-surface-variant)] animate-pulse" />
-                    <div className="flex-1 space-y-3">
-                        <div className="h-4 w-16 rounded bg-[var(--color-surface-variant)] animate-pulse" />
-                        <div className="h-10 w-3/4 rounded bg-[var(--color-surface-variant)] animate-pulse" />
-                        <div className="h-5 w-1/2 rounded bg-[var(--color-surface-variant)] animate-pulse" />
-                        <div className="h-10 w-32 rounded-full bg-[var(--color-surface-variant)] animate-pulse mt-4" />
-                    </div>
-                </div>
-                <div className="space-y-0.5">
-                    {Array.from({ length: 8 }).map((_, i) => <TrackRowSkeleton key={i} />)}
-                </div>
-            </div>
-        );
+    if (!albumId || (isLibraryLoading && albumTracks.length === 0)) {
+        return <AlbumDetailSkeleton onBack={() => navigate(-1)} />;
     }
 
     if (albumTracks.length === 0) {

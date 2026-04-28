@@ -9,10 +9,28 @@ import { useExternalImage } from '../../hooks/useExternalImage';
 import { fetchGenreImage, fetchGenreInfo } from '../../utils/externalImagery';
 import { Music } from 'lucide-react';
 
+const GenreDetailSkeleton: React.FC<{ onBack: () => void }> = ({ onBack }) => (
+    <div className="genre-detail page-container relative">
+        <div className="relative z-10">
+            <BackButton onClick={onBack} />
+            <div className="h-14 md:h-20 w-2/3 max-w-lg rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mb-4 md:mb-6" />
+            <div className="max-w-3xl mb-6 md:mb-8 space-y-2">
+                <div className="h-4 w-full rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                <div className="h-4 w-4/5 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                <div className="h-4 w-3/5 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+            </div>
+            <div className="h-7 w-56 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mb-4 md:mb-6" />
+            <div className="album-grid">
+                {Array.from({ length: 8 }).map((_, i) => <AlbumCardSkeleton key={i} />)}
+            </div>
+        </div>
+    </div>
+);
+
 export const GenreDetail: React.FC = () => {
     const { genreId } = useParams<{ genreId: string }>();
     const navigate = useNavigate();
-    const { library, genres, setPlaylist } = usePlayerStore();
+    const { library, genres, setPlaylist, isLibraryLoading } = usePlayerStore();
 
     // Find genre info from entity list
     const genreInfo = useMemo(() => genres.find(g => g.id === genreId), [genres, genreId]);
@@ -69,6 +87,10 @@ export const GenreDetail: React.FC = () => {
 
         return Array.from(albumMap.values()).sort((a, b) => a.title.localeCompare(b.title));
     }, [genreTracks]);
+
+    if (isLibraryLoading && (!genreName || genreTracks.length === 0)) {
+        return <GenreDetailSkeleton onBack={() => navigate(-1)} />;
+    }
 
     if (!genreName || genreTracks.length === 0) return (
         <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">

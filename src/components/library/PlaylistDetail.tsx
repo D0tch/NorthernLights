@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useDeferredValue, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
@@ -73,6 +73,42 @@ function buildBackdropTiles(artUrls: string[]): Array<string | null> {
 
   return Array.from({ length: count }, (_, index) => artUrls[(index * 5 + Math.floor(index / 4)) % artUrls.length]);
 }
+
+const PlaylistDetailSkeleton: React.FC<{ onBack: () => void }> = ({ onBack }) => (
+  <div className="page-container relative overflow-x-hidden">
+    <div className="relative z-10">
+      <BackButton onClick={onBack}>Back to Playlists</BackButton>
+      <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
+        <div className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+        <div className="flex-1 w-full space-y-3">
+          <div className="h-4 w-20 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+          <div className="h-10 w-3/4 max-w-xl rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+          <div className="h-5 w-56 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+          <div className="h-10 w-32 rounded-full bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0 mt-4" />
+        </div>
+      </div>
+      <div className="space-y-0.5">
+        {Array.from({ length: 8 }).map((_, i) => (
+          <div
+            key={i}
+            className="grid grid-cols-[28px_44px_minmax(0,1fr)_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-2 items-center animate-pulse motion-reduce:animate-none"
+          >
+            <div className="h-4 w-4 rounded bg-[var(--color-surface-variant)]" />
+            <div className="h-11 w-11 md:h-13 md:w-13 rounded-lg md:rounded-xl bg-[var(--color-surface-variant)]" />
+            <div className="space-y-2">
+              <div className="h-4 w-3/4 rounded bg-[var(--color-surface-variant)]" />
+              <div className="h-3 w-1/2 rounded bg-[var(--color-surface-variant)]" />
+            </div>
+            <div className="hidden md:block h-4 w-2/3 rounded bg-[var(--color-surface-variant)]" />
+            <div className="hidden md:block h-4 w-20 rounded bg-[var(--color-surface-variant)]" />
+            <div className="hidden md:block h-4 w-12 rounded bg-[var(--color-surface-variant)]" />
+            <div className="h-8 w-8 rounded-full bg-[var(--color-surface-variant)]" />
+          </div>
+        ))}
+      </div>
+    </div>
+  </div>
+);
 
 interface PlaylistTrackRowProps {
   id: string;
@@ -247,6 +283,7 @@ export const PlaylistDetail: React.FC = () => {
   const { playlistId } = useParams<{ playlistId: string }>();
   const navigate = useNavigate();
   const { addToast } = useToast();
+  const [hasCheckedPlaylist, setHasCheckedPlaylist] = useState(false);
 
   const playlists = usePlayerStore((state) => state.playlists);
   const library = usePlayerStore((state) => state.library);
@@ -257,11 +294,32 @@ export const PlaylistDetail: React.FC = () => {
   const openContextMenu = usePlayerStore((state) => state.openContextMenu);
   const replaceTracksInUserPlaylist = usePlayerStore((state) => state.replaceTracksInUserPlaylist);
   const addTracksToUserPlaylist = usePlayerStore((state) => state.addTracksToUserPlaylist);
+  const fetchPlaylistsFromServer = usePlayerStore((state) => state.fetchPlaylistsFromServer);
+  const isPlaylistsLoading = usePlayerStore((state) => state.isPlaylistsLoading);
 
   const playlist = useMemo(
     () => playlists.find((entry) => entry.id === playlistId),
     [playlists, playlistId]
   );
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!playlistId) return;
+    if (playlist) {
+      setHasCheckedPlaylist(true);
+      return;
+    }
+
+    setHasCheckedPlaylist(false);
+    fetchPlaylistsFromServer().finally(() => {
+      if (!cancelled) setHasCheckedPlaylist(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchPlaylistsFromServer, playlist, playlistId]);
 
   const isSystemPlaylist = !!playlist?.isSystem;
   const playlistTracks = playlist?.tracks || [];
@@ -442,6 +500,10 @@ export const PlaylistDetail: React.FC = () => {
   }
 
   if (!playlist) {
+    if (isPlaylistsLoading || !hasCheckedPlaylist) {
+      return <PlaylistDetailSkeleton onBack={() => navigate('/playlists')} />;
+    }
+
     return (
       <div className="page-container">
         <BackButton onClick={() => navigate('/playlists')}>Back to Playlists</BackButton>

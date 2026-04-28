@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store';
 import {
@@ -286,12 +286,16 @@ const CreatePlaylistForm: React.FC<{ onSubmit: (title: string) => void; onCancel
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export const Playlists: React.FC = () => {
-  const { playlists, setPlaylist, createPlaylist, deletePlaylist, togglePin } = usePlayerStore();
+  const { playlists, setPlaylist, createPlaylist, deletePlaylist, togglePin, fetchPlaylistsFromServer, isPlaylistsLoading } = usePlayerStore();
   const navigate = useNavigate();
 
   const [isCreating,   setIsCreating]   = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [activeMenu,   setActiveMenu]   = useState<PlaylistMenuTrigger | null>(null);
+
+  useEffect(() => {
+    void fetchPlaylistsFromServer();
+  }, [fetchPlaylistsFromServer]);
 
   const handleCreate = async (title: string) => {
     await createPlaylist(title, '');
@@ -369,7 +373,13 @@ export const Playlists: React.FC = () => {
       </header>
 
       {/* ── Grid ── */}
-      {playlists.length === 0 && !isCreating ? (
+      {isPlaylistsLoading && playlists.length === 0 ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 lg:gap-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <PlaylistCardSkeleton key={i} />
+          ))}
+        </div>
+      ) : playlists.length === 0 && !isCreating ? (
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <div className="w-16 h-16 rounded-full bg-[var(--color-surface-variant)] flex items-center justify-center mb-4">
             <Sparkles className="w-8 h-8 text-[var(--color-primary)]" />
