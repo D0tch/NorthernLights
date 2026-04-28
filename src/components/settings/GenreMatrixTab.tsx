@@ -7,8 +7,35 @@ import { Database, Sparkles, AlertTriangle, ArrowRight, Library } from 'lucide-r
 interface MbdbImportInfo {
     timestamp: number;
     duration: number;
-    counts: { genres: number; aliases: number; links: number };
+    counts?: { genres?: number; aliases?: number; links?: number };
 }
+
+const normalizeMbdbImportInfo = (value: unknown): MbdbImportInfo | null => {
+    if (!value) return null;
+
+    let parsed = value;
+    if (typeof value === 'string') {
+        try {
+            parsed = JSON.parse(value);
+        } catch {
+            return null;
+        }
+    }
+
+    if (!parsed || typeof parsed !== 'object') return null;
+    const info = parsed as Partial<MbdbImportInfo>;
+    const counts = info.counts || {};
+
+    return {
+        timestamp: Number(info.timestamp || 0),
+        duration: Number(info.duration || 0),
+        counts: {
+            genres: Number(counts.genres || 0),
+            aliases: Number(counts.aliases || 0),
+            links: Number(counts.links || 0),
+        },
+    };
+};
 
 export const GenreMatrixTab: React.FC = () => {
     const genreMatrixLastRun = usePlayerStore(state => state.genreMatrixLastRun);
@@ -22,7 +49,7 @@ export const GenreMatrixTab: React.FC = () => {
     const library = usePlayerStore(state => state.library);
 
     // Local state for MBDB to ensure we have fresh data
-    const [mbdbLastImported, setMbdbLastImported] = useState<MbdbImportInfo | null>(storeMbdbLastImported);
+    const [mbdbLastImported, setMbdbLastImported] = useState<MbdbImportInfo | null>(() => normalizeMbdbImportInfo(storeMbdbLastImported));
 
     const [isRunningMatrix, setIsRunningMatrix] = useState(false);
     const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel?: string; onConfirm: () => void } | null>(null);
@@ -44,7 +71,7 @@ export const GenreMatrixTab: React.FC = () => {
             if (res.ok) {
                 const data = await res.json();
                 if (data.lastImport) {
-                    setMbdbLastImported(data.lastImport);
+                    setMbdbLastImported(normalizeMbdbImportInfo(data.lastImport));
                 }
             }
         } catch(e) { console.error('Failed to fetch MBDB status', e); }
@@ -138,6 +165,7 @@ export const GenreMatrixTab: React.FC = () => {
     const llmStatus = llmConnected ? 'available' : 'unavailable';
     const mbdbStatus = mbdbLastImported ? 'available' : 'unavailable';
     const libraryStatus = hasLibrary ? 'available' : 'unavailable';
+    const mbdbGenreCount = mbdbLastImported?.counts?.genres ?? 0;
 
     return (
         <div className="settings-section mb-8">
@@ -164,8 +192,8 @@ export const GenreMatrixTab: React.FC = () => {
                     <DependencyBadge
                         label="MusicBrainz Database"
                         status={mbdbStatus}
-                        message={mbdbLastImported 
-                            ? `Imported ${mbdbLastImported.counts.genres.toLocaleString()} genres` 
+                        message={mbdbLastImported
+                            ? `Imported ${mbdbGenreCount.toLocaleString()} genres`
                             : 'Optional - improves mapping accuracy'}
                         actionLabel={!mbdbLastImported ? 'Import in Database tab' : undefined}
                         onAction={!mbdbLastImported ? () => {

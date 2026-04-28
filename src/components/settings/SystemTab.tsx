@@ -78,13 +78,15 @@ export const SystemTab: React.FC = () => {
                     className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
                 >
                     <option value="Manual Only">Manual Only</option>
+                    <option value="Hourly">Hourly</option>
+                    <option value="Every 2 Hours">Every 2 hours</option>
+                    <option value="Every 4 Hours">Every 4 hours</option>
                     <option value="Daily">Daily</option>
-                    <option value="Weekly">Weekly</option>
                 </select>
                 <div className="mt-4">
                     <p className="text-xs text-[var(--color-text-muted)] mb-2 max-w-sm leading-relaxed">
-                        Manually trigger the AI to generate fresh playlists based on the time of day and your listening history. 
-                        <span className="text-[var(--color-error)] block mt-1 font-medium">Warning: Resetting will delete all current LLM-generated playlists from your hub.</span>
+                        Refreshes are checked when a user logs in or opens the Hub. Inactive users are skipped.
+                        <span className="text-[var(--color-error)] block mt-1 font-medium">Resetting deletes transient Hub-generated LLM playlists and regenerates fresh ones. Prompt-generated playlists are kept.</span>
                     </p>
                     <button 
                         onClick={handleManualHubRegen}

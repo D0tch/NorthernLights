@@ -37,6 +37,7 @@ export const MetadataTab: React.FC = () => {
     const musicBrainzRedirectUri = usePlayerStore(state => state.musicBrainzRedirectUri);
     const setMusicBrainzRedirectUri = usePlayerStore(state => state.setMusicBrainzRedirectUri);
     const providerArtistImage = usePlayerStore(state => state.providerArtistImage);
+    const providerArtistArtwork = usePlayerStore(state => state.providerArtistArtwork);
     const providerArtistBio = usePlayerStore(state => state.providerArtistBio);
     const providerAlbumArt = usePlayerStore(state => state.providerAlbumArt);
     const jambaseEnabled = usePlayerStore(state => state.jambaseEnabled);
@@ -199,12 +200,19 @@ export const MetadataTab: React.FC = () => {
                     {/* Default Provider Configuration */}
                     <div className="mt-8 pt-6 border-t border-[var(--glass-border)]">
                         <h4 className="text-lg font-semibold text-[var(--color-text-primary)] mb-4">API Hierarchy Preferences</h4>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-6">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
                             <div>
                                 <label className="block text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Artist Images</label>
                                 <select disabled={!lastFmApiKey && !geniusApiKey} value={providerArtistImage} onChange={e => setSettings({ providerArtistImage: e.target.value as 'lastfm' | 'genius' })} className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm shadow-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors disabled:opacity-50">
                                     <option value="lastfm" disabled={!lastFmApiKey}>Last.fm {!lastFmApiKey && '(Not Configured)'}</option>
                                     <option value="genius" disabled={!geniusApiKey}>Genius {!geniusApiKey && '(Not Configured)'}</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Artist Artwork</label>
+                                <select value={providerArtistArtwork} onChange={e => setSettings({ providerArtistArtwork: e.target.value as 'genius' | 'none' })} className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm shadow-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors">
+                                    <option value="genius" disabled={!geniusApiKey}>Genius {!geniusApiKey && '(Not Configured)'}</option>
+                                    <option value="none">None</option>
                                 </select>
                             </div>
                             <div>
@@ -357,6 +365,11 @@ export const MetadataTab: React.FC = () => {
                             <DependencyInfoBox
                                 title="Artist Imagery"
                                 description="Alternative source for artist portraits when Last.fm is unavailable"
+                                icon={<ImageIcon size={16} />}
+                            />
+                            <DependencyInfoBox
+                                title="Artist Hero Artwork"
+                                description="Secondary Genius header artwork used for faded artist page hero backgrounds"
                                 icon={<ImageIcon size={16} />}
                             />
                             <DependencyInfoBox
