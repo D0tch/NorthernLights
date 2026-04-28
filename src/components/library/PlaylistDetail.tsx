@@ -91,7 +91,7 @@ const PlaylistDetailSkeleton: React.FC<{ onBack: () => void }> = ({ onBack }) =>
         {Array.from({ length: 8 }).map((_, i) => (
           <div
             key={i}
-            className="grid grid-cols-[28px_44px_minmax(0,1fr)_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-2 items-center animate-pulse motion-reduce:animate-none"
+            className="grid grid-cols-[30px_44px_minmax(0,1fr)_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-2 items-center animate-pulse motion-reduce:animate-none"
           >
             <div className="h-4 w-4 rounded bg-[var(--color-surface-variant)]" />
             <div className="h-11 w-11 md:h-13 md:w-13 rounded-lg md:rounded-xl bg-[var(--color-surface-variant)]" />
@@ -149,7 +149,7 @@ const PlaylistTrackRow = memo(({
         opacity: isDragging ? 0.55 : 1,
         zIndex: isDragging ? 10 : 1,
       }}
-      className="grid grid-cols-[28px_44px_minmax(0,1fr)_56px_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
+      className="grid grid-cols-[30px_44px_minmax(0,1fr)_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
     >
       <div
         className="text-center md:text-left text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums"
@@ -206,11 +206,8 @@ const PlaylistTrackRow = memo(({
         {formatPlaylistAddedDate(track.playlistAddedAt)}
       </div>
 
-      <div className="text-[var(--color-text-muted)] flex flex-row items-center justify-end md:justify-start md:gap-2">
+      <div className="hidden text-[var(--color-text-muted)] md:flex md:flex-row md:items-center md:justify-start md:gap-2">
         <span className="w-12 text-right md:text-left hidden md:inline text-sm tabular-nums">
-          {formatTime(track.duration, '--:--')}
-        </span>
-        <span className="w-12 text-right text-sm tabular-nums md:hidden">
           {formatTime(track.duration, '--:--')}
         </span>
       </div>
@@ -624,13 +621,13 @@ export const PlaylistDetail: React.FC = () => {
         </div>
 
         <div className="mb-8">
-          <div className="grid grid-cols-[28px_44px_minmax(0,1fr)_56px_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-3 border-b border-black/5 dark:border-white/10 font-semibold text-xs uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
+          <div className="grid grid-cols-[30px_44px_minmax(0,1fr)_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-3 border-b border-black/5 dark:border-white/10 font-semibold text-xs uppercase tracking-wider text-[var(--color-text-muted)] mb-1">
             <div className="text-center md:text-left">#</div>
             <div aria-hidden="true" />
             <div>Title</div>
             <div className="hidden md:block">Album</div>
             <div className="hidden md:block">Date Added</div>
-            <div className="text-right md:text-left">Time</div>
+            <div className="hidden md:block md:text-left">Time</div>
             <div aria-hidden="true" />
           </div>
 
