@@ -3,6 +3,7 @@ import { fetchArtistData } from '../utils/externalImagery';
 
 interface ArtistDataState {
   imageUrl: string | undefined;
+  artworkUrl: string | undefined;
   bio: string | undefined;
   disambiguation: string | undefined;
   area: string | undefined;
@@ -21,6 +22,7 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
   const enabled = options?.enabled !== false;
   const debounceMs = options?.debounceMs ?? 200;
   const [imageUrl, setImageUrl] = useState<string | undefined>();
+  const [artworkUrl, setArtworkUrl] = useState<string | undefined>();
   const [bio, setBio] = useState<string | undefined>();
   const [disambiguation, setDisambiguation] = useState<string | undefined>();
   const [area, setArea] = useState<string | undefined>();
@@ -55,6 +57,7 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
     // Reset metadata only if the artist name has changed (not just scrolling in view)
     if (lastFetchedNameRef.current !== artistName) {
       setImageUrl(undefined);
+      setArtworkUrl(undefined);
       setBio(undefined);
       setDisambiguation(undefined);
       setArea(undefined);
@@ -76,6 +79,7 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
             lastFetchedNameRef.current = artistName;
             lastSuccessfulFetchKeyRef.current = fetchKey;
             setImageUrl(data.imageUrl);
+            setArtworkUrl(data.artworkUrl);
             setBio(data.bio);
             setDisambiguation(data.disambiguation);
             setArea(data.area);
@@ -106,5 +110,5 @@ export const useArtistData = (artistName: string, mbArtistId?: string | null, op
     };
   }, [artistName, mbArtistId, enabled, debounceMs]);
 
-  return { imageUrl, bio, disambiguation, area, type, lifeSpan, links, genres, communityTags, listeners, members, isLoading, error };
+  return { imageUrl, artworkUrl, bio, disambiguation, area, type, lifeSpan, links, genres, communityTags, listeners, members, isLoading, error };
 };

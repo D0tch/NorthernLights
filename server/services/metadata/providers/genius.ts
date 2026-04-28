@@ -19,6 +19,8 @@ export interface GeniusSearchResult {
 export interface GeniusArtist {
   response?: {
     artist?: {
+      image_url?: string;
+      header_image_url?: string;
       description?: { plain?: string };
     };
   };

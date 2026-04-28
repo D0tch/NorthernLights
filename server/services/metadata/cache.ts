@@ -14,6 +14,7 @@ export async function getCachedArtist(name: string): Promise<any | null> {
 }
 
 export interface ArtistCacheExtras {
+  artworkUrl?: string | null;
   disambiguation?: string | null;
   area?: string | null;
   artistType?: string | null;
@@ -38,24 +39,25 @@ export async function upsertArtistCache(
   const now = Math.floor(Date.now() / 1000);
   if (updateLastUpdated) {
     await db.query(
-      `INSERT INTO artists (id, name, image_url, bio, mbid, last_updated, disambiguation, area, artist_type, lifespan_begin, lifespan_end, links, genres, community_tags, listeners, members)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+      `INSERT INTO artists (id, name, image_url, artwork_url, bio, mbid, last_updated, disambiguation, area, artist_type, lifespan_begin, lifespan_end, links, genres, community_tags, listeners, members)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
        ON CONFLICT (name) DO UPDATE SET
          image_url = COALESCE($2, artists.image_url),
-         bio = COALESCE($3, artists.bio),
-         mbid = COALESCE($4, artists.mbid),
-         last_updated = $5,
-         disambiguation = COALESCE($6, artists.disambiguation),
-         area = COALESCE($7, artists.area),
-         artist_type = COALESCE($8, artists.artist_type),
-         lifespan_begin = COALESCE($9, artists.lifespan_begin),
-         lifespan_end = COALESCE($10, artists.lifespan_end),
-         links = COALESCE($11, artists.links),
-         genres = COALESCE($12, artists.genres),
-         community_tags = COALESCE($13, artists.community_tags),
-         listeners = COALESCE($14, artists.listeners),
-         members = COALESCE($15, artists.members)`,
-      [name, imageUrl, bio, mbid, now,
+         artwork_url = COALESCE($3, artists.artwork_url),
+         bio = COALESCE($4, artists.bio),
+         mbid = COALESCE($5, artists.mbid),
+         last_updated = $6,
+         disambiguation = COALESCE($7, artists.disambiguation),
+         area = COALESCE($8, artists.area),
+         artist_type = COALESCE($9, artists.artist_type),
+         lifespan_begin = COALESCE($10, artists.lifespan_begin),
+         lifespan_end = COALESCE($11, artists.lifespan_end),
+         links = COALESCE($12, artists.links),
+         genres = COALESCE($13, artists.genres),
+         community_tags = COALESCE($14, artists.community_tags),
+         listeners = COALESCE($15, artists.listeners),
+         members = COALESCE($16, artists.members)`,
+      [name, imageUrl, extras.artworkUrl ?? null, bio, mbid, now,
        extras.disambiguation ?? null,
        extras.area ?? null,
        extras.artistType ?? null,
@@ -69,13 +71,14 @@ export async function upsertArtistCache(
     );
   } else {
     await db.query(
-      `INSERT INTO artists (id, name, image_url, bio, mbid, last_updated)
-       VALUES (gen_random_uuid(), $1, $2, $3, $4, 0)
+      `INSERT INTO artists (id, name, image_url, artwork_url, bio, mbid, last_updated)
+       VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, 0)
        ON CONFLICT (name) DO UPDATE SET
          image_url = COALESCE($2, artists.image_url),
-         bio = COALESCE($3, artists.bio),
-         mbid = COALESCE($4, artists.mbid)`,
-      [name, imageUrl, bio, mbid]
+         artwork_url = COALESCE($3, artists.artwork_url),
+         bio = COALESCE($4, artists.bio),
+         mbid = COALESCE($5, artists.mbid)`,
+      [name, imageUrl, extras.artworkUrl ?? null, bio, mbid]
     );
   }
 }
@@ -177,7 +180,7 @@ export async function upsertGenreCache(
 
 export async function clearExternalCache(): Promise<void> {
   const db = await initDB();
-  await db.query('UPDATE artists SET last_updated = 0, image_url = NULL, bio = NULL WHERE last_updated > 0 OR image_url IS NOT NULL OR bio IS NOT NULL');
+  await db.query('UPDATE artists SET last_updated = 0, image_url = NULL, artwork_url = NULL, bio = NULL WHERE last_updated > 0 OR image_url IS NOT NULL OR artwork_url IS NOT NULL OR bio IS NOT NULL');
   await db.query('UPDATE albums SET last_updated = 0, image_url = NULL WHERE last_updated > 0 OR image_url IS NOT NULL');
   await db.query('UPDATE genres SET last_updated = 0, image_url = NULL, description = NULL WHERE last_updated > 0 OR image_url IS NOT NULL OR description IS NOT NULL');
 }

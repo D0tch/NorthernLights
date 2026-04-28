@@ -2,6 +2,7 @@ import { usePlayerStore } from '../store';
 
 interface ArtistData {
     imageUrl?: string;
+    artworkUrl?: string;
     bio?: string;
     disambiguation?: string;
     area?: string;
@@ -60,6 +61,9 @@ export const fetchArtistData = async (artistName: string, mbArtistId?: string | 
     // Proxy image URL for CORS-free loading
     if (data.imageUrl) {
         data.imageUrl = proxyImageUrl(data.imageUrl);
+    }
+    if (data.artworkUrl) {
+        data.artworkUrl = proxyImageUrl(data.artworkUrl);
     }
 
     return data;

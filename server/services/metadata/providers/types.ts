@@ -1,5 +1,6 @@
 export interface ArtistData {
   imageUrl?: string;
+  artworkUrl?: string;
   bio?: string;
   disambiguation?: string;
   area?: string;
@@ -21,6 +22,7 @@ export interface ProviderSettings {
   geniusApiKey: string;
   musicBrainzEnabled: boolean;
   providerArtistImage: string;
+  providerArtistArtwork: string;
   providerArtistBio: string;
   providerAlbumArt: string;
 }

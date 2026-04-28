@@ -28,6 +28,7 @@ import { extractMbLinks, extractMbMembers, mbGetArtist, mbGetAlbumCover, mbSearc
 // ─── Types ──────────────────────────────────────────────────────────
 export interface ArtistData {
   imageUrl?: string;
+  artworkUrl?: string;
   bio?: string;
   disambiguation?: string;
   area?: string;
@@ -76,6 +77,7 @@ interface ProviderSettings {
   geniusApiKey: string;
   musicBrainzEnabled: boolean;
   providerArtistImage: string;
+  providerArtistArtwork: string;
   providerArtistBio: string;
   providerAlbumArt: string;
 }
@@ -136,6 +138,7 @@ async function getProviderSettings(): Promise<ProviderSettings> {
       (await getSystemSetting('musicBrainzEnabled')) === true ||
       (await getSystemSetting('musicBrainzEnabled')) === 'true',
     providerArtistImage: (await getSystemSetting('providerArtistImage')) || 'lastfm',
+    providerArtistArtwork: (await getSystemSetting('providerArtistArtwork')) || 'genius',
     providerArtistBio: (await getSystemSetting('providerArtistBio')) || 'lastfm',
     providerAlbumArt: (await getSystemSetting('providerAlbumArt')) || 'lastfm',
   };
@@ -155,14 +158,17 @@ export async function getArtistData(
 
   const settings = await getProviderSettings();
   const cached = await getCachedArtist(name);
+  const wantsGeniusArtwork = settings.providerArtistArtwork === 'genius' && !!settings.geniusApiKey;
 
   if (cached && isCacheFresh(cached.last_updated)) {
     if (
       (cached.image_url || cached.bio || cached.area || cached.artist_type || cached.disambiguation) &&
+      (!wantsGeniusArtwork || cached.artwork_url) &&
       (cached.community_tags || (!settings.lastFmApiKey && !settings.musicBrainzEnabled))
     ) {
       return {
         imageUrl: cached.image_url || undefined,
+        artworkUrl: settings.providerArtistArtwork === 'none' ? undefined : cached.artwork_url || undefined,
         bio: cached.bio || undefined,
         disambiguation: cached.disambiguation || undefined,
         area: cached.area || undefined,
@@ -224,9 +230,11 @@ export async function getArtistData(
   };
 
   const imgProvider = settings.providerArtistImage;
+  const artworkProvider = settings.providerArtistArtwork;
   const bioProvider = settings.providerArtistBio;
 
   if (imgProvider === 'genius' && settings.geniusApiKey) pushApi('genius');
+  if (artworkProvider === 'genius' && settings.geniusApiKey) pushApi('genius');
   if (imgProvider === 'lastfm' && settings.lastFmApiKey) pushApi('lastfm');
   if (bioProvider === 'genius' && settings.geniusApiKey) pushApi('genius');
   if (bioProvider === 'lastfm' && settings.lastFmApiKey) pushApi('lastfm');
@@ -271,6 +279,7 @@ export async function getArtistData(
 
             const artistId = match?.result?.primary_artist?.id;
             const imageUrl = match?.result?.primary_artist?.image_url;
+            const fallbackArtworkUrl = match?.result?.header_image_url;
 
             if (
               imageUrl &&
@@ -280,14 +289,31 @@ export async function getArtistData(
               data.imageUrl = imageUrl;
             }
 
-            if (artistId && !data.bio) {
+            if (wantsGeniusArtwork && fallbackArtworkUrl && !data.artworkUrl && !fallbackArtworkUrl.includes('default_cover_image.png')) {
+              data.artworkUrl = fallbackArtworkUrl;
+            }
+
+            if (artistId && (!data.bio || (wantsGeniusArtwork && !data.artworkUrl))) {
               const artistJson = await geniusGetArtist(
                 artistId,
                 settings.geniusApiKey
               );
               if (artistJson) {
+                const artist = artistJson.response?.artist;
+                const artworkUrl = artist?.header_image_url;
+                const artistImageUrl = artist?.image_url;
+                if (wantsGeniusArtwork && artworkUrl && !data.artworkUrl && !artworkUrl.includes('default_avatar')) {
+                  data.artworkUrl = artworkUrl;
+                }
+                if (
+                  artistImageUrl &&
+                  !data.imageUrl &&
+                  !artistImageUrl.includes('default_avatar')
+                ) {
+                  data.imageUrl = artistImageUrl;
+                }
                 const bioPlain =
-                  artistJson.response?.artist?.description?.plain;
+                  artist?.description?.plain;
                 if (
                   typeof bioPlain === 'string' &&
                   bioPlain.trim().length > 0 &&
@@ -353,6 +379,7 @@ export async function getArtistData(
       communityTags: data.communityTags && data.communityTags.length > 0 ? JSON.stringify(data.communityTags) : null,
       listeners: data.listeners ?? null,
       members: data.members && data.members.length > 0 ? JSON.stringify(data.members) : null,
+      artworkUrl: data.artworkUrl ?? null,
     };
     await upsertArtistCache(
       name,
