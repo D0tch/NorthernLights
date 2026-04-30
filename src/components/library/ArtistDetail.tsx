@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { TrackInfo } from '../../utils/fileSystem';
-import { trackMatchesArtist } from '../../utils/artistUtils';
+import { normalizeArtistIdentityKey, trackMatchesArtist } from '../../utils/artistUtils';
 import { useArtistData } from '../../hooks/useArtistData';
 import { useArtistTopTracks } from '../../hooks/useArtistTopTracks';
 import { AlbumArt } from '../AlbumArt';
@@ -297,19 +297,76 @@ export const ArtistDetail: React.FC = () => {
         return library.filter(t => t.artistId === artistId);
     }, [library, artistId, artistName]);
 
-    // Tracks where this artist APPEARS but is NOT the album owner
-    const featuredTracks = useMemo(() => {
+    // Tracks where this artist APPEARS but is NOT the album owner.
+    // Compares using canonical identity keys so post-merge variants
+    // (e.g. tracks tagged "N'to" still match the canonical "NTO" artist).
+    const otherCreditedTracks = useMemo(() => {
         if (!artistName) return [];
-        const artistLower = artistName.toLowerCase();
+        const artistKey = normalizeArtistIdentityKey(artistName);
+        if (!artistKey) return [];
         return library.filter(t => {
-            const albumOwner = (t.albumArtist || t.artist || '').toLowerCase();
-            if (albumOwner === artistLower) return false;
+            if (t.artistId === artistId) return false;
+            const albumOwnerKey = normalizeArtistIdentityKey(t.albumArtist || t.artist || '');
+            if (albumOwnerKey === artistKey) return false;
             if (Array.isArray(t.artists)) {
-                return t.artists.some(a => a.toLowerCase() === artistLower);
+                return t.artists.some(a => normalizeArtistIdentityKey(a) === artistKey);
             }
             return trackMatchesArtist(t.artist, artistName);
         });
-    }, [library, artistName]);
+    }, [library, artistId, artistName]);
+
+    // Among the credited-but-not-owner tracks, identify whole albums where
+    // this artist is a co-primary collaborator rather than a guest feature.
+    // Heuristic: if the artist is credited on at least half of the album's
+    // tracks in the library, the album is a collaboration (Tony Bennett &
+    // Lady Gaga's "Cheek to Cheek") and should appear under primary releases
+    // on both pages. Single-track guest features stay under "Also appears on".
+    const COLLABORATION_TRACK_RATIO = 0.5;
+    const { collaborationTracks, featuredTracks } = useMemo(() => {
+        if (otherCreditedTracks.length === 0) {
+            return { collaborationTracks: [] as TrackInfo[], featuredTracks: [] as TrackInfo[] };
+        }
+        const artistKey = normalizeArtistIdentityKey(artistName);
+        if (!artistKey) {
+            return { collaborationTracks: [] as TrackInfo[], featuredTracks: otherCreditedTracks };
+        }
+
+        const albumKeyOf = (t: TrackInfo) =>
+            t.albumId || (t.album ? `${t.album}::::${t.albumArtist || t.artist || ''}` : '');
+
+        const tracksByAlbum = new Map<string, TrackInfo[]>();
+        for (const t of library) {
+            const k = albumKeyOf(t);
+            if (!k) continue;
+            tracksByAlbum.set(k, [...(tracksByAlbum.get(k) || []), t]);
+        }
+
+        const collaborationKeys = new Set<string>();
+        const checked = new Set<string>();
+        for (const t of otherCreditedTracks) {
+            const k = albumKeyOf(t);
+            if (!k || checked.has(k)) continue;
+            checked.add(k);
+            const allOnAlbum = tracksByAlbum.get(k) || [];
+            if (allOnAlbum.length === 0) continue;
+            const credited = allOnAlbum.filter(at => {
+                if (Array.isArray(at.artists)) {
+                    return at.artists.some(a => normalizeArtistIdentityKey(a) === artistKey);
+                }
+                return trackMatchesArtist(at.artist, artistName);
+            }).length;
+            if (credited / allOnAlbum.length >= COLLABORATION_TRACK_RATIO) {
+                collaborationKeys.add(k);
+            }
+        }
+
+        const collab: TrackInfo[] = [];
+        const feat: TrackInfo[] = [];
+        for (const t of otherCreditedTracks) {
+            (collaborationKeys.has(albumKeyOf(t)) ? collab : feat).push(t);
+        }
+        return { collaborationTracks: collab, featuredTracks: feat };
+    }, [library, otherCreditedTracks, artistName]);
 
     // Aggregate file-embedded URLs from all primary tracks, deduplicated
     const fileLinks = useMemo(() => {
@@ -389,12 +446,16 @@ export const ArtistDetail: React.FC = () => {
         };
     };
 
-    const releaseGroups = useMemo(() => buildReleaseGroups(primaryTracks), [primaryTracks]);
+    const primaryReleaseTracks = useMemo(
+        () => [...primaryTracks, ...collaborationTracks],
+        [primaryTracks, collaborationTracks]
+    );
+    const releaseGroups = useMemo(() => buildReleaseGroups(primaryReleaseTracks), [primaryReleaseTracks]);
     const featuredGroups = useMemo(() => buildReleaseGroups(featuredTracks), [featuredTracks]);
 
     const popularLibraryTracks = useMemo(() => {
         if (externalTopTracks.length === 0) return [];
-        const localTracks = [...primaryTracks, ...featuredTracks];
+        const localTracks = [...primaryTracks, ...collaborationTracks, ...featuredTracks];
         const byExactTitle = new Map<string, TrackInfo[]>();
         const byLooseTitle = new Map<string, TrackInfo[]>();
 
@@ -424,7 +485,7 @@ export const ArtistDetail: React.FC = () => {
                 listeners: topTrack.listeners,
             }];
         }).slice(0, 10);
-    }, [externalTopTracks, primaryTracks, featuredTracks]);
+    }, [externalTopTracks, primaryTracks, collaborationTracks, featuredTracks]);
 
     const hasPopularInLibrary = popularLibraryTracks.length > 0;
     const popularTrackQueue = useMemo(
@@ -457,7 +518,7 @@ export const ArtistDetail: React.FC = () => {
         return result.slice(0, 12);
     }, [genres, communityTags]);
 
-    const hasAnyContent = primaryTracks.length > 0 || featuredTracks.length > 0;
+    const hasAnyContent = primaryTracks.length > 0 || collaborationTracks.length > 0 || featuredTracks.length > 0;
 
     if (isLibraryLoading && (!artistName || !hasAnyContent)) {
         return <ArtistDetailSkeleton onBack={() => navigate(-1)} />;

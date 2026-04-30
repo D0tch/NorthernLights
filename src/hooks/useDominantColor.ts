@@ -100,21 +100,29 @@ export const useDominantColor = (tracks: TrackInfo[], options?: { crossOrigin?: 
   );
   const primaryArt = artUrls[0] || '';
   const [bgColor, setBgColor] = useState<string>(FALLBACK_COLOR);
+  const [palette, setPalette] = useState<string[]>([]);
   const quality = options?.quality ?? 10;
   const crossOrigin = options?.crossOrigin ?? 'Anonymous';
+  const paletteKey = artUrls.join('|');
 
   useEffect(() => {
     if (!primaryArt) {
       setBgColor(FALLBACK_COLOR);
+      setPalette([]);
       return;
     }
 
     let cancelled = false;
-    getDominantColor(primaryArt, quality, crossOrigin)
-      .then(color => { if (!cancelled) setBgColor(color); })
+    Promise.all(artUrls.map((url) => getDominantColor(url, quality, crossOrigin)))
+      .then(colors => {
+        if (cancelled) return;
+        const uniqueColors = Array.from(new Set(colors.filter(Boolean)));
+        setBgColor(uniqueColors[0] || FALLBACK_COLOR);
+        setPalette(uniqueColors);
+      });
 
     return () => { cancelled = true; };
-  }, [primaryArt, quality, crossOrigin]);
+  }, [primaryArt, paletteKey, quality, crossOrigin]);
 
-  return { artUrls, primaryArt, bgColor };
+  return { artUrls, primaryArt, bgColor, palette };
 };

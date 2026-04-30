@@ -3,11 +3,12 @@ import fs from 'fs';
 import path from 'path';
 import { ChildProcessPool } from '../workers/processPool';
 import * as mm from 'music-metadata';
-import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getExistingPaths, deleteTracksByIds, purgeOrphanedEntities, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting } from '../database';
+import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getExistingPaths, deleteTracksByIds, purgeOrphanedEntities, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting, normalizeArtistNames, getPrimaryArtistName, normalizeArtistIdentityKey } from '../database';
 import { genreMatrixService } from '../services/genreMatrix.service';
 import { loveTrack, unloveTrack } from '../services/lastfm.service';
 import { submitMbRecordingRating } from '../services/musicbrainz.service';
 import { scanStatus, scanClients, broadcastScanStatus } from '../state';
+import { requireAdmin } from '../middleware/auth';
 
 const router = Router();
 
@@ -36,6 +37,59 @@ router.get('/scan/status', (req, res) => {
     clearInterval(heartbeat);
     scanClients.delete(res);
   });
+});
+
+router.get('/artist-duplicates', requireAdmin, async (_req, res) => {
+  try {
+    const { getArtistDuplicateCandidates } = await import('../database');
+    const candidates = await getArtistDuplicateCandidates();
+    res.json({ candidates });
+  } catch (error: any) {
+    console.error('[ArtistDuplicates] list error:', error);
+    res.status(500).json({ error: error.message || 'Failed to load artist duplicate candidates' });
+  }
+});
+
+router.post('/artist-duplicates/dismiss', requireAdmin, async (req, res) => {
+  try {
+    const { candidateKey, signature, artistIds } = req.body || {};
+    if (!candidateKey || !signature || !Array.isArray(artistIds) || artistIds.length < 2) {
+      return res.status(400).json({ error: 'candidateKey, signature, and artistIds are required' });
+    }
+    const { dismissArtistDuplicateCandidate } = await import('../database');
+    await dismissArtistDuplicateCandidate({
+      candidateKey,
+      signature,
+      artistIds: artistIds.map(String),
+      userId: req.user?.userId || null,
+    });
+    res.json({ status: 'dismissed' });
+  } catch (error: any) {
+    console.error('[ArtistDuplicates] dismiss error:', error);
+    res.status(500).json({ error: error.message || 'Failed to dismiss artist duplicate candidate' });
+  }
+});
+
+router.post('/artist-duplicates/merge', requireAdmin, async (req, res) => {
+  try {
+    const { candidateKey, signature, canonicalArtistId, duplicateArtistIds } = req.body || {};
+    if (!candidateKey || !signature || !canonicalArtistId || !Array.isArray(duplicateArtistIds) || duplicateArtistIds.length < 1) {
+      return res.status(400).json({ error: 'candidateKey, signature, canonicalArtistId, and duplicateArtistIds are required' });
+    }
+    const { mergeArtistDuplicateCandidate, purgeOrphanedEntities } = await import('../database');
+    await mergeArtistDuplicateCandidate({
+      candidateKey,
+      signature,
+      canonicalArtistId: String(canonicalArtistId),
+      duplicateArtistIds: duplicateArtistIds.map(String),
+      userId: req.user?.userId || null,
+    });
+    await purgeOrphanedEntities();
+    res.json({ status: 'merged' });
+  } catch (error: any) {
+    console.error('[ArtistDuplicates] merge error:', error);
+    res.status(500).json({ error: error.message || 'Failed to merge artist duplicate candidate' });
+  }
 });
 
 router.post('/love', async (req, res) => {
@@ -209,26 +263,10 @@ async function processMetadataBatch(fileBufs: Buffer[], concurrency: number): Pr
             scanStatus.currentFile = activeLabel;
             broadcastScanStatus();
 
-            // Split artists
             const rawArtistsField = metadata.artists;
             const rawArtist = metadata.artist;
-            let finalArtists: string[] = [];
-            
-            if (rawArtistsField) {
-              if (Array.isArray(rawArtistsField)) {
-                finalArtists = rawArtistsField;
-              } else {
-                finalArtists = [rawArtistsField];
-              }
-            } else if (rawArtist) {
-              const { splitArtistNames } = await import('../database');
-              finalArtists = splitArtistNames(rawArtist);
-            }
-            if (finalArtists.length === 0 && rawArtist) {
-              finalArtists = [rawArtist];
-            }
-
-            const albumArtistName = metadata.albumartist || metadata.artist || null;
+            const finalArtists = normalizeArtistNames(rawArtistsField, rawArtist);
+            const albumArtistName = getPrimaryArtistName(metadata.albumartist, rawArtist, finalArtists);
             const albumTitle = metadata.album || null;
 
             // Split genres
@@ -243,11 +281,21 @@ async function processMetadataBatch(fileBufs: Buffer[], concurrency: number): Pr
             let artistId = null;
             let albumId = null;
             let genreId = null;
-            try { artistId = await getOrCreateArtist(albumArtistName); } catch (e) {
+            const primaryArtistMbid = metadata.mbAlbumArtistId || metadata.mbArtistId || null;
+            const primaryArtistKey = normalizeArtistIdentityKey(albumArtistName);
+            // If the primary artist was derived from a compound credit
+            // ("A, B & C"), the file's MB artist id was scanned against the
+            // compound string and doesn't belong to the first individual.
+            const { splitArtistNames } = await import('../database');
+            const primarySource = metadata.albumartist || rawArtist;
+            const primaryFromCompound = splitArtistNames(primarySource).length > 1;
+            const safePrimaryMbid = primaryFromCompound ? null : primaryArtistMbid;
+            try { artistId = await getOrCreateArtist(albumArtistName, safePrimaryMbid); } catch (e) {
               console.warn(`[Scanner] Failed to get/create artist "${albumArtistName}" for ${nameStr}:`, e);
             }
             for (const a of finalArtists) {
-              try { await getOrCreateArtist(a); } catch (e) {
+              const artistMbid = normalizeArtistIdentityKey(a) === primaryArtistKey ? safePrimaryMbid : null;
+              try { await getOrCreateArtist(a, artistMbid); } catch (e) {
                 console.warn(`[Scanner] Failed to get/create artist "${a}" for ${nameStr}:`, e);
               }
             }

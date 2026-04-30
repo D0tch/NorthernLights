@@ -74,6 +74,16 @@ function buildBackdropTiles(artUrls: string[]): Array<string | null> {
   return Array.from({ length: count }, (_, index) => artUrls[(index * 5 + Math.floor(index / 4)) % artUrls.length]);
 }
 
+function getSmartPlaylistPreparationUrl(playlistId: string): string | null {
+  if (playlistId.startsWith('smart_daylist_')) return '/api/hub/daylist';
+  if (playlistId.startsWith('smart_on-repeat_')) return '/api/hub/on-repeat';
+  if (playlistId.startsWith('smart_repeat-rewind_')) return '/api/hub/repeat-rewind';
+  if (playlistId.startsWith('smart_seasonal-rewind_') || playlistId.startsWith('smart_year-rewind_')) {
+    return '/api/hub/smart';
+  }
+  return null;
+}
+
 const PlaylistDetailSkeleton: React.FC<{ onBack: () => void }> = ({ onBack }) => (
   <div className="page-container relative overflow-x-hidden">
     <div className="relative z-10">
@@ -281,6 +291,7 @@ export const PlaylistDetail: React.FC = () => {
   const navigate = useNavigate();
   const { addToast } = useToast();
   const [hasCheckedPlaylist, setHasCheckedPlaylist] = useState(false);
+  const [isPreparingGeneratedPlaylist, setIsPreparingGeneratedPlaylist] = useState(false);
 
   const playlists = usePlayerStore((state) => state.playlists);
   const library = usePlayerStore((state) => state.library);
@@ -293,6 +304,7 @@ export const PlaylistDetail: React.FC = () => {
   const addTracksToUserPlaylist = usePlayerStore((state) => state.addTracksToUserPlaylist);
   const fetchPlaylistsFromServer = usePlayerStore((state) => state.fetchPlaylistsFromServer);
   const isPlaylistsLoading = usePlayerStore((state) => state.isPlaylistsLoading);
+  const getAuthHeader = usePlayerStore((state) => state.getAuthHeader);
 
   const playlist = useMemo(
     () => playlists.find((entry) => entry.id === playlistId),
@@ -309,14 +321,36 @@ export const PlaylistDetail: React.FC = () => {
     }
 
     setHasCheckedPlaylist(false);
-    fetchPlaylistsFromServer().finally(() => {
+    setIsPreparingGeneratedPlaylist(false);
+
+    const loadPlaylist = async () => {
+      await fetchPlaylistsFromServer();
+      if (cancelled) return;
+
+      const existsAfterRefresh = usePlayerStore.getState().playlists.some((entry) => entry.id === playlistId);
+      const preparationUrl = getSmartPlaylistPreparationUrl(playlistId);
+
+      if (!existsAfterRefresh && preparationUrl) {
+        setIsPreparingGeneratedPlaylist(true);
+        try {
+          await fetch(preparationUrl, { headers: getAuthHeader() });
+          if (!cancelled) await fetchPlaylistsFromServer();
+        } catch (error) {
+          console.error('Failed to prepare generated playlist', error);
+        } finally {
+          if (!cancelled) setIsPreparingGeneratedPlaylist(false);
+        }
+      }
+
       if (!cancelled) setHasCheckedPlaylist(true);
-    });
+    };
+
+    void loadPlaylist();
 
     return () => {
       cancelled = true;
     };
-  }, [fetchPlaylistsFromServer, playlist, playlistId]);
+  }, [fetchPlaylistsFromServer, getAuthHeader, playlist, playlistId]);
 
   const isSystemPlaylist = !!playlist?.isSystem;
   const playlistTracks = playlist?.tracks || [];
@@ -497,7 +531,7 @@ export const PlaylistDetail: React.FC = () => {
   }
 
   if (!playlist) {
-    if (isPlaylistsLoading || !hasCheckedPlaylist) {
+    if (isPlaylistsLoading || isPreparingGeneratedPlaylist || !hasCheckedPlaylist) {
       return <PlaylistDetailSkeleton onBack={() => navigate('/playlists')} />;
     }
 
