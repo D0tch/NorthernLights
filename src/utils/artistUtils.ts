@@ -1,24 +1,71 @@
 /**
+ * Canonical identity key for an artist name. Mirrors the server-side
+ * `normalizeArtistIdentityKey` so client-side comparisons match the
+ * canonicalization used during merges (e.g. "N'to" and "NTO" -> "nto").
+ */
+export function normalizeArtistIdentityKey(name: string | null | undefined): string {
+  return (name || '')
+    .normalize('NFKD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[‘’`´]/g, "'")
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '')
+    .trim();
+}
+
+function cleanCreditPart(value: string): string {
+  return value.trim().replace(/^[([{]+/, '').replace(/[)\]}]+$/, '').trim();
+}
+
+// Comma-list credit ("Alok, Martin Jensen & Jason Derulo") -> individuals.
+// Mirror of the server-side splitter: only splits when a comma is present, so
+// genuine groups like "Nick & Jay" / "Florence and the Machine" stay whole.
+function explodeListCredit(part: string): string[] {
+  if (!part.includes(',')) return [part];
+  const commaParts = part.split(/\s*,\s*/).map(cleanCreditPart).filter(Boolean);
+  if (commaParts.length === 0) return [];
+  const last = commaParts[commaParts.length - 1];
+  const ampSplit = last.split(/\s+&\s+/).map(cleanCreditPart).filter(Boolean);
+  if (ampSplit.length > 1) {
+    return [...commaParts.slice(0, -1), ...ampSplit];
+  }
+  return commaParts;
+}
+
+/**
  * Split an ID3/Vorbis artist string into individual artist names.
- * Handles common multi-artist delimiters: / \ ; feat. ft. featuring &
+ * Handles `feat.`/`ft.`/`featuring` markers and comma-list patterns
+ * ("A, B & C"). Does NOT split on a bare "&" or "and" — preserves group
+ * names like "Nick & Jay" and "Florence and the Machine".
  */
 export function parseArtists(artistStr?: string): string[] {
   if (!artistStr) return [];
-  return artistStr
-    .split(/\s*[\/\\;]\s*|\s+(?:feat\.?|ft\.?|featuring)\s+|\s+&\s+/i)
-    .map(a => a.trim())
+  const featuredParts = artistStr
+    .split(/\s*(?:[\(\[\{]\s*)?\b(?:feat\.?|ft\.?|featuring)\b\.?\s+(?!$)/i)
+    .map(cleanCreditPart)
     .filter(Boolean);
+  const exploded = featuredParts.flatMap(explodeListCredit);
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const name of exploded) {
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(name);
+  }
+  return result;
 }
 
 /**
  * Check whether a given artist name appears in a track's artist field.
- * Uses case-insensitive matching after splitting multi-artist strings.
+ * Matches via canonical identity key so apostrophe/diacritic variants
+ * (e.g. "N'to" vs "NTO", "Tiësto" vs "Tiesto") resolve to the same artist.
  */
 export function trackMatchesArtist(trackArtist: string | undefined, artistName: string): boolean {
   if (!trackArtist) return false;
-  const normalised = artistName.toLowerCase();
-  // Check exact match first (fast path)
-  if (trackArtist.toLowerCase() === normalised) return true;
-  // Check if the artist appears within a multi-artist string
-  return parseArtists(trackArtist).some(a => a.toLowerCase() === normalised);
+  const target = normalizeArtistIdentityKey(artistName);
+  if (!target) return false;
+  if (normalizeArtistIdentityKey(trackArtist) === target) return true;
+  return parseArtists(trackArtist).some(a => normalizeArtistIdentityKey(a) === target);
 }

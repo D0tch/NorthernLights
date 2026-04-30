@@ -445,6 +445,7 @@ export async function initDB(): Promise<Pool> {
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS artwork_url TEXT;
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS bio TEXT;
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS mbid TEXT;
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS normalized_key TEXT;
           ALTER TABLE artists ADD COLUMN IF NOT EXISTS last_updated BIGINT DEFAULT 0;
           ALTER TABLE albums ADD COLUMN IF NOT EXISTS image_url TEXT;
           ALTER TABLE albums ADD COLUMN IF NOT EXISTS mbid TEXT;
@@ -454,6 +455,8 @@ export async function initDB(): Promise<Pool> {
           ALTER TABLE genres ADD COLUMN IF NOT EXISTS last_updated BIGINT DEFAULT 0;
         EXCEPTION WHEN OTHERS THEN null;
         END $$;
+        CREATE INDEX IF NOT EXISTS artists_normalized_key_idx ON artists(normalized_key);
+        CREATE INDEX IF NOT EXISTS artists_mbid_idx ON artists(mbid);
 
         -- Extended artist metadata cache (MusicBrainz fields + Last.fm stats)
         DO $$
@@ -517,6 +520,19 @@ export async function initDB(): Promise<Pool> {
           expires_at TIMESTAMPTZ,
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        CREATE TABLE IF NOT EXISTS artist_duplicate_reviews (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          candidate_key TEXT NOT NULL,
+          signature TEXT NOT NULL,
+          decision TEXT NOT NULL CHECK (decision IN ('dismissed', 'merged')),
+          canonical_artist_id UUID REFERENCES artists(id) ON DELETE SET NULL,
+          artist_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+          decided_by UUID REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          UNIQUE(candidate_key, signature)
+        );
+        CREATE INDEX IF NOT EXISTS artist_duplicate_reviews_key_idx ON artist_duplicate_reviews(candidate_key, signature);
 
         CREATE TABLE IF NOT EXISTS user_playback_stats (
           user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -1152,8 +1168,27 @@ export async function purgeOrphanedEntities(): Promise<{ albums: number; artists
       RETURNING id
     `),
     db.query(`
-      DELETE FROM artists
-      WHERE id NOT IN (SELECT DISTINCT artist_id FROM tracks WHERE artist_id IS NOT NULL)
+      WITH credited_artist_names AS (
+        SELECT DISTINCT lower(btrim(credited_artist.name)) AS name
+        FROM tracks t
+        CROSS JOIN LATERAL jsonb_array_elements_text(
+          CASE
+            WHEN t.artists IS NOT NULL AND btrim(t.artists) LIKE '[%' THEN t.artists::jsonb
+            ELSE '[]'::jsonb
+          END
+        ) AS credited_artist(name)
+      )
+      DELETE FROM artists a
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM tracks t
+        WHERE t.artist_id = a.id
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM credited_artist_names credited
+        WHERE credited.name = lower(btrim(a.name))
+      )
       RETURNING id
     `),
     db.query(`
@@ -1203,12 +1238,118 @@ export async function recordSkip(trackId: string) {
 const UNKNOWN_ARTIST = 'Unknown Artist';
 const UNKNOWN_ALBUM = 'Unknown Album';
 const UNKNOWN_GENRE = 'Unknown Genre';
+const FEATURE_ARTIST_BACKFILL_SETTING = 'artistCreditFeatureBackfillV1';
+const ARTIST_CANONICALIZATION_SETTING = 'artistCanonicalizationV1';
+const COMPOUND_CREDIT_SPLIT_SETTING = 'artistCompoundCreditSplitV1';
 
-// Utility for splitting multiple artists (e.g., "A feat. B", "A & B")
+function cleanArtistNamePart(value: string): string {
+  return value
+    .trim()
+    .replace(/^[([{]+/, '')
+    .replace(/[)\]}]+$/, '')
+    .trim();
+}
+
+function uniqueArtistNames(names: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+
+  for (const rawName of names) {
+    const name = cleanArtistNamePart(rawName);
+    if (!name) continue;
+
+    const key = name.toLowerCase();
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    result.push(name);
+  }
+
+  return result;
+}
+
+export function normalizeArtistIdentityKey(name: string | null | undefined): string {
+  return (name || '')
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[’‘`´]/g, "'")
+    .toLowerCase()
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '')
+    .trim();
+}
+
+function scoreArtistDisplayName(name: string): number {
+  let score = 0;
+  if (/[^\x00-\x7F]/.test(name)) score += 4;
+  if (/[’'`´.-]/.test(name)) score += 2;
+  if (/[a-z]/.test(name)) score += 1;
+  if (name === name.toUpperCase() && /[A-Z]/.test(name) && name.length <= 4) score -= 2;
+  return score;
+}
+
+// Splits a list-style credit like "Alok, Martin Jensen & Jason Derulo" into
+// individual names. The comma is the trigger: presence of a comma means the
+// string is a list, so we split on commas and on a final " & " (Oxford-and).
+// Without a comma we keep the part intact so true group names like
+// "Nick & Jay" / "Hall & Oates" / "Mr. & Mrs. Smith" are preserved. We avoid
+// splitting on the word "and" — too many band names contain it.
+function explodeListCredit(part: string): string[] {
+  if (!part.includes(',')) return [part];
+  const commaParts = part
+    .split(/\s*,\s*/)
+    .map(cleanArtistNamePart)
+    .filter(Boolean);
+  if (commaParts.length === 0) return [];
+  const last = commaParts[commaParts.length - 1];
+  const ampSplit = last
+    .split(/\s+&\s+/)
+    .map(cleanArtistNamePart)
+    .filter(Boolean);
+  if (ampSplit.length > 1) {
+    return [...commaParts.slice(0, -1), ...ampSplit];
+  }
+  return commaParts;
+}
+
+// Utility for splitting credit strings into individual artist names. Splits on
+// `feat.`/`ft.`/`featuring` markers and on comma-list patterns ("A, B & C").
+// Deliberately does NOT split on a bare "&" or "and" — names like
+// "Nick & Jay" or "Florence and the Machine" are a single artist.
 export function splitArtistNames(artistStr: string | null | undefined): string[] {
   if (!artistStr) return [];
-  const parts = artistStr.split(/\s+(?:feat\.?|ft\.?|featuring|&)\s+(?!$)/i).map(s => s.trim()).filter(Boolean);
-  return parts.length > 0 ? parts : [];
+  const featuredParts = artistStr
+    .split(/\s*(?:[\(\[\{]\s*)?\b(?:feat\.?|ft\.?|featuring)\b\.?\s+(?!$)/i)
+    .map(cleanArtistNamePart)
+    .filter(Boolean);
+  const exploded = featuredParts.flatMap(explodeListCredit);
+  return uniqueArtistNames(exploded);
+}
+
+export function normalizeArtistNames(
+  rawArtistsField: string[] | string | null | undefined,
+  fallbackArtist?: string | null
+): string[] {
+  const rawNames = Array.isArray(rawArtistsField)
+    ? rawArtistsField
+    : rawArtistsField
+      ? [rawArtistsField]
+      : fallbackArtist
+        ? [fallbackArtist]
+        : [];
+
+  return uniqueArtistNames(rawNames.flatMap(name => splitArtistNames(name)));
+}
+
+export function getPrimaryArtistName(
+  albumArtist: string | null | undefined,
+  trackArtist: string | null | undefined,
+  artistNames: string[]
+): string | null {
+  const albumArtistNames = normalizeArtistNames(albumArtist, null);
+  if (albumArtistNames.length > 0) return albumArtistNames[0];
+  if (artistNames.length > 0) return artistNames[0];
+  return trackArtist?.trim() || null;
 }
 
 // Utility for splitting multiple genres (e.g., "Folk, Country, Rock")
@@ -1221,7 +1362,7 @@ export function splitGenreNames(genreStr: string | null | undefined): string[] {
 }
 
 // In-memory caches to reduce DB round-trips during scanning
-const artistCache = new Map<string, string>();   // name -> UUID
+const artistCache = new Map<string, string>();   // name/normalized-key/mbid -> UUID
 const albumCache = new Map<string, string>();     // "title::::artist" -> UUID
 const genreCache = new Map<string, string>();     // name -> UUID
 
@@ -1234,26 +1375,69 @@ function clearEntityCaches() {
 // Sanitize strings to remove null bytes which crash Postgres
 const sanitizeString = (str: any) => typeof str === 'string' ? str.replace(/\x00/g, '') : str;
 
-export async function getOrCreateArtist(name?: string | null): Promise<string> {
+export async function getOrCreateArtist(name?: string | null, mbid?: string | null): Promise<string> {
   const safeName = sanitizeString(name)?.trim() || UNKNOWN_ARTIST;
   const lowerName = safeName.toLowerCase();
+  const normalizedKey = normalizeArtistIdentityKey(safeName);
+  const safeMbid = sanitizeString(mbid)?.trim() || null;
+  const cacheKey = safeMbid ? `mbid:${safeMbid}` : `key:${normalizedKey || lowerName}`;
   
-  const cached = artistCache.get(lowerName);
+  const cached = artistCache.get(cacheKey) || artistCache.get(lowerName);
   if (cached) return cached;
 
   const db = await initDB();
+
+  if (safeMbid) {
+    const byMbid = await db.query('SELECT id FROM artists WHERE mbid = $1 LIMIT 1', [safeMbid]);
+    if (byMbid.rows.length > 0) {
+      const id = byMbid.rows[0].id;
+      await db.query(
+        'UPDATE artists SET normalized_key = COALESCE(normalized_key, $2) WHERE id = $1',
+        [id, normalizedKey || null]
+      );
+      artistCache.set(cacheKey, id);
+      artistCache.set(lowerName, id);
+      return id;
+    }
+  }
   
-  const existing = await db.query('SELECT id FROM artists WHERE LOWER(name) = $1', [lowerName]);
+  const existing = await db.query(
+    `SELECT id
+     FROM artists
+     WHERE LOWER(name) = $1
+        OR (
+          normalized_key IS NOT NULL
+          AND normalized_key = $2
+          AND (mbid IS NULL OR $3::text IS NULL OR mbid = $3)
+        )
+     ORDER BY
+       CASE WHEN mbid IS NOT NULL THEN 0 ELSE 1 END,
+       created_at ASC
+     LIMIT 1`,
+    [lowerName, normalizedKey || null, safeMbid]
+  );
   if (existing.rows.length > 0) {
-    artistCache.set(lowerName, existing.rows[0].id);
-    return existing.rows[0].id;
+    const id = existing.rows[0].id;
+    await db.query(
+      'UPDATE artists SET normalized_key = COALESCE(normalized_key, $2), mbid = COALESCE(mbid, $3) WHERE id = $1',
+      [id, normalizedKey || null, safeMbid]
+    );
+    artistCache.set(cacheKey, id);
+    artistCache.set(lowerName, id);
+    return id;
   }
 
   const res = await db.query(
-    `INSERT INTO artists (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
-    [safeName]
+    `INSERT INTO artists (name, normalized_key, mbid)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (name) DO UPDATE SET
+       normalized_key = COALESCE(artists.normalized_key, EXCLUDED.normalized_key),
+       mbid = COALESCE(artists.mbid, EXCLUDED.mbid)
+     RETURNING id`,
+    [safeName, normalizedKey || null, safeMbid]
   );
   const id = (res.rows[0] as any).id as string;
+  artistCache.set(cacheKey, id);
   artistCache.set(lowerName, id);
   return id;
 }
@@ -1435,26 +1619,458 @@ export async function getTracksByGenre(genreId: string) {
   return res.rows.map(mapTrackRow);
 }
 
-// Backfill entity IDs for tracks that don't have them yet.
-// Runs on startup; processes only tracks with NULL artist_id.
-export async function migrateEntityIds() {
-  const db = await initDB();
+type ArtistCanonicalRow = {
+  id: string;
+  name: string;
+  mbid: string | null;
+  normalized_key: string | null;
+  created_at: Date | string;
+  track_count: number;
+};
 
-  // 1. One-time deduplication to fix case-sensitive duplicates
+function chooseCanonicalArtist(rows: ArtistCanonicalRow[]): ArtistCanonicalRow {
+  return [...rows].sort((a, b) => {
+    const trackDelta = Number(b.track_count || 0) - Number(a.track_count || 0);
+    if (trackDelta !== 0) return trackDelta;
+
+    const scoreDelta = scoreArtistDisplayName(b.name) - scoreArtistDisplayName(a.name);
+    if (scoreDelta !== 0) return scoreDelta;
+
+    const mbidDelta = Number(Boolean(b.mbid)) - Number(Boolean(a.mbid));
+    if (mbidDelta !== 0) return mbidDelta;
+
+    return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+  })[0];
+}
+
+async function mergeArtistRows(db: Pool, canonical: ArtistCanonicalRow, duplicate: ArtistCanonicalRow) {
+  if (canonical.id === duplicate.id) return;
+
+  // Only inherit duplicate metadata when the two rows share a canonical
+  // identity ("Tiësto" / "Tiesto"). For amp-compound merges like
+  // "Sia & At home with the kids" -> "Sia", the duplicate's MBID/image/etc.
+  // belong to the credit string, not to the canonical artist, so dropping
+  // them is the safer default.
+  const sameCanonicalIdentity = Boolean(canonical.normalized_key)
+    && canonical.normalized_key === duplicate.normalized_key;
+
+  const client = await db.connect();
   try {
-    const artistsRes = await db.query('SELECT * FROM artists ORDER BY created_at ASC');
-    const seenArtists = new Map<string, string>(); // lowerName -> canonicalId
-    for (const row of artistsRes.rows) {
-      const lowerName = row.name.toLowerCase();
-      if (seenArtists.has(lowerName)) {
-        const canonicalId = seenArtists.get(lowerName)!;
-        await db.query('UPDATE tracks SET artist_id = $1 WHERE artist_id = $2', [canonicalId, row.id]);
-        await db.query('DELETE FROM artists WHERE id = $1', [row.id]);
-      } else {
-        seenArtists.set(lowerName, row.id);
-      }
+    await client.query('BEGIN');
+
+    if (sameCanonicalIdentity) {
+      await client.query(`
+        UPDATE artists canonical
+        SET
+          image_url = COALESCE(canonical.image_url, duplicate.image_url),
+          artwork_url = COALESCE(canonical.artwork_url, duplicate.artwork_url),
+          bio = COALESCE(canonical.bio, duplicate.bio),
+          mbid = COALESCE(canonical.mbid, duplicate.mbid),
+          normalized_key = COALESCE(canonical.normalized_key, duplicate.normalized_key),
+          disambiguation = COALESCE(canonical.disambiguation, duplicate.disambiguation),
+          area = COALESCE(canonical.area, duplicate.area),
+          artist_type = COALESCE(canonical.artist_type, duplicate.artist_type),
+          lifespan_begin = COALESCE(canonical.lifespan_begin, duplicate.lifespan_begin),
+          lifespan_end = COALESCE(canonical.lifespan_end, duplicate.lifespan_end),
+          links = COALESCE(canonical.links, duplicate.links),
+          genres = COALESCE(canonical.genres, duplicate.genres),
+          community_tags = COALESCE(canonical.community_tags, duplicate.community_tags),
+          listeners = COALESCE(canonical.listeners, duplicate.listeners),
+          members = COALESCE(canonical.members, duplicate.members),
+          jambase_id = COALESCE(canonical.jambase_id, duplicate.jambase_id)
+        FROM artists duplicate
+        WHERE canonical.id = $1 AND duplicate.id = $2
+      `, [canonical.id, duplicate.id]);
     }
 
+    await client.query('UPDATE tracks SET artist_id = $1 WHERE artist_id = $2', [canonical.id, duplicate.id]);
+    await client.query('UPDATE concert_events SET artist_id = $1 WHERE artist_id = $2', [canonical.id, duplicate.id]);
+
+    await client.query(`
+      INSERT INTO user_artist_subscriptions (user_id, artist_id, created_at, source)
+      SELECT user_id, $1, created_at, source
+      FROM user_artist_subscriptions
+      WHERE artist_id = $2
+      ON CONFLICT (user_id, artist_id) DO UPDATE SET
+        created_at = LEAST(user_artist_subscriptions.created_at, EXCLUDED.created_at),
+        source = CASE
+          WHEN user_artist_subscriptions.source = 'explicit' OR EXCLUDED.source = 'explicit' THEN 'explicit'
+          ELSE user_artist_subscriptions.source
+        END
+    `, [canonical.id, duplicate.id]);
+    await client.query('DELETE FROM user_artist_subscriptions WHERE artist_id = $1', [duplicate.id]);
+
+    await client.query(`
+      INSERT INTO user_dismissed_auto_artists (user_id, artist_id, dismissed_at)
+      SELECT user_id, $1, dismissed_at
+      FROM user_dismissed_auto_artists
+      WHERE artist_id = $2
+      ON CONFLICT (user_id, artist_id) DO UPDATE SET
+        dismissed_at = GREATEST(user_dismissed_auto_artists.dismissed_at, EXCLUDED.dismissed_at)
+    `, [canonical.id, duplicate.id]);
+    await client.query('DELETE FROM user_dismissed_auto_artists WHERE artist_id = $1', [duplicate.id]);
+
+    await client.query(`
+      INSERT INTO artist_concerts_cache (artist_id, jambase_id, events_count, last_error, fetched_at)
+      SELECT $1, jambase_id, events_count, last_error, fetched_at
+      FROM artist_concerts_cache
+      WHERE artist_id = $2
+      ON CONFLICT (artist_id) DO UPDATE SET
+        jambase_id = COALESCE(artist_concerts_cache.jambase_id, EXCLUDED.jambase_id),
+        events_count = GREATEST(artist_concerts_cache.events_count, EXCLUDED.events_count),
+        last_error = COALESCE(artist_concerts_cache.last_error, EXCLUDED.last_error),
+        fetched_at = GREATEST(artist_concerts_cache.fetched_at, EXCLUDED.fetched_at)
+    `, [canonical.id, duplicate.id]);
+    await client.query('DELETE FROM artist_concerts_cache WHERE artist_id = $1', [duplicate.id]);
+
+    await client.query('DELETE FROM artists WHERE id = $1', [duplicate.id]);
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+async function canonicalizeArtistEntities(db: Pool) {
+  const canonicalizationDone = await getSystemSetting(ARTIST_CANONICALIZATION_SETTING) === true;
+  const artistsRes = await db.query(`
+    SELECT a.*, COUNT(t.id)::int AS track_count
+    FROM artists a
+    LEFT JOIN tracks t ON t.artist_id = a.id
+    GROUP BY a.id
+    ORDER BY a.created_at ASC
+  `);
+
+  const rows = artistsRes.rows.map((row: any) => ({
+    ...row,
+    normalized_key: row.normalized_key || normalizeArtistIdentityKey(row.name) || null,
+    track_count: Number(row.track_count || 0),
+  })) as ArtistCanonicalRow[];
+
+  for (const row of rows) {
+    if (row.normalized_key !== (artistsRes.rows.find((raw: any) => raw.id === row.id)?.normalized_key || null)) {
+      await db.query('UPDATE artists SET normalized_key = $1 WHERE id = $2', [row.normalized_key, row.id]);
+    }
+  }
+
+  if (canonicalizationDone) return;
+
+  const byMbid = new Map<string, ArtistCanonicalRow[]>();
+  const byKey = new Map<string, ArtistCanonicalRow[]>();
+  for (const row of rows) {
+    if (row.mbid) {
+      const key = row.mbid.toLowerCase();
+      byMbid.set(key, [...(byMbid.get(key) || []), row]);
+    }
+    if (row.normalized_key && row.normalized_key.length >= 3) {
+      byKey.set(row.normalized_key, [...(byKey.get(row.normalized_key) || []), row]);
+    }
+  }
+
+  const mergedIds = new Set<string>();
+  let mergeCount = 0;
+  const mergeGroup = async (group: ArtistCanonicalRow[]) => {
+    const active = group.filter(row => !mergedIds.has(row.id));
+    if (active.length < 2) return;
+    const canonical = chooseCanonicalArtist(active);
+    for (const duplicate of active) {
+      if (duplicate.id === canonical.id) continue;
+      await mergeArtistRows(db, canonical, duplicate);
+      mergedIds.add(duplicate.id);
+      mergeCount++;
+    }
+  };
+
+  for (const group of byMbid.values()) {
+    if (group.length > 1) await mergeGroup(group);
+  }
+
+  for (const group of byKey.values()) {
+    if (group.length < 2) continue;
+    const mbids = new Set(group.map(row => row.mbid).filter(Boolean));
+    if (mbids.size > 1) continue;
+    await mergeGroup(group);
+  }
+
+  clearEntityCaches();
+  await setSystemSetting(ARTIST_CANONICALIZATION_SETTING, true);
+  if (mergeCount > 0) {
+    console.log(`[DB Migration] Canonicalized ${mergeCount} duplicate artist row(s)`);
+  }
+}
+
+// Compound credits like "Alok, Martin Jensen & Jason Derulo" were stored as a
+// single artist row in early scans. We can detect them now via the smarter
+// splitter and pre-move user attachments (subscriptions, dismissed-auto)
+// to the first individual artist before the entity backfill loop reroutes
+// `tracks.artist_id` away from the compound row. Once no tracks reference
+// the compound row, `purgeOrphanedEntities()` removes it (CASCADE drops
+// concert events / cache, which were always wrong for a compound credit).
+async function migrateCompoundArtistCredits(db: Pool) {
+  if (await getSystemSetting(COMPOUND_CREDIT_SPLIT_SETTING) === true) return;
+
+  const artistsRes = await db.query('SELECT id, name FROM artists WHERE name LIKE $1', ['%,%']);
+  let migratedRows = 0;
+
+  for (const row of artistsRes.rows) {
+    const split = splitArtistNames(row.name);
+    if (split.length < 2) continue;
+
+    const firstIndividualId = await getOrCreateArtist(split[0], null);
+    if (firstIndividualId === row.id) continue;
+
+    await db.query(`
+      INSERT INTO user_artist_subscriptions (user_id, artist_id, created_at, source)
+      SELECT user_id, $1, created_at, source
+      FROM user_artist_subscriptions
+      WHERE artist_id = $2
+      ON CONFLICT (user_id, artist_id) DO UPDATE SET
+        created_at = LEAST(user_artist_subscriptions.created_at, EXCLUDED.created_at),
+        source = CASE
+          WHEN user_artist_subscriptions.source = 'explicit' OR EXCLUDED.source = 'explicit' THEN 'explicit'
+          ELSE user_artist_subscriptions.source
+        END
+    `, [firstIndividualId, row.id]);
+    await db.query('DELETE FROM user_artist_subscriptions WHERE artist_id = $1', [row.id]);
+
+    await db.query(`
+      INSERT INTO user_dismissed_auto_artists (user_id, artist_id, dismissed_at)
+      SELECT user_id, $1, dismissed_at
+      FROM user_dismissed_auto_artists
+      WHERE artist_id = $2
+      ON CONFLICT (user_id, artist_id) DO UPDATE SET
+        dismissed_at = GREATEST(user_dismissed_auto_artists.dismissed_at, EXCLUDED.dismissed_at)
+    `, [firstIndividualId, row.id]);
+    await db.query('DELETE FROM user_dismissed_auto_artists WHERE artist_id = $1', [row.id]);
+
+    migratedRows++;
+  }
+
+  if (migratedRows > 0) {
+    console.log(`[DB Migration] Pre-moved attachments for ${migratedRows} compound-credit artist row(s)`);
+  }
+}
+
+export interface ArtistDuplicateCandidate {
+  candidateKey: string;
+  normalizedKey: string;
+  signature: string;
+  totalTracks: number;
+  artists: Array<{
+    id: string;
+    name: string;
+    mbid: string | null;
+    imageUrl?: string;
+    trackCount: number;
+    albumCount: number;
+    displayScore: number;
+  }>;
+}
+
+function buildArtistDuplicateCandidate(rows: any[]): ArtistDuplicateCandidate {
+  const sorted = [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  const normalizedKey = String(sorted[0].normalized_key || '');
+  const signature = sorted
+    .map(row => `${row.id}:${Number(row.track_count || 0)}:${Number(row.album_count || 0)}`)
+    .join('|');
+
+  return {
+    candidateKey: `artist-normalized:${normalizedKey}`,
+    normalizedKey,
+    signature,
+    totalTracks: sorted.reduce((sum, row) => sum + Number(row.track_count || 0), 0),
+    artists: sorted
+      .map(row => ({
+        id: row.id,
+        name: row.name,
+        mbid: row.mbid || null,
+        imageUrl: row.image_url || undefined,
+        trackCount: Number(row.track_count || 0),
+        albumCount: Number(row.album_count || 0),
+        displayScore: scoreArtistDisplayName(row.name),
+      }))
+      .sort((a, b) => {
+        const trackDelta = b.trackCount - a.trackCount;
+        if (trackDelta !== 0) return trackDelta;
+        const scoreDelta = b.displayScore - a.displayScore;
+        if (scoreDelta !== 0) return scoreDelta;
+        return a.name.localeCompare(b.name);
+      }),
+  };
+}
+
+export async function getArtistDuplicateCandidates(): Promise<ArtistDuplicateCandidate[]> {
+  const db = await initDB();
+  await db.query(`
+    UPDATE artists
+    SET normalized_key = $1
+    WHERE normalized_key IS NULL AND name = $2
+  `, [normalizeArtistIdentityKey(UNKNOWN_ARTIST), UNKNOWN_ARTIST]);
+
+  const statsRes = await db.query(`
+    SELECT
+      a.id,
+      a.name,
+      a.mbid,
+      COALESCE(a.normalized_key, '') AS normalized_key,
+      a.image_url,
+      COUNT(t.id)::int AS track_count,
+      COUNT(DISTINCT t.album_id)::int AS album_count
+    FROM artists a
+    LEFT JOIN tracks t ON t.artist_id = a.id
+    WHERE a.normalized_key IS NOT NULL
+      AND length(a.normalized_key) >= 3
+    GROUP BY a.id, a.name, a.mbid, a.normalized_key, a.image_url
+    ORDER BY a.normalized_key ASC, COUNT(t.id) DESC, a.name ASC
+  `);
+
+  const allArtists = statsRes.rows;
+  const candidatesByKey = new Map<string, ArtistDuplicateCandidate>();
+
+  // (1) Same-canonical-identity duplicates: rows that share normalized_key.
+  const byKey = new Map<string, any[]>();
+  for (const row of allArtists) {
+    const key = row.normalized_key;
+    byKey.set(key, [...(byKey.get(key) || []), row]);
+  }
+  for (const [key, rows] of byKey.entries()) {
+    if (rows.length < 2) continue;
+    const candidate = buildArtistDuplicateCandidate(rows);
+    candidatesByKey.set(candidate.candidateKey, candidate);
+  }
+
+  // (2) Amp-compound credits like "Sia & At home with the kids" where the
+  // first half ("Sia") already exists as its own artist row. Genuine duos
+  // ("Nik & Jay", "Chase & Status") aren't surfaced because their first half
+  // doesn't exist as a separate artist row in the library.
+  const baseByKey = new Map<string, any>();
+  for (const row of allArtists) {
+    if (!baseByKey.has(row.normalized_key)) baseByKey.set(row.normalized_key, row);
+  }
+  for (const row of allArtists) {
+    const name: string = row.name;
+    if (!name.includes(' & ') || name.includes(',')) continue;
+    const firstHalf = name.split(' & ', 1)[0].trim();
+    if (!firstHalf) continue;
+    const firstHalfKey = normalizeArtistIdentityKey(firstHalf);
+    if (!firstHalfKey || firstHalfKey.length < 3) continue;
+    if (firstHalfKey === row.normalized_key) continue;
+    const base = baseByKey.get(firstHalfKey);
+    if (!base || base.id === row.id) continue;
+
+    const compoundKey = `artist-amp-compound:${firstHalfKey}::${row.id}`;
+    if (candidatesByKey.has(compoundKey)) continue;
+
+    const built = buildArtistDuplicateCandidate([base, row]);
+    // Force the base ("Sia") to lead the artist list so the LibraryTab UI
+    // defaults to it as canonical instead of the higher-track compound.
+    const baseEntry = built.artists.find(a => a.id === base.id);
+    const otherEntries = built.artists.filter(a => a.id !== base.id);
+    candidatesByKey.set(compoundKey, {
+      ...built,
+      candidateKey: compoundKey,
+      normalizedKey: firstHalfKey,
+      artists: baseEntry ? [baseEntry, ...otherEntries] : built.artists,
+    });
+  }
+
+  const candidates: ArtistDuplicateCandidate[] = [];
+  for (const candidate of candidatesByKey.values()) {
+    const review = await db.query(
+      'SELECT 1 FROM artist_duplicate_reviews WHERE candidate_key = $1 AND signature = $2 LIMIT 1',
+      [candidate.candidateKey, candidate.signature]
+    );
+    if (review.rows.length === 0) {
+      candidates.push(candidate);
+    }
+  }
+
+  return candidates.sort((a, b) => b.totalTracks - a.totalTracks || a.normalizedKey.localeCompare(b.normalizedKey));
+}
+
+export async function dismissArtistDuplicateCandidate(opts: {
+  candidateKey: string;
+  signature: string;
+  artistIds: string[];
+  userId?: string | null;
+}) {
+  const db = await initDB();
+  await db.query(`
+    INSERT INTO artist_duplicate_reviews (candidate_key, signature, decision, artist_ids, decided_by)
+    VALUES ($1, $2, 'dismissed', $3::jsonb, $4)
+    ON CONFLICT (candidate_key, signature) DO UPDATE SET
+      decision = EXCLUDED.decision,
+      artist_ids = EXCLUDED.artist_ids,
+      decided_by = EXCLUDED.decided_by,
+      created_at = NOW()
+  `, [opts.candidateKey, opts.signature, JSON.stringify(opts.artistIds), opts.userId || null]);
+}
+
+export async function mergeArtistDuplicateCandidate(opts: {
+  candidateKey: string;
+  signature: string;
+  canonicalArtistId: string;
+  duplicateArtistIds: string[];
+  userId?: string | null;
+}) {
+  const db = await initDB();
+  const ids = Array.from(new Set([opts.canonicalArtistId, ...opts.duplicateArtistIds].filter(Boolean)));
+  if (ids.length < 2) {
+    throw new Error('At least two artists are required to merge');
+  }
+
+  const placeholders = ids.map((_, idx) => `$${idx + 1}`).join(',');
+  const res = await db.query(`
+    SELECT a.*, COUNT(t.id)::int AS track_count
+    FROM artists a
+    LEFT JOIN tracks t ON t.artist_id = a.id
+    WHERE a.id IN (${placeholders})
+    GROUP BY a.id
+  `, ids);
+
+  if (res.rows.length !== ids.length) {
+    throw new Error('One or more selected artists no longer exist');
+  }
+
+  const rows = res.rows.map((row: any) => ({
+    ...row,
+    normalized_key: row.normalized_key || normalizeArtistIdentityKey(row.name) || null,
+    track_count: Number(row.track_count || 0),
+  })) as ArtistCanonicalRow[];
+
+  const canonical = rows.find(row => row.id === opts.canonicalArtistId);
+  if (!canonical) throw new Error('Canonical artist not found');
+
+  for (const duplicate of rows) {
+    if (duplicate.id === canonical.id) continue;
+    await mergeArtistRows(db, canonical, duplicate);
+  }
+
+  await db.query(`
+    INSERT INTO artist_duplicate_reviews (candidate_key, signature, decision, canonical_artist_id, artist_ids, decided_by)
+    VALUES ($1, $2, 'merged', $3, $4::jsonb, $5)
+    ON CONFLICT (candidate_key, signature) DO UPDATE SET
+      decision = EXCLUDED.decision,
+      canonical_artist_id = EXCLUDED.canonical_artist_id,
+      artist_ids = EXCLUDED.artist_ids,
+      decided_by = EXCLUDED.decided_by,
+      created_at = NOW()
+  `, [opts.candidateKey, opts.signature, opts.canonicalArtistId, JSON.stringify(ids), opts.userId || null]);
+
+  clearEntityCaches();
+}
+
+// Backfill entity IDs for tracks that don't have them yet. The legacy featured
+// artist correction is intentionally one-time; new scans already normalize this.
+export async function migrateEntityIds() {
+  const db = await initDB();
+  await canonicalizeArtistEntities(db);
+  await migrateCompoundArtistCredits(db);
+
+  // One-time deduplication to fix case-sensitive album/genre duplicates.
+  try {
     const albumsRes = await db.query('SELECT * FROM albums ORDER BY created_at ASC');
     const seenAlbums = new Map<string, string>();
     for (const row of albumsRes.rows) {
@@ -1489,11 +2105,46 @@ export async function migrateEntityIds() {
     console.error('[DB Migration] Deduplication failed:', e);
   }
 
-  const res = await db.query(
-    'SELECT id, artist, album_artist, artists, album, genre, genres FROM tracks WHERE artist_id IS NULL OR album_id IS NULL OR genre_id IS NULL OR genres IS NULL'
-  );
+  const featureArtistBackfillDone = await getSystemSetting(FEATURE_ARTIST_BACKFILL_SETTING) === true;
+  const compoundCreditSplitDone = await getSystemSetting(COMPOUND_CREDIT_SPLIT_SETTING) === true;
 
-  if (res.rows.length === 0) return;
+  const legacyPredicates: string[] = [];
+  if (!featureArtistBackfillDone) {
+    legacyPredicates.push(
+      `artist ~* '(\\mfeat\\.?\\M|\\mft\\.?\\M|\\mfeaturing\\M)'`,
+      `album_artist ~* '(\\mfeat\\.?\\M|\\mft\\.?\\M|\\mfeaturing\\M)'`,
+    );
+  }
+  if (!compoundCreditSplitDone) {
+    legacyPredicates.push(
+      `artist LIKE '%,%'`,
+      `album_artist LIKE '%,%'`,
+    );
+  }
+  const legacyFeatureCreditPredicate = legacyPredicates.length > 0
+    ? ' OR ' + legacyPredicates.join(' OR ')
+    : '';
+
+  const res = await db.query(`
+    SELECT id, artist, album_artist, artists, album, genre, genres, mb_artist_id, mb_album_artist_id
+    FROM tracks
+    WHERE artist_id IS NULL
+      OR album_id IS NULL
+      OR genre_id IS NULL
+      OR genres IS NULL
+      OR artists IS NULL
+      ${legacyFeatureCreditPredicate}
+  `);
+
+  if (res.rows.length === 0) {
+    if (!featureArtistBackfillDone) {
+      await setSystemSetting(FEATURE_ARTIST_BACKFILL_SETTING, true);
+    }
+    if (!compoundCreditSplitDone) {
+      await setSystemSetting(COMPOUND_CREDIT_SPLIT_SETTING, true);
+    }
+    return;
+  }
 
   console.log(`[DB Migration] Backfilling entity IDs for ${res.rows.length} tracks...`);
   let count = 0;
@@ -1502,9 +2153,9 @@ export async function migrateEntityIds() {
     const trackId = (row as any).id;
     const rawArtist = (row as any).artist;
     const rawAlbumArtist = (row as any).album_artist;
-    const albumArtistName = rawAlbumArtist || rawArtist;
     const albumTitle = (row as any).album;
     const rawGenre = (row as any).genre;
+    const primaryArtistMbid = (row as any).mb_album_artist_id || (row as any).mb_artist_id || null;
     
     const individualGenres = splitGenreNames(rawGenre);
     const primaryGenreName = individualGenres.length > 0 ? individualGenres[0] : null;
@@ -1517,22 +2168,28 @@ export async function migrateEntityIds() {
       } else if (Array.isArray(rawArtistsField)) {
         rawArtistsArray = rawArtistsField;
       }
-    } else if (rawArtist) {
-      rawArtistsArray = splitArtistNames(rawArtist);
     }
-    if (rawArtistsArray.length === 0 && rawArtist) {
-      rawArtistsArray = [rawArtist];
-    }
-    
+    rawArtistsArray = normalizeArtistNames(rawArtistsArray.length > 0 ? rawArtistsArray : null, rawArtist);
+    const albumArtistName = getPrimaryArtistName(rawAlbumArtist, rawArtist, rawArtistsArray);
+
+    // If the primary artist was derived from a compound credit ("A, B & C"),
+    // the track's MB artist id was scanned against the compound string and
+    // doesn't belong to the first individual. Skip attaching it.
+    const primarySource = rawAlbumArtist || rawArtist;
+    const primaryDerivedFromCompound = splitArtistNames(primarySource).length > 1;
+    const safePrimaryMbid = primaryDerivedFromCompound ? null : primaryArtistMbid;
+
     // 2. Fetch or create canonical entities, ensuring valid strings
-    const artistId = await getOrCreateArtist(albumArtistName);
+    const primaryArtistKey = normalizeArtistIdentityKey(albumArtistName);
+    const artistId = await getOrCreateArtist(albumArtistName, safePrimaryMbid);
     const albumId = await getOrCreateAlbum(albumTitle, albumArtistName);
     const genreId = await getOrCreateGenre(primaryGenreName);
-    
+
     // Create/update entities for all individual artists to ensure they exist for 'Also appears on'
     for (const a of rawArtistsArray) {
       if (a && a.trim() !== '') {
-         await getOrCreateArtist(a);
+         const artistMbid = normalizeArtistIdentityKey(a) === primaryArtistKey ? safePrimaryMbid : null;
+         await getOrCreateArtist(a, artistMbid);
       }
     }
 
@@ -1547,11 +2204,21 @@ export async function migrateEntityIds() {
     count++;
   }
 
+  const purged = await purgeOrphanedEntities();
   console.log(`[DB Migration] Backfilled entity IDs for ${count} tracks`);
+  if (purged.albums > 0 || purged.artists > 0 || purged.genres > 0) {
+    console.log(`[DB Migration] Purged orphaned entities after backfill: ${purged.albums} albums, ${purged.artists} artists, ${purged.genres} genres`);
+  }
+  if (!featureArtistBackfillDone) {
+    await setSystemSetting(FEATURE_ARTIST_BACKFILL_SETTING, true);
+  }
+  if (!compoundCreditSplitDone) {
+    await setSystemSetting(COMPOUND_CREDIT_SPLIT_SETTING, true);
+  }
 }
 
 // ==========================================
-// PLAYLISTS API 
+// PLAYLISTS API
 // ==========================================
 
 export async function createPlaylist(
@@ -2328,19 +2995,24 @@ export async function setArtistJambaseId(artistId: string, jambaseId: string | n
 // play count (top played first), then alphabetically.
 export async function searchLibraryArtists(userId: string, query: string, limit: number = 20) {
   const db = await initDB();
-  const q = `%${query.trim().toLowerCase()}%`;
+  const trimmed = query.trim();
+  const q = `%${trimmed.toLowerCase()}%`;
+  // Canonical-key fallback so variants like "n'to" / "tiësto" find the
+  // canonical artist row (which may be stored as "NTO" / "Tiesto").
+  const keyQuery = normalizeArtistIdentityKey(trimmed);
+  const qKey = keyQuery ? `%${keyQuery}%` : null;
   const res = await db.query(`
     SELECT a.id, a.name, a.image_url, a.mbid,
            COALESCE(SUM(ups.play_count), 0)::int AS user_plays
     FROM artists a
     JOIN tracks t ON t.artist_id = a.id
     LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
-    WHERE LOWER(a.name) LIKE $2
+    WHERE (LOWER(a.name) LIKE $2 OR ($4::text IS NOT NULL AND a.normalized_key LIKE $4))
       AND LOWER(a.name) NOT IN ('various artists', 'various', 'va', 'compilation', 'compilations')
     GROUP BY a.id, a.name, a.image_url, a.mbid
     ORDER BY user_plays DESC, a.name ASC
     LIMIT $3
-  `, [userId, q, limit]);
+  `, [userId, q, limit, qKey]);
   return res.rows;
 }
 
