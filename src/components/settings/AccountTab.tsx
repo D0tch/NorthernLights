@@ -26,7 +26,6 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
     const setListenBrainzConnected = usePlayerStore(state => state.setListenBrainzConnected);
     const setListenBrainzUsername = usePlayerStore(state => state.setListenBrainzUsername);
     const setListenBrainzScrobbleEnabled = usePlayerStore(state => state.setListenBrainzScrobbleEnabled);
-    const loadSettings = usePlayerStore(state => state.loadSettings);
     
     const { addToast } = useToast();
     
@@ -38,40 +37,6 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
     const username = currentUser?.username || 'User';
 
     const showToast = (msg: string, type: 'success' | 'error' | 'info') => addToast(msg, type);
-
-    const waitForLastFmConnection = async (popup: Window | null) => {
-        const startedAt = Date.now();
-        const deadline = startedAt + 120_000;
-        let popupClosedAt: number | null = null;
-
-        while (Date.now() < deadline) {
-            await new Promise(resolve => window.setTimeout(resolve, 1_000));
-
-            try {
-                const res = await fetch('/api/providers/lastfm/status', { headers: getAuthHeader() });
-                const data = await res.json().catch(() => ({}));
-                if (res.ok && data.connected) {
-                    const alreadyConnected = usePlayerStore.getState().lastFmConnected;
-                    setLastFmConnected(true);
-                    setLastFmUsername(data.username || '');
-                    setLastFmScrobbleEnabled(data.scrobbleEnabled === true);
-                    await loadSettings();
-                    try { popup?.close(); } catch {}
-                    if (!alreadyConnected) {
-                        showToast('Last.fm connected successfully', 'success');
-                    }
-                    return;
-                }
-            } catch {}
-
-            if (popup?.closed) {
-                popupClosedAt ??= Date.now();
-                if (Date.now() - popupClosedAt > 3_000) break;
-            }
-        }
-
-        showToast('Last.fm authorization did not complete', 'error');
-    };
 
     return (
         <div className="settings-section">
@@ -179,10 +144,6 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                                     return;
                                 }
 
-                                // Open the popup synchronously so browsers don't treat it as
-                                // a programmatic pop-up (which they block). Navigate it once
-                                // the authorize URL comes back from the server.
-                                const popup = window.open('about:blank', 'lastfm-auth', 'popup=yes,width=640,height=740');
                                 try {
                                     const saveRes = await fetch('/api/settings', {
                                         method: 'POST',
@@ -194,28 +155,18 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                                     });
                                     if (!saveRes.ok) {
                                         const saveErr = await saveRes.json().catch(() => ({}));
-                                        popup?.close();
                                         showToast(saveErr.error || 'Failed to save Last.fm credentials', 'error');
                                         return;
                                     }
 
-                                    const popupMode = popup && !popup.closed ? '1' : '0';
-                                    const res = await fetch(`/api/providers/lastfm/authorize?origin=${encodeURIComponent(window.location.origin)}&popup=${popupMode}`, { headers: getAuthHeader() });
+                                    const res = await fetch(`/api/providers/lastfm/authorize?origin=${encodeURIComponent(window.location.origin)}`, { headers: getAuthHeader() });
                                     const data = await res.json().catch(() => ({}));
                                     if (!res.ok || !data.url) {
-                                        popup?.close();
                                         showToast(data.error || 'Failed to start authorization', 'error');
                                         return;
                                     }
-                                    if (popup && !popup.closed) {
-                                        popup.location.href = data.url;
-                                        void waitForLastFmConnection(popup);
-                                    } else {
-                                        // Popup was blocked — fall back to in-tab navigation
-                                        window.location.href = data.url;
-                                    }
+                                    window.location.href = data.url;
                                 } catch (e: any) {
-                                    popup?.close();
                                     showToast(e?.message || 'Network error', 'error');
                                 }
                             }}

@@ -63,66 +63,12 @@ function getLastFmCallbackUri(req: import('express').Request): string {
   return `${getServerOrigin(req)}/api/providers/lastfm/callback`;
 }
 
-function sendLastFmPopupResult(
-  res: import('express').Response,
-  returnBase: string,
-  ok: boolean,
-  error: string | null = null
-) {
-  let targetOrigin = returnBase;
-  try {
-    targetOrigin = new URL(returnBase).origin;
-  } catch {}
-
-  const payload = { provider: 'lastfm', ok, error };
-  res.type('html').send(`<!doctype html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <title>Last.fm authorization</title>
-  <style>
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #101018; color: #f4f4f6; }
-    main { max-width: 28rem; padding: 2rem; text-align: center; }
-    a { color: #a78bfa; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>${ok ? 'Last.fm connected' : 'Last.fm authorization failed'}</h1>
-    <p>${ok ? 'You can close this window and return to Aurora.' : 'Return to Aurora and try again.'}</p>
-    <p><a href="${returnBase.replace(/"/g, '&quot;')}">Return to Aurora</a></p>
-  </main>
-  <script>
-    const payload = ${JSON.stringify(payload)};
-    const targetOrigin = ${JSON.stringify(targetOrigin)};
-    try {
-      const channel = new BroadcastChannel('oauth');
-      channel.postMessage(payload);
-      channel.close();
-    } catch {}
-    try {
-      if (window.opener) window.opener.postMessage(payload, targetOrigin);
-    } catch {}
-    setTimeout(() => {
-      try { window.close(); } catch {}
-    }, 100);
-  </script>
-</body>
-</html>`);
-}
-
 function finishLastFmCallback(
   res: import('express').Response,
   returnBase: string,
-  popup: boolean,
   ok: boolean,
   error: string | null = null
 ) {
-  if (popup) {
-    sendLastFmPopupResult(res, returnBase, ok, error);
-    return;
-  }
-
   if (ok) {
     res.redirect(`${returnBase}/?lfm_connected=1`);
   } else {
@@ -493,8 +439,8 @@ router.get('/providers/lastfm/authorize', async (req, res) => {
     if (!apiKey) return res.status(400).json({ error: 'Last.fm API key not configured' });
     if (!sharedSecret) return res.status(400).json({ error: 'Last.fm Shared Secret not configured' });
 
-    // Web applications should send the user directly to /api/auth and
-    // receive the authorized token on the callback. Keep a one-time state
+    // Last.fm web auth sends the browser to https://www.last.fm/api/auth and
+    // returns the authorized token on our callback. Keep a one-time state
     // server-side so the unauthenticated callback can be bound to the right
     // Aurora user without trusting the callback token alone.
     const pendingState = randomBytes(16).toString('hex');
@@ -507,8 +453,7 @@ router.get('/providers/lastfm/authorize', async (req, res) => {
       await setUserSetting(userId, 'lastFmAppOrigin', appOrigin);
     }
 
-    const popup = req.query.popup === '1';
-    const cbUrl = `${getLastFmCallbackUri(req)}?cb_user=${encodeURIComponent(userId)}&cb_state=${encodeURIComponent(pendingState)}&cb_popup=${popup ? '1' : '0'}`;
+    const cbUrl = `${getLastFmCallbackUri(req)}?cb_user=${encodeURIComponent(userId)}&cb_state=${encodeURIComponent(pendingState)}`;
     const authUrl = `https://www.last.fm/api/auth/?api_key=${apiKey}&cb=${encodeURIComponent(cbUrl)}`;
     res.json({ url: authUrl });
   } catch (err: any) {
@@ -521,41 +466,40 @@ router.get('/providers/lastfm/callback', async (req, res) => {
   try {
     const userId = req.query.cb_user as string;
     const callbackState = req.query.cb_state as string;
-    const popup = req.query.cb_popup === '1';
     const appOrigin = userId ? (await getUserSetting(userId, 'lastFmAppOrigin')) as string | null : null;
     const returnBase = (appOrigin && typeof appOrigin === 'string' && appOrigin.trim()) ? appOrigin.trim() : getServerOrigin(req);
 
-    if (!userId) return finishLastFmCallback(res, returnBase, popup, false, 'missing_user');
-    if (!callbackState) return finishLastFmCallback(res, returnBase, popup, false, 'missing_state');
+    if (!userId) return finishLastFmCallback(res, returnBase, false, 'missing_user');
+    if (!callbackState) return finishLastFmCallback(res, returnBase, false, 'missing_state');
 
     const { token, error } = req.query;
 
     if (error) {
-      return finishLastFmCallback(res, returnBase, popup, false, error as string);
+      return finishLastFmCallback(res, returnBase, false, error as string);
     }
 
     if (!token) {
-      return finishLastFmCallback(res, returnBase, popup, false, 'missing_token');
+      return finishLastFmCallback(res, returnBase, false, 'missing_token');
     }
 
     // Verify the callback belongs to the auth flow we initiated for this user.
     const pendingState = await getUserSetting(userId, 'lastFmPendingState');
     if (!pendingState || pendingState !== callbackState) {
-      return finishLastFmCallback(res, returnBase, popup, false, 'state_mismatch');
+      return finishLastFmCallback(res, returnBase, false, 'state_mismatch');
     }
 
     const apiKey = await getSystemSetting('lastFmApiKey');
     const sharedSecret = (await getSystemSetting('lastFmSharedSecret')) || '';
 
     if (!apiKey) {
-      return finishLastFmCallback(res, returnBase, popup, false, 'no_api_key');
+      return finishLastFmCallback(res, returnBase, false, 'no_api_key');
     }
 
     // Exchange token for session key
     const sessionRes = await lfmFetch(userId, 'auth.getSession', { token: token as string }, { apiKey, sharedSecret, sessionKey: '' });
 
     if (!sessionRes.session?.key) {
-      return finishLastFmCallback(res, returnBase, popup, false, 'session_failed');
+      return finishLastFmCallback(res, returnBase, false, 'session_failed');
     }
 
     await setUserSetting(userId, 'lastFmSessionKey', sessionRes.session.key);
@@ -564,14 +508,13 @@ router.get('/providers/lastfm/callback', async (req, res) => {
     await setUserSetting(userId, 'lastFmPendingState', '');
     await setUserSetting(userId, 'lastFmPendingToken', '');
 
-    finishLastFmCallback(res, returnBase, popup, true);
+    finishLastFmCallback(res, returnBase, true);
   } catch (err: any) {
     console.error('[Last.fm] callback error:', err.message);
     const userId = req.query.cb_user as string;
-    const popup = req.query.cb_popup === '1';
     const appOrigin = userId ? (await getUserSetting(userId, 'lastFmAppOrigin')) as string | null : null;
     const returnBase = (appOrigin && typeof appOrigin === 'string' && appOrigin.trim()) ? appOrigin.trim() : getServerOrigin(req);
-    finishLastFmCallback(res, returnBase, popup, false, 'internal_error');
+    finishLastFmCallback(res, returnBase, false, 'internal_error');
   }
 });
 
