@@ -1,6 +1,6 @@
 import { playbackManager } from './PlaybackManager';
 import { usePlayerStore } from '../store';
-import { applyStreamingQualityToHlsUrl } from './streaming';
+import { applyCastStreamingQualityToHlsUrl, applyStreamingQualityToHlsUrl } from './streaming';
 import { createQueueEntryId, ensureQueueEntryIds } from './queue';
 declare const chrome: any;
 declare const cast: any;
@@ -472,10 +472,10 @@ export class CastManager {
         const includeDuration = options?.includeDuration ?? true;
         const compactHlsUrl = options?.compactHlsUrl ?? false;
         const useHls = !!this.customAppId;
-        const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
-            track.url || '',
-            usePlayerStore.getState().streamingQuality
-        );
+        const streamingQuality = usePlayerStore.getState().streamingQuality;
+        const effectiveHlsUrl = useHls
+            ? applyCastStreamingQualityToHlsUrl(track.url || '', streamingQuality)
+            : applyStreamingQualityToHlsUrl(track.url || '', streamingQuality);
         let mediaUrl = useHls ? (effectiveHlsUrl || track.rawUrl || '') : (track.rawUrl || effectiveHlsUrl || '');
         if (useHls) {
             if (compactHlsUrl) {
@@ -804,10 +804,9 @@ export class CastManager {
         const castSession = this.castContext.getCurrentSession();
         if (!castSession) return;
 
-        const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
-            hlsUrl,
-            usePlayerStore.getState().streamingQuality
-        );
+        const effectiveHlsUrl = this.customAppId
+            ? applyCastStreamingQualityToHlsUrl(hlsUrl, usePlayerStore.getState().streamingQuality)
+            : applyStreamingQualityToHlsUrl(hlsUrl, usePlayerStore.getState().streamingQuality);
 
         // Select URL based on mode: custom receiver → HLS, default → raw file
         const useHls = !!(this.customAppId && effectiveHlsUrl);
@@ -910,7 +909,7 @@ export class CastManager {
         }
 
         const startTrack = tracks[normalizedStartIndex] || tracks[0];
-        const startTrackUrl = applyStreamingQualityToHlsUrl(
+        const startTrackUrl = applyCastStreamingQualityToHlsUrl(
             startTrack?.url || '',
             usePlayerStore.getState().streamingQuality
         );

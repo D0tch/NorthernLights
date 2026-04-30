@@ -104,8 +104,13 @@ function inferCodecString(codec: string): string {
   }
 }
 
-function inferBandwidth(quality: string, sourceBitrate?: number | null): number {
+function inferBandwidth(quality: string, codec: string, sourceBitrate?: number | null): number {
   if (quality === 'source') {
+    if (codec === 'aac' || codec === 'aac_he') {
+      return sourceBitrate && Number.isFinite(sourceBitrate) && sourceBitrate > 0
+        ? Math.min(sourceBitrate, 320000)
+        : 320000;
+    }
     return sourceBitrate && Number.isFinite(sourceBitrate) && sourceBitrate > 0
       ? sourceBitrate
       : 320000;
@@ -126,7 +131,7 @@ function buildMasterPlaylist(trackId: string, quality: string, codec: string, to
   if (token) params.set('token', token);
 
   const codecString = inferCodecString(codec);
-  const averageBandwidth = inferBandwidth(quality, sourceBitrate);
+  const averageBandwidth = inferBandwidth(quality, codec, sourceBitrate);
   const bandwidth = Math.round(averageBandwidth * 1.15);
 
   return [

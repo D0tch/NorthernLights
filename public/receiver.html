@@ -644,6 +644,38 @@
         } catch (e) {}
       }
 
+      function safeStringify(value) {
+        var seen = [];
+        try {
+          var serialized = JSON.stringify(value, function(key, val) {
+            if (typeof val === 'function') return undefined;
+            if (val instanceof Error) {
+              return {
+                name: val.name,
+                message: val.message,
+                stack: val.stack,
+                code: val.code,
+                category: val.category,
+                severity: val.severity,
+                data: val.data
+              };
+            }
+            if (val && typeof val === 'object') {
+              if (seen.indexOf(val) >= 0) return '[Circular]';
+              seen.push(val);
+            }
+            return val;
+          });
+          return (serialized || String(value)).slice(0, 2500);
+        } catch (e) {
+          try {
+            return String(value);
+          } catch (stringError) {
+            return 'Unserializable error';
+          }
+        }
+      }
+
       function logAndPost(level, tag, msg) {
         log(level, tag, msg);
         if (level !== 'ok' || VERBOSE_NETWORK_LOGS) {
@@ -875,7 +907,7 @@
 
       context.addEventListener(cast.framework.system.EventType.ERROR, function(e) {
         setDebugVisible(true);
-        logAndPost('error', LOG_TAG, 'Receiver error: ' + JSON.stringify(e));
+        logAndPost('error', LOG_TAG, 'Receiver error: ' + safeStringify(e));
       });
 
       playerManager.setMessageInterceptor(
@@ -924,16 +956,25 @@
 
       function decodeError(e) {
         if (!e) return 'Unknown error';
-        var detail = '';
-        if (e.detailedErrorCode) detail += ' [code=' + e.detailedErrorCode + ']';
-        if (e.reason) detail += ' [reason=' + e.reason + ']';
+        var detail = [];
+        function add(label, value) {
+          if (value === undefined || value === null || value === '') return;
+          detail.push(label + '=' + value);
+        }
+
+        add('code', e.detailedErrorCode);
+        if (e.reason) add('reason', e.reason);
         if (e.error) {
           var err = e.error;
-          if (err.message) detail += ' ' + err.message;
-          if (err.code) detail += ' (shaka=' + err.code + ')';
-          if (err.category) detail += ' (cat=' + err.category + ')';
+          add('message', err.message);
+          add('shaka', err.code);
+          add('category', err.category);
+          add('severity', err.severity);
+          if (err.data) add('data', safeStringify(err.data));
         }
-        return detail || JSON.stringify(e);
+        if (e.mediaError) add('mediaError', safeStringify(e.mediaError));
+        if (!detail.length) add('event', safeStringify(e));
+        return detail.join(' ');
       }
 
       playerManager.addEventListener(

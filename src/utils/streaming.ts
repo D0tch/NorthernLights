@@ -4,12 +4,29 @@ export function resolveStreamingQuality(preset: StreamingQualityPreset): string 
     return preset === 'auto' ? '128k' : preset;
 }
 
+export function resolveCastStreamingQuality(preset: StreamingQualityPreset): string {
+    if (preset === 'source' || preset === 'auto') return '128k';
+    return preset;
+}
+
 export function applyStreamingQualityToHlsUrl(hlsUrl: string, preset: StreamingQualityPreset): string {
     if (!hlsUrl || !hlsUrl.includes('.m3u8')) return hlsUrl;
 
     try {
         const url = new URL(hlsUrl, window.location.origin);
         url.searchParams.set('quality', resolveStreamingQuality(preset));
+        return url.toString();
+    } catch {
+        return hlsUrl;
+    }
+}
+
+export function applyCastStreamingQualityToHlsUrl(hlsUrl: string, preset: StreamingQualityPreset): string {
+    if (!hlsUrl || !hlsUrl.includes('.m3u8')) return hlsUrl;
+
+    try {
+        const url = new URL(hlsUrl, window.location.origin);
+        url.searchParams.set('quality', resolveCastStreamingQuality(preset));
         return url.toString();
     } catch {
         return hlsUrl;

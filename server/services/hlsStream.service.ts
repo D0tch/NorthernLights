@@ -494,7 +494,8 @@ function buildFfmpegArgs(
 
   args.push(
     '-hls_time', String(HLS_SEGMENT_DURATION),
-    '-hls_list_size', '0',          // VOD mode — keep all segments in playlist
+    '-hls_list_size', '0',          // Event playlist — keep all segments available.
+    '-hls_playlist_type', 'event',
     '-hls_segment_type', 'mpegts',
     '-hls_segment_filename', segmentPattern,
     '-hls_flags', 'independent_segments',
