@@ -33,10 +33,39 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
     const [promptDialog, setPromptDialog] = useState<{ title: string; label?: string; placeholder?: string; onSubmit: (value: string) => void } | null>(null);
     const [lbTokenInput, setLbTokenInput] = useState('');
     const [lbConnecting, setLbConnecting] = useState(false);
+    const [lastFmConnecting, setLastFmConnecting] = useState(false);
 
     const username = currentUser?.username || 'User';
 
     const showToast = (msg: string, type: 'success' | 'error' | 'info') => addToast(msg, type);
+
+    const pollLastFmCompletion = async () => {
+        const deadline = Date.now() + 120_000;
+        while (Date.now() < deadline) {
+            await new Promise(resolve => window.setTimeout(resolve, 2_000));
+            try {
+                const res = await fetch('/api/providers/lastfm/complete', {
+                    method: 'POST',
+                    headers: getAuthHeader(),
+                });
+                const data = await res.json().catch(() => ({}));
+                if (res.ok && data.status === 'ok') {
+                    setLastFmConnected(true);
+                    setLastFmUsername(data.username || '');
+                    showToast('Last.fm connected successfully', 'success');
+                    return;
+                }
+                if (res.status !== 202) {
+                    showToast(data.error || 'Failed to complete Last.fm authorization', 'error');
+                    return;
+                }
+            } catch (e: any) {
+                showToast(e?.message || 'Network error', 'error');
+                return;
+            }
+        }
+        showToast('Last.fm authorization timed out', 'error');
+    };
 
     return (
         <div className="settings-section">
@@ -138,12 +167,15 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                     <div className="flex items-center justify-between">
                         <p className="text-sm text-[var(--color-text-secondary)]">Not connected.</p>
                         <button
+                            disabled={lastFmConnecting}
                             onClick={async () => {
                                 if (!lastFmApiKey.trim() || !lastFmSharedSecret.trim()) {
                                     showToast('Configure the Last.fm API Key and Shared Secret first', 'error');
                                     return;
                                 }
 
+                                const authWindow = window.open('about:blank', 'lastfm-auth', 'popup=yes,width=760,height=820');
+                                setLastFmConnecting(true);
                                 try {
                                     const saveRes = await fetch('/api/settings', {
                                         method: 'POST',
@@ -155,6 +187,7 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                                     });
                                     if (!saveRes.ok) {
                                         const saveErr = await saveRes.json().catch(() => ({}));
+                                        authWindow?.close();
                                         showToast(saveErr.error || 'Failed to save Last.fm credentials', 'error');
                                         return;
                                     }
@@ -162,18 +195,28 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                                     const res = await fetch(`/api/providers/lastfm/authorize?origin=${encodeURIComponent(window.location.origin)}`, { headers: getAuthHeader() });
                                     const data = await res.json().catch(() => ({}));
                                     if (!res.ok || !data.url) {
+                                        authWindow?.close();
                                         showToast(data.error || 'Failed to start authorization', 'error');
                                         return;
                                     }
-                                    window.location.href = data.url;
+                                    if (authWindow && !authWindow.closed) {
+                                        authWindow.location.href = data.url;
+                                    } else {
+                                        window.open(data.url, '_blank', 'noopener,noreferrer');
+                                    }
+                                    showToast('Approve Aurora in the Last.fm window to finish connecting', 'info');
+                                    await pollLastFmCompletion();
                                 } catch (e: any) {
+                                    authWindow?.close();
                                     showToast(e?.message || 'Network error', 'error');
+                                } finally {
+                                    setLastFmConnecting(false);
                                 }
                             }}
                             className="btn btn-primary btn-sm flex items-center gap-1.5"
                         >
                             <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M11.96 0C5.36 0 0 5.36 0 11.96c0 6.6 5.36 11.96 11.96 11.96 6.6 0 11.96-5.36 11.96-11.96C23.92 5.36 18.56 0 11.96 0zm-2.07 16.71c-2.18 0-3.95-1.77-3.95-3.95 0-2.18 1.77-3.95 3.95-3.95 2.18 0 3.95 1.77 3.95 3.95 0 2.18-1.77 3.95-3.95 3.95zM17 12.76c0 .87-.71 1.58-1.58 1.58-.87 0-1.58-.71-1.58-1.58 0-.87.71-1.58 1.58-1.58.87 0 1.58.71 1.58 1.58zm3.64-5.39c-1.32 0-2.4-1.08-2.4-2.4 0-1.32 1.08-2.4 2.4-2.4 1.32 0 2.4 1.08 2.4 2.4.01 1.32-1.07 2.4-2.39 2.4" /></svg>
-                            Connect to Last.fm
+                            {lastFmConnecting ? 'Connecting...' : 'Connect to Last.fm'}
                         </button>
                     </div>
                 )}

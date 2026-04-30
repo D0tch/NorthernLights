@@ -452,10 +452,10 @@ router.get('/providers/lastfm/authorize', async (req, res) => {
     if (!apiKey) return res.status(400).json({ error: 'Last.fm API key not configured' });
     if (!sharedSecret) return res.status(400).json({ error: 'Last.fm Shared Secret not configured' });
 
-    // Last.fm web auth sends the browser to https://www.last.fm/api/auth and
-    // returns the authorized token on our callback. Keep a one-time state
-    // server-side so the unauthenticated callback can be bound to the right
-    // Aurora user without trusting the callback token alone.
+    // Last.fm callback redirects proved unreliable in production, so the
+    // connect flow uses Last.fm's token authorization: get a request token,
+    // send the user to approve it, then poll auth.getSession until authorized.
+    // Keep state for compatibility with the callback route and diagnostics.
     const pendingState = randomBytes(16).toString('hex');
     await setUserSetting(userId, 'lastFmPendingState', pendingState);
 
@@ -466,14 +466,73 @@ router.get('/providers/lastfm/authorize', async (req, res) => {
       await setUserSetting(userId, 'lastFmAppOrigin', appOrigin);
     }
 
-    const cbUrl = `${getLastFmCallbackUri(req)}?cb_user=${encodeURIComponent(userId)}&cb_state=${encodeURIComponent(pendingState)}`;
-    const authUrl = `https://www.last.fm/api/auth?api_key=${apiKey}&cb=${encodeURIComponent(cbUrl)}`;
-    logLastFmOAuth(`authorize user=${userId} apiKey=${maskLastFmApiKey(apiKey)} callback=${cbUrl} appOrigin=${appOrigin || 'none'}`);
-    res.json({ url: authUrl });
+    const tokenRes = await lfmFetch(userId, 'auth.getToken', {}, { apiKey, sharedSecret, sessionKey: '' });
+    const requestToken = tokenRes.token;
+    if (!requestToken || typeof requestToken !== 'string') {
+      logLastFmOAuth(`authorize_error user=${userId} reason=missing_request_token response=${JSON.stringify(tokenRes).slice(0, 300)}`);
+      return res.status(502).json({ error: 'Last.fm did not return an authorization token' });
+    }
+
+    await setUserSetting(userId, 'lastFmPendingToken', requestToken);
+
+    const callbackUrl = `${getLastFmCallbackUri(req)}?cb_user=${encodeURIComponent(userId)}&cb_state=${encodeURIComponent(pendingState)}`;
+    const authUrl = `https://www.last.fm/api/auth?api_key=${apiKey}&token=${encodeURIComponent(requestToken)}`;
+    logLastFmOAuth(`authorize user=${userId} apiKey=${maskLastFmApiKey(apiKey)} mode=token callback=${callbackUrl} appOrigin=${appOrigin || 'none'}`);
+    res.json({ url: authUrl, mode: 'token' });
   } catch (err: any) {
     console.error('[Last.fm] authorize error:', err.message);
     logLastFmOAuth(`authorize_error error=${err.message || 'unknown'}`);
     res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/providers/lastfm/complete', async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+    const requestToken = await getUserSetting(userId, 'lastFmPendingToken');
+    if (!requestToken || typeof requestToken !== 'string') {
+      logLastFmOAuth(`complete_reject user=${userId} reason=missing_pending_token`);
+      return res.status(400).json({ error: 'No pending Last.fm authorization token' });
+    }
+
+    const apiKey = await getSystemSetting('lastFmApiKey');
+    const sharedSecret = (await getSystemSetting('lastFmSharedSecret')) || '';
+    if (!apiKey) return res.status(400).json({ error: 'Last.fm API key not configured' });
+    if (!sharedSecret) return res.status(400).json({ error: 'Last.fm Shared Secret not configured' });
+
+    let sessionRes: any;
+    try {
+      sessionRes = await lfmFetch(userId, 'auth.getSession', { token: requestToken }, { apiKey, sharedSecret, sessionKey: '' });
+    } catch (err: any) {
+      const message = err.message || 'session_exchange_failed';
+      if (message.includes('Last.fm error 14')) {
+        logLastFmOAuth(`complete_pending user=${userId}`);
+        return res.status(202).json({ status: 'pending' });
+      }
+
+      logLastFmOAuth(`complete_reject user=${userId} reason=session_exchange_failed apiKey=${maskLastFmApiKey(apiKey)} error=${message}`);
+      return res.status(400).json({ error: message });
+    }
+
+    if (!sessionRes.session?.key) {
+      logLastFmOAuth(`complete_reject user=${userId} reason=session_failed response=${JSON.stringify(sessionRes).slice(0, 300)}`);
+      return res.status(400).json({ error: 'Last.fm session exchange failed' });
+    }
+
+    await setUserSetting(userId, 'lastFmSessionKey', sessionRes.session.key);
+    await setUserSetting(userId, 'lastFmUsername', sessionRes.session.name || '');
+    await setUserSetting(userId, 'lastFmConnected', true);
+    await setUserSetting(userId, 'lastFmPendingState', '');
+    await setUserSetting(userId, 'lastFmPendingToken', '');
+
+    logLastFmOAuth(`complete_success user=${userId} lastFmUser=${sessionRes.session.name || 'unknown'}`);
+    res.json({ status: 'ok', username: sessionRes.session.name || '' });
+  } catch (err: any) {
+    console.error('[Last.fm] complete error:', err.message);
+    logLastFmOAuth(`complete_error error=${err.message || 'unknown'}`);
+    res.status(500).json({ error: err.message || 'Failed to complete Last.fm authorization' });
   }
 });
 
