@@ -21,8 +21,11 @@ router.get('/', async (req, res) => {
     const userId = req.user?.userId;
     if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
-    queueLlmHubRefreshForUser(userId, 'hub-view');
-    queueSmartHubRefreshForUser(userId);
+    const shouldQueueRefresh = req.query.queueRefresh !== 'false';
+    if (shouldQueueRefresh) {
+      queueLlmHubRefreshForUser(userId, 'hub-view');
+      queueSmartHubRefreshForUser(userId);
+    }
     const collections = await getHubCollections([], userId);
     res.json({ collections });
   } catch (error) {

@@ -1,4 +1,4 @@
-import React, { useRef, useMemo, useCallback } from 'react';
+import React, { useRef, useMemo, useCallback, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   DndContext,
@@ -16,9 +16,20 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { usePlayerStore } from '../store';
-import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ListPlus, Loader2 } from 'lucide-react';
 import { parseArtists } from '../utils/artistUtils';
 import { PlaylistItem } from './PlaylistItem';
+import { PromptModal } from './PromptModal';
+import { useToast } from '../hooks/useToast';
+
+function getDefaultQueuePlaylistName(): string {
+  return `Queue ${new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date())}`;
+}
 
 export const PlaylistSidebar: React.FC = () => {
   const playlist = usePlayerStore(state => state.playlist);
@@ -27,6 +38,11 @@ export const PlaylistSidebar: React.FC = () => {
   const playAtIndex = usePlayerStore(state => state.playAtIndex);
   const currentIndex = usePlayerStore(state => state.currentIndex);
   const openContextMenu = usePlayerStore(state => state.openContextMenu);
+  const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
+  const fetchPlaylistsFromServer = usePlayerStore(state => state.fetchPlaylistsFromServer);
+  const { addToast } = useToast();
+  const [isSavePromptOpen, setIsSavePromptOpen] = useState(false);
+  const [isSavingQueue, setIsSavingQueue] = useState(false);
   
   const isSidebarCollapsed = usePlayerStore(state => state.isSidebarCollapsed);
   const setIsSidebarCollapsed = usePlayerStore(state => state.setIsSidebarCollapsed);
@@ -76,6 +92,52 @@ export const PlaylistSidebar: React.FC = () => {
     // The PlaylistItem useSortable handles styling and opacity for us
   }, []);
 
+  const handleSaveQueue = useCallback(async (title: string) => {
+    const trackIds = playlist.map((track) => track.id).filter(Boolean);
+    if (trackIds.length === 0) {
+      setIsSavePromptOpen(false);
+      addToast('Queue is empty.', 'error');
+      return;
+    }
+
+    setIsSavingQueue(true);
+    try {
+      const authHeaders = getAuthHeader();
+      const createRes = await fetch('/api/playlists', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({
+          title,
+          description: `Saved from play queue with ${trackIds.length} ${trackIds.length === 1 ? 'track' : 'tracks'}.`,
+        }),
+      });
+
+      const created = await createRes.json().catch(() => ({}));
+      if (!createRes.ok || !created.id) {
+        throw new Error(created.error || 'Failed to create playlist.');
+      }
+
+      const tracksRes = await fetch(`/api/playlists/${created.id}/tracks`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders },
+        body: JSON.stringify({ trackIds }),
+      });
+      const tracksPayload = await tracksRes.json().catch(() => ({}));
+      if (!tracksRes.ok) {
+        throw new Error(tracksPayload.error || 'Failed to save queue tracks.');
+      }
+
+      await fetchPlaylistsFromServer();
+      setIsSavePromptOpen(false);
+      addToast(`Saved "${title}" to playlists.`, 'success');
+    } catch (error: any) {
+      console.error('Failed to save queue as playlist', error);
+      addToast(error?.message || 'Failed to save queue as playlist.', 'error');
+    } finally {
+      setIsSavingQueue(false);
+    }
+  }, [addToast, fetchPlaylistsFromServer, getAuthHeader, playlist]);
+
   return (
     <>
       <div className="w-full border-r border-black/5 dark:border-white/5 flex flex-col h-full relative group/sidebar bg-white/40 dark:bg-black/20 backdrop-blur-3xl">
@@ -83,14 +145,30 @@ export const PlaylistSidebar: React.FC = () => {
           {!isSidebarCollapsed ? (
             <>
               <h3 className="text-xs font-bold text-[var(--color-text-secondary)] uppercase tracking-wider">Play Queue ({playlist.length})</h3>
-              <button 
-                onClick={() => setIsSidebarCollapsed(true)}
-                className="hidden md:flex p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-ui"
-                title="Collapse Queue"
-                aria-label="Collapse Queue"
-              >
-                <ChevronRight size={16} />
-              </button>
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => setIsSavePromptOpen(true)}
+                  disabled={playlist.length === 0 || isSavingQueue}
+                  className="btn btn-ghost btn-sm px-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Save queue as playlist"
+                  aria-label="Save queue as playlist"
+                >
+                  {isSavingQueue ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <ListPlus size={16} />
+                  )}
+                  <span className="hidden xl:inline">Save</span>
+                </button>
+                <button 
+                  onClick={() => setIsSidebarCollapsed(true)}
+                  className="hidden md:flex p-1.5 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-ui"
+                  title="Collapse Queue"
+                  aria-label="Collapse Queue"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </div>
             </>
           ) : (
             <button 
@@ -169,7 +247,18 @@ export const PlaylistSidebar: React.FC = () => {
           </div>
         </div>
       </div>
+      {isSavePromptOpen && (
+        <PromptModal
+          title="Save Queue"
+          label={`${playlist.length} ${playlist.length === 1 ? 'track' : 'tracks'} will be saved as a new playlist.`}
+          placeholder="Playlist name"
+          defaultValue={getDefaultQueuePlaylistName()}
+          onSubmit={handleSaveQueue}
+          onCancel={() => {
+            if (!isSavingQueue) setIsSavePromptOpen(false);
+          }}
+        />
+      )}
     </>
   );
 };
-

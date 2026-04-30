@@ -1962,9 +1962,92 @@ body {
   }
 }
 
+@keyframes hub-tile-flip-out {
+  from {
+    opacity: 1;
+    transform: perspective(900px) rotateX(0deg) translateY(0);
+  }
+  to {
+    opacity: 0.55;
+    transform: perspective(900px) rotateX(-78deg) translateY(3px);
+  }
+}
+
+@keyframes hub-tile-flip-in {
+  from {
+    opacity: 0.55;
+    transform: perspective(900px) rotateX(78deg) translateY(-3px);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(900px) rotateX(0deg) translateY(0);
+  }
+}
+
+@keyframes hub-tile-text-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+@keyframes hub-tile-text-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   .hub-card-animate {
     animation: hub-card-enter 300ms var(--ease-out) backwards;
+  }
+
+  .hub-tile-flip-out,
+  .hub-tile-flip-in {
+    backface-visibility: hidden;
+    transform-origin: center;
+    transform-style: preserve-3d;
+    will-change: transform, opacity;
+  }
+
+  .hub-tile-flip-out {
+    animation: hub-tile-flip-out 180ms cubic-bezier(0.45, 0, 0.2, 1) both;
+  }
+
+  .hub-tile-flip-in {
+    animation: hub-tile-flip-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .hub-tile-text-out,
+  .hub-tile-text-in {
+    will-change: opacity, transform;
+  }
+
+  .hub-tile-text-out {
+    animation: hub-tile-text-out 150ms var(--ease-out) both;
+  }
+
+  .hub-tile-text-in {
+    animation: hub-tile-text-in 220ms var(--ease-out) both;
+  }
+
+  .hub-swap-out {
+    opacity: 0;
+    transform: translateY(4px);
+    transition: opacity 180ms var(--ease-out), transform 180ms var(--ease-out);
+  }
+
+  .hub-swap-in {
+    animation: hub-card-enter 180ms var(--ease-out) both;
   }
 
   .hub-card-animate:nth-child(1) { animation-delay: 0ms; }

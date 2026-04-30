@@ -1,6 +1,7 @@
-import { initDB, createPlaylist, addTracksToPlaylist, getPlaylistTracks } from '../database';
+import { initDB, getPlaylistTracks } from '../database';
 import OpenAI from 'openai';
 import { getLlmConfig, extractJson } from './llm.service';
+import { withTransaction } from '../utils/db';
 
 // ============================================================
 // Smart Hub: On Repeat, Repeat Rewind, Jump Back In, Artist
@@ -65,6 +66,7 @@ interface CachedSmart {
   description: string;
   tracks: any[];
   ageMs: number;
+  createdAtMs: number;
 }
 
 async function loadCachedSmart(id: string): Promise<CachedSmart | null> {
@@ -76,13 +78,13 @@ async function loadCachedSmart(id: string): Promise<CachedSmart | null> {
   if (res.rowCount === 0) return null;
   const row = res.rows[0] as any;
   const tracks = await getPlaylistTracks(id);
-  if (!tracks || tracks.length === 0) return null;
   return {
     id,
     title: row.title,
     description: row.description,
-    tracks,
+    tracks: tracks || [],
     ageMs: Date.now() - new Date(row.created_at).getTime(),
+    createdAtMs: new Date(row.created_at).getTime(),
   };
 }
 
@@ -146,13 +148,45 @@ async function persistSmart(
   userId: string,
   trackIds: string[]
 ) {
-  const db = await initDB();
-  // Bump created_at so TTL resets even on overwrite
-  await db.query(`DELETE FROM playlists WHERE id = $1`, [id]);
-  await createPlaylist(id, title, description, false, userId, true, kind);
-  if (trackIds.length > 0) {
-    await addTracksToPlaylist(id, trackIds);
-  }
+  const uniqueTrackIds = Array.from(new Set(trackIds.filter(Boolean)));
+
+  await withTransaction(async (client) => {
+    // Serialize same-playlist smart refreshes. Without this, two concurrent
+    // Hub requests can interleave track replacement for the same stable ID.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [id]);
+
+    await client.query(
+      `
+      INSERT INTO playlists (id, title, description, created_at, is_llm_generated, user_id, is_system, generation_source)
+      VALUES ($1, $2, $3, NOW(), FALSE, $4, TRUE, $5)
+      ON CONFLICT (id) DO UPDATE SET
+        title = EXCLUDED.title,
+        description = EXCLUDED.description,
+        created_at = NOW(),
+        is_llm_generated = FALSE,
+        user_id = EXCLUDED.user_id,
+        is_system = TRUE,
+        generation_source = EXCLUDED.generation_source
+      `,
+      [id, title, description, userId, kind]
+    );
+
+    await client.query(`DELETE FROM playlist_tracks WHERE playlist_id = $1`, [id]);
+
+    if (uniqueTrackIds.length > 0) {
+      await client.query(
+        `
+        INSERT INTO playlist_tracks (playlist_id, track_id, sort_order, added_at)
+        SELECT $1, input.track_id, input.ordinality - 1, NOW()
+        FROM unnest($2::text[]) WITH ORDINALITY AS input(track_id, ordinality)
+        JOIN tracks t ON t.id = input.track_id
+        ORDER BY input.ordinality
+        `,
+        [id, uniqueTrackIds]
+      );
+    }
+  });
+
   const tracks = await getPlaylistTracks(id);
   return { id, title, description, tracks };
 }
@@ -647,13 +681,32 @@ Output ONLY valid JSON, no prose:
   }
 }
 
-// Daylist titles end with "<weekday> <time-of-day>". We use the cached title
-// to detect when the (weekday, time-of-day) bucket has shifted: if it has,
-// the daylist must re-roll regardless of TTL.
+// The title prompt asks for "<weekday> <time-of-day>" flavour, but freshness
+// uses created_at instead of title text so LLM formatting cannot cause loops.
 function daylistBucketSuffix(now: Date): string {
   const weekday = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
   const timeOfDay = describeTimeOfDay(now.getHours());
   return `${weekday} ${timeOfDay}`;
+}
+
+function getDaylistBucketStartMs(now: Date): number {
+  const hour = now.getHours();
+  const startHour =
+    hour < 5 ? 0 :
+    hour < 8 ? 5 :
+    hour < 12 ? 8 :
+    hour < 14 ? 12 :
+    hour < 17 ? 14 :
+    hour < 20 ? 17 :
+    hour < 23 ? 20 :
+    23;
+  const start = new Date(now);
+  start.setHours(startHour, 0, 0, 0);
+  return start.getTime();
+}
+
+function isDaylistFromCurrentBucket(cached: Pick<CachedSmart, 'createdAtMs'> | null, now = new Date()): boolean {
+  return !!cached && cached.createdAtMs >= getDaylistBucketStartMs(now);
 }
 
 async function computeDaylistFresh(userId: string, limit: number) {
@@ -713,7 +766,24 @@ async function computeDaylistFresh(userId: string, limit: number) {
     );
   }
 
-  const trackIds = tracksRes.rows.map((r: any) => r.id);
+  let trackIds = tracksRes.rows.map((r: any) => r.id);
+  if (trackIds.length === 0) {
+    const fallbackRes = await db.query(
+      `
+      SELECT t.id
+      FROM tracks t
+      LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
+      WHERE TRUE
+        ${christmasExclusion('t')}
+      ORDER BY
+        COALESCE(ups.last_played_at, NOW() - INTERVAL '10 years') DESC,
+        RANDOM()
+      LIMIT $2
+      `,
+      [userId, limit]
+    );
+    trackIds = fallbackRes.rows.map((r: any) => r.id);
+  }
   return persistSmart(id, 'daylist', title, description, userId, trackIds);
 }
 
@@ -726,11 +796,10 @@ export async function computeDaylist(userId: string, limit = 30) {
 
   const { cached, stale } = await getStaleOrFresh(id, TTL_MS['daylist']);
   if (cached) {
-    // Bucket-aware: if the cached title's "weekday time-of-day" suffix no
-    // longer matches now, force a refresh even if within TTL — but only for
+    // Bucket-aware: if the cached playlist was created before the current
+    // time-of-day bucket, force a refresh even if within TTL — but only for
     // users who have actually engaged in the last 24h.
-    const expectedSuffix = daylistBucketSuffix(new Date());
-    const bucketChanged = !cached.title?.toLowerCase().endsWith(expectedSuffix);
+    const bucketChanged = !isDaylistFromCurrentBucket(cached);
     if ((stale || bucketChanged) && activity.hasPlayedToday) {
       fireBackgroundRefresh(id, () => computeDaylistFresh(userId, limit));
     }
@@ -916,9 +985,7 @@ export function queueSmartHubRefreshForUser(userId: string) {
       }
       // Daylist refresh only fires if the user has actually engaged today.
       if (activity.hasPlayedToday) {
-        const expectedSuffix = daylistBucketSuffix(new Date());
-        const daylistBucketChanged =
-          daylistCache && !daylistCache.title?.toLowerCase().endsWith(expectedSuffix);
+        const daylistBucketChanged = daylistCache && !isDaylistFromCurrentBucket(daylistCache);
         if (
           !daylistCache ||
           daylistCache.ageMs > TTL_MS['daylist'] ||

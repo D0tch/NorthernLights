@@ -1,7 +1,7 @@
-import React, { useEffect, useState, useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../store';
-import { Play, Pin, PinOff, Disc3, Sparkles, Wand2, Compass, Radio, Repeat, Rewind, Sunrise, Sun, Moon, Sunset, User2, ListMusic } from 'lucide-react';
+import { Play, Pin, PinOff, Disc3, Sparkles, Wand2, Compass, Radio, Repeat, Rewind, Sunrise, Sun, Moon, Sunset, User2, ListMusic, Loader2 } from 'lucide-react';
 import type { TrackInfo } from '../utils/fileSystem';
 import type { Playlist } from '../store';
 import { useDominantColor } from '../hooks/useDominantColor';
@@ -12,6 +12,10 @@ import { LiveConcertsHubSection } from './LiveConcertsHubSection';
 import { HorizontalScrollRail } from './HorizontalScrollRail';
 
 type HubCollection = Partial<Playlist> & { tracks: TrackInfo[] };
+
+const HUB_REFRESH_POLL_MS = 30_000;
+const HUB_REFRESH_POLL_DURATION_MS = 2 * 60_000;
+const HUB_SWAP_DURATION_MS = 180;
 
 interface JumpTile {
   type: 'album' | 'playlist' | 'artist';
@@ -41,6 +45,213 @@ interface SmartBundle {
 }
 
 let hasPlayedHubCardIntro = false;
+
+function getCollectionSignature(collection: HubCollection | null | undefined): string {
+  if (!collection) return 'none';
+  const trackIds = (collection.tracks || []).map((track) => track.id).join(',');
+  return [
+    collection.id || '',
+    collection.title || '',
+    collection.description || '',
+    collection.createdAt || '',
+    trackIds,
+  ].join('|');
+}
+
+function getCollectionsSignature(collections: HubCollection[]): string {
+  return collections.map(getCollectionSignature).join('||');
+}
+
+function getSmartBundleSignature(bundle: SmartBundle | null): string {
+  if (!bundle) return 'none';
+  const jumpBackIn = bundle.jumpBackIn
+    .map((tile) => `${tile.type}:${tile.id}:${tile.title}:${tile.lastPlayedAt}`)
+    .join(',');
+  const radios = bundle.artistRadios
+    .map((radio) => `${radio.artistId}:${radio.artistName}:${radio.imageUrl || ''}:${radio.withArtists.join('+')}`)
+    .join(',');
+  return [
+    jumpBackIn,
+    getCollectionSignature(bundle.daylist),
+    getCollectionSignature(bundle.onRepeat),
+    getCollectionSignature(bundle.repeatRewind),
+    getCollectionSignature(bundle.seasonalRewind),
+    getCollectionSignature(bundle.yearRewind),
+    radios,
+  ].join('||');
+}
+
+const isCollectionListEmpty = (value: HubCollection[]) => value.length === 0;
+const isSmartBundleEmpty = (value: SmartBundle | null) => !value;
+type TileSwapPhase = 'idle' | 'out' | 'in';
+
+function useCrossfadedValue<T>(
+  value: T,
+  signature: string,
+  isEmpty: (value: T) => boolean
+): { value: T; className: string } {
+  const [displayValue, setDisplayValue] = useState(value);
+  const [phase, setPhase] = useState<'idle' | 'out' | 'in'>('idle');
+  const signatureRef = useRef(signature);
+  const displayValueRef = useRef(value);
+  const timeoutRef = useRef<number | null>(null);
+  const setNextDisplayValue = (nextValue: T) => {
+    displayValueRef.current = nextValue;
+    setDisplayValue(nextValue);
+  };
+
+  useEffect(() => {
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+
+    if (signatureRef.current === signature) {
+      setNextDisplayValue(value);
+      setPhase('idle');
+      return;
+    }
+
+    if (isEmpty(displayValueRef.current)) {
+      signatureRef.current = signature;
+      setNextDisplayValue(value);
+      setPhase('idle');
+      return;
+    }
+
+    setPhase('out');
+    timeoutRef.current = window.setTimeout(() => {
+      signatureRef.current = signature;
+      setNextDisplayValue(value);
+      setPhase('in');
+      timeoutRef.current = window.setTimeout(() => {
+        setPhase('idle');
+        timeoutRef.current = null;
+      }, HUB_SWAP_DURATION_MS);
+    }, HUB_SWAP_DURATION_MS);
+
+    return () => {
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, [isEmpty, signature, value]);
+
+  return {
+    value: displayValue,
+    className: phase === 'out' ? 'hub-swap-out' : phase === 'in' ? 'hub-swap-in' : '',
+  };
+}
+
+function getTileMotionClassName(phase: TileSwapPhase): string {
+  if (phase === 'out') return 'hub-tile-flip-out';
+  if (phase === 'in') return 'hub-tile-flip-in';
+  return '';
+}
+
+function getTileTextMotionClassName(phase: TileSwapPhase): string {
+  if (phase === 'out') return 'hub-tile-text-out';
+  if (phase === 'in') return 'hub-tile-text-in';
+  return '';
+}
+
+function hashString(value: string): number {
+  let hash = 2166136261;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function asHexColor(color: string | undefined, fallback: string): string {
+  return color && /^#[0-9a-f]{6}$/i.test(color) ? color : fallback;
+}
+
+function hexToRgba(hex: string, alpha: number): string {
+  const normalized = asHexColor(hex, '#7c3aed').slice(1);
+  const r = parseInt(normalized.slice(0, 2), 16);
+  const g = parseInt(normalized.slice(2, 4), 16);
+  const b = parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+function buildRolledCoverGradient(seed: string, palette: string[], fallbackColor: string): string {
+  const fallbackPalette = ['#7c3aed', '#0ea5e9', '#10b981', '#f59e0b'];
+  const usablePalette = [...palette, fallbackColor]
+    .map((color, index) => asHexColor(color, fallbackPalette[index % fallbackPalette.length]))
+    .filter(Boolean);
+  const colors = Array.from(new Set(usablePalette));
+  while (colors.length < 4) colors.push(fallbackPalette[(colors.length + hashString(seed)) % fallbackPalette.length]);
+
+  const roll = hashString(`${seed}:${colors.join('|')}`);
+  const pick = (offset: number) => colors[(roll + offset) % colors.length];
+  const angle = roll % 360;
+  const x1 = 18 + (roll % 58);
+  const y1 = 14 + ((roll >> 4) % 62);
+  const x2 = 22 + ((roll >> 8) % 56);
+  const y2 = 20 + ((roll >> 12) % 58);
+  const conicX = 34 + ((roll >> 16) % 36);
+  const conicY = 28 + ((roll >> 20) % 42);
+
+  const c1 = pick(0);
+  const c2 = pick(1);
+  const c3 = pick(2);
+  const c4 = pick(3);
+
+  return [
+    `radial-gradient(circle at ${x1}% ${y1}%, ${hexToRgba(c1, 0.70)} 0%, ${hexToRgba(c1, 0.34)} 24%, transparent 58%)`,
+    `radial-gradient(circle at ${x2}% ${y2}%, ${hexToRgba(c2, 0.62)} 0%, ${hexToRgba(c2, 0.28)} 22%, transparent 56%)`,
+    `conic-gradient(from ${angle}deg at ${conicX}% ${conicY}%, ${hexToRgba(c3, 0.58)}, ${hexToRgba(c4, 0.48)}, ${hexToRgba(c2, 0.52)}, ${hexToRgba(c1, 0.58)})`,
+    `linear-gradient(${(angle + 90) % 360}deg, ${hexToRgba(c1, 0.46)}, ${hexToRgba(c4, 0.38)})`,
+  ].join(', ');
+}
+
+interface AnimatedTileSlotProps<T> {
+  value: T;
+  signature: string;
+  children: (value: T, phase: TileSwapPhase) => React.ReactNode;
+}
+
+function AnimatedTileSlot<T>({ value, signature, children }: AnimatedTileSlotProps<T>) {
+  const [displayValue, setDisplayValue] = useState(value);
+  const [phase, setPhase] = useState<TileSwapPhase>('idle');
+  const signatureRef = useRef(signature);
+  const timeoutRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (signatureRef.current === signature) {
+      setDisplayValue(value);
+      return;
+    }
+
+    if (timeoutRef.current !== null) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+
+    setPhase('out');
+    timeoutRef.current = window.setTimeout(() => {
+      signatureRef.current = signature;
+      setDisplayValue(value);
+      setPhase('in');
+      timeoutRef.current = window.setTimeout(() => {
+        setPhase('idle');
+        timeoutRef.current = null;
+      }, HUB_SWAP_DURATION_MS);
+    }, HUB_SWAP_DURATION_MS);
+
+    return () => {
+      if (timeoutRef.current !== null) {
+        window.clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+    };
+  }, [signature, value]);
+
+  return <>{children(displayValue, phase)}</>;
+}
 
 const HubCardSkeleton: React.FC = () => (
   <div className="p-4 sm:p-5 bg-[var(--glass-bg)] border border-[var(--glass-border)] rounded-[var(--radius)] animate-pulse">
@@ -101,6 +312,38 @@ const HubLoadingSkeleton: React.FC = () => (
   </div>
 );
 
+const JumpBackInSectionSkeleton: React.FC = () => (
+  <section aria-hidden="true">
+    <div className="h-5 w-32 rounded bg-[var(--color-surface-variant)] animate-pulse mb-4" />
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
+      {Array.from({ length: 8 }).map((_, i) => (
+        <div
+          key={i}
+          className="h-[64px] rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] overflow-hidden animate-pulse sm:h-[80px]"
+        >
+          <div className="h-full w-[56px] bg-[var(--color-surface-variant)] sm:w-[80px]" />
+        </div>
+      ))}
+    </div>
+  </section>
+);
+
+const UniqueYoursSectionSkeleton: React.FC = () => (
+  <section aria-hidden="true">
+    <div className="h-7 w-40 rounded bg-[var(--color-surface-variant)] animate-pulse mb-2" />
+    <div className="h-4 w-72 max-w-full rounded bg-[var(--color-surface-variant)] animate-pulse mb-5" />
+    <div className="flex overflow-x-auto snap-x snap-mandatory gap-3 hub-scroll-mobile hub-scroll-unique pb-1 sm:gap-5 sm:pb-2 hide-scrollbar">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <div key={i} className="w-[min(52vw,200px)] shrink-0 snap-start sm:w-[190px]">
+          <div className="aspect-square rounded-[var(--radius)] bg-[var(--color-surface-variant)] animate-pulse" />
+          <div className="h-4 w-4/5 rounded bg-[var(--color-surface-variant)] animate-pulse mt-3" />
+          <div className="h-3 w-2/3 rounded bg-[var(--color-surface-variant)] animate-pulse mt-2" />
+        </div>
+      ))}
+    </div>
+  </section>
+);
+
 interface HubCardProps {
   collection: HubCollection;
   onOpen: () => void;
@@ -110,12 +353,17 @@ interface HubCardProps {
 }
 
 const HubCard: React.FC<HubCardProps> = ({ collection, onOpen, onPlay, onPinToggle, animate = false }) => {
-  const { artUrls, bgColor } = useDominantColor(collection.tracks);
+  const { artUrls, bgColor, palette } = useDominantColor(collection.tracks);
   const hasCovers = artUrls.length > 0;
+  const gradientSeed = `${collection.id || collection.title || 'hub'}:${collection.tracks.map((track) => track.id).join(',')}`;
+  const rolledGradient = useMemo(
+    () => buildRolledCoverGradient(gradientSeed, palette, bgColor),
+    [bgColor, gradientSeed, palette]
+  );
 
   return (
     <div
-      className={`relative p-4 sm:p-5 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] ${animate ? 'hub-card-animate' : ''}`}
+      className={`relative overflow-hidden p-4 sm:p-5 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] ${animate ? 'hub-card-animate' : ''}`}
       onClick={onOpen}
       role="button"
       tabIndex={0}
@@ -128,9 +376,11 @@ const HubCard: React.FC<HubCardProps> = ({ collection, onOpen, onPlay, onPinTogg
       aria-label={`Play ${collection.title || 'Untitled playlist'}`}
     >
       <div
-        className="absolute inset-0 rounded-[inherit] opacity-[0.04] group-hover:opacity-[0.08] transition-opacity pointer-events-none"
-        style={{ background: `linear-gradient(135deg, ${bgColor}, transparent 60%)` }}
+        className="absolute inset-0 rounded-[inherit] opacity-70 transition-opacity duration-300 group-hover:opacity-90 pointer-events-none"
+        style={{ background: rolledGradient }}
       />
+      <div className="absolute inset-0 rounded-[inherit] bg-white/65 dark:bg-[rgba(0,0,0,0.25)] dark:backdrop-blur-[10px] pointer-events-none" />
+      <div className="absolute inset-0 rounded-[inherit] bg-gradient-to-br from-white/55 via-white/20 to-transparent dark:from-white/10 dark:via-black/10 dark:to-black/35 pointer-events-none" />
 
       <div className="relative flex items-center mb-3">
         <div className="flex items-center">
@@ -184,7 +434,7 @@ const HubCard: React.FC<HubCardProps> = ({ collection, onOpen, onPlay, onPinTogg
           </p>
         )}
 
-        <p className="text-xs text-[var(--color-text-muted)] mt-2">
+        <p className="text-xs font-medium text-[var(--color-text-secondary)] dark:text-white/80 mt-2">
           {collection.tracks.length} {collection.tracks.length === 1 ? 'track' : 'tracks'}
         </p>
       </div>
@@ -345,6 +595,8 @@ interface JumpTileCardProps {
   tile: JumpTile;
   onActivate: (tile: JumpTile) => void;
   onPlay: (tile: JumpTile) => void;
+  motionClassName?: string;
+  textMotionClassName?: string;
 }
 
 // Distinct fallback identity per tile type when no artwork is available.
@@ -358,7 +610,13 @@ function getJumpTileFallback(type: JumpTile['type']): { gradient: string; Icon: 
   return { gradient: 'linear-gradient(135deg, #92400e, #d97706, #f59e0b)', Icon: Disc3 };
 }
 
-const JumpTileCard: React.FC<JumpTileCardProps> = ({ tile, onActivate, onPlay }) => {
+const JumpTileCard: React.FC<JumpTileCardProps> = ({
+  tile,
+  onActivate,
+  onPlay,
+  motionClassName = '',
+  textMotionClassName = '',
+}) => {
   const fallback = getJumpTileFallback(tile.type);
   const FallbackIcon = fallback.Icon;
   return (
@@ -372,7 +630,7 @@ const JumpTileCard: React.FC<JumpTileCardProps> = ({ tile, onActivate, onPlay })
           onActivate(tile);
         }
       }}
-      className="group relative flex h-[64px] cursor-pointer items-center gap-2 overflow-hidden rounded-[var(--radius)] border border-[var(--glass-border)] bg-[var(--glass-bg)] text-left backdrop-blur-sm transition-colors hover:bg-[var(--glass-bg-hover)] sm:h-[80px] sm:gap-3"
+      className={`group relative flex h-[64px] cursor-pointer items-center gap-2 overflow-hidden rounded-[var(--radius)] border border-[var(--glass-border)] bg-[var(--glass-bg)] text-left backdrop-blur-sm transition-colors hover:bg-[var(--glass-bg-hover)] sm:h-[80px] sm:gap-3 ${motionClassName}`}
       aria-label={`Open ${tile.title}`}
     >
       <div className="relative h-[64px] w-[56px] shrink-0 overflow-hidden sm:h-[80px] sm:w-[80px]">
@@ -388,7 +646,7 @@ const JumpTileCard: React.FC<JumpTileCardProps> = ({ tile, onActivate, onPlay })
           </>
         )}
       </div>
-      <div className="min-w-0 flex-1 py-1 pr-2 sm:pr-3">
+      <div className={`min-w-0 flex-1 py-1 pr-2 sm:pr-3 ${textMotionClassName}`}>
         <span className="line-clamp-2 block text-xs font-semibold leading-tight text-[var(--color-text-primary)] transition-colors group-hover:text-[var(--color-primary)] sm:text-base">
           {tile.title}
         </span>
@@ -419,6 +677,8 @@ interface CapsuleCardProps {
   collection: HubCollection;
   onOpen: () => void;
   onPlay: () => void;
+  motionClassName?: string;
+  textMotionClassName?: string;
 }
 
 // Maps the leading emoji in the capsule title to a gradient. Keeps the
@@ -433,7 +693,13 @@ function getCapsuleGradient(title: string | null | undefined): string {
   return 'linear-gradient(135deg, var(--color-primary), #6366f1)';
 }
 
-const CapsuleCard: React.FC<CapsuleCardProps> = ({ collection, onOpen, onPlay }) => {
+const CapsuleCard: React.FC<CapsuleCardProps> = ({
+  collection,
+  onOpen,
+  onPlay,
+  motionClassName = '',
+  textMotionClassName = '',
+}) => {
   const gradient = getCapsuleGradient(collection.title);
   return (
     <div
@@ -446,7 +712,7 @@ const CapsuleCard: React.FC<CapsuleCardProps> = ({ collection, onOpen, onPlay })
           onOpen();
         }
       }}
-      className="group relative w-[260px] sm:w-[300px] aspect-square rounded-[var(--radius)] overflow-hidden cursor-pointer transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] shrink-0"
+      className={`group relative w-[260px] sm:w-[300px] aspect-square rounded-[var(--radius)] overflow-hidden cursor-pointer transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-xl active:scale-[0.98] shrink-0 ${motionClassName}`}
       aria-label={`Open ${collection.title || 'Time capsule'}`}
       style={{ background: gradient }}
     >
@@ -455,7 +721,7 @@ const CapsuleCard: React.FC<CapsuleCardProps> = ({ collection, onOpen, onPlay })
         <span className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-80">
           Time capsule
         </span>
-        <div>
+        <div className={textMotionClassName}>
           <h3 className="font-bold text-2xl leading-tight line-clamp-2 drop-shadow-sm">
             {collection.title || 'Rewind'}
           </h3>
@@ -504,6 +770,8 @@ interface UniqueCardProps {
   onClick: () => void;
   onPlay?: () => void;
   loading?: boolean;
+  coverMotionClassName?: string;
+  textMotionClassName?: string;
 }
 
 const UniqueCard: React.FC<UniqueCardProps> = ({
@@ -514,6 +782,8 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
   onClick,
   onPlay,
   loading = false,
+  coverMotionClassName = '',
+  textMotionClassName = '',
 }) => {
   let coverContent: React.ReactNode;
   let badgeLabel: string;
@@ -570,11 +840,16 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
       className={`group relative flex w-[min(52vw,200px)] shrink-0 snap-start flex-col gap-2.5 cursor-pointer transition-ui duration-200 hover:-translate-y-0.5 sm:w-[190px] sm:gap-3 ${loading ? 'opacity-60 pointer-events-none' : ''}`}
       aria-label={`Open ${title}`}
     >
-      <div className="relative w-full aspect-square rounded-[var(--radius)] overflow-hidden shadow-md ring-1 ring-black/10">
+      <div className={`relative w-full aspect-square rounded-[var(--radius)] overflow-hidden shadow-md ring-1 ring-black/10 ${coverMotionClassName}`}>
         {coverContent}
         <span className="absolute top-2.5 left-2.5 text-[10px] font-bold uppercase tracking-[0.15em] text-white/95 bg-black/35 backdrop-blur-sm px-2 py-0.5 rounded-full">
           {badgeLabel}
         </span>
+        {loading && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center bg-black/20 backdrop-blur-[1px]">
+            <Loader2 className="h-7 w-7 animate-spin text-white drop-shadow" />
+          </div>
+        )}
         {onPlay && (
           <button
             type="button"
@@ -589,7 +864,7 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
           </button>
         )}
       </div>
-      <div className="px-0.5">
+      <div className={`px-0.5 ${textMotionClassName}`}>
         <p className="font-semibold text-sm text-[var(--color-text-primary)] line-clamp-2 leading-tight group-hover:text-[var(--color-primary)] transition-colors">
           {title}
         </p>
@@ -612,16 +887,19 @@ export const Hub: React.FC = () => {
   const [isLoading, setIsLoading] = useState(true);
   const [isSmartLoading, setIsSmartLoading] = useState(true);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [openingSmartPlaylistId, setOpeningSmartPlaylistId] = useState<string | null>(null);
   const [generationError, setGenerationError] = useState('');
   const [shouldAnimateCards] = useState(() => !hasPlayedHubCardIntro);
+  const collectionsSignatureRef = useRef('');
+  const smartBundleSignatureRef = useRef('');
 
-  const resolveTracks = (rawTracks: any[]): TrackInfo[] =>
+  const resolveTracks = useCallback((rawTracks: any[]): TrackInfo[] =>
     (rawTracks || [])
       .map((t: any) => library.find((lt) => lt.id === t.id) || t)
-      .filter(Boolean) as TrackInfo[];
+      .filter(Boolean) as TrackInfo[], [library]);
 
-  const fetchSmartBundle = async () => {
-    setIsSmartLoading(true);
+  const fetchSmartBundle = useCallback(async (options: { background?: boolean } = {}) => {
+    if (!options.background) setIsSmartLoading(true);
     try {
       const res = await fetch('/api/hub/smart', { headers: getAuthHeader() });
       if (!res.ok) return;
@@ -630,7 +908,7 @@ export const Hub: React.FC = () => {
         raw ? { ...raw, tracks: resolveTracks(raw.tracks) } : null;
       const orNull = (col: HubCollection | null) =>
         col && col.tracks.length > 0 ? col : null;
-      setSmartBundle({
+      const nextBundle = {
         jumpBackIn: data.jumpBackIn || [],
         onRepeat: orNull(resolve(data.onRepeat)),
         repeatRewind: orNull(resolve(data.repeatRewind)),
@@ -644,13 +922,18 @@ export const Hub: React.FC = () => {
         })),
         seasonalRewind: orNull(resolve(data.seasonalRewind)),
         yearRewind: orNull(resolve(data.yearRewind)),
-      });
+      };
+      const nextSignature = getSmartBundleSignature(nextBundle);
+      const didChange = smartBundleSignatureRef.current !== nextSignature;
+      smartBundleSignatureRef.current = nextSignature;
+      setSmartBundle((prev) => (getSmartBundleSignature(prev) === nextSignature ? prev : nextBundle));
+      if (didChange) void fetchPlaylistsFromServer();
     } catch (e) {
       console.error('Failed to load smart hub', e);
     } finally {
-      setIsSmartLoading(false);
+      if (!options.background) setIsSmartLoading(false);
     }
-  };
+  }, [fetchPlaylistsFromServer, getAuthHeader, resolveTracks]);
 
   const handleJumpTile = (tile: JumpTile) => {
     if (tile.type === 'playlist') {
@@ -710,7 +993,7 @@ export const Hub: React.FC = () => {
       if (!res.ok) throw new Error('Failed to load artist radio');
       const { playlist } = await res.json();
       // Make the smart playlist visible to the playlist store before navigating
-      void fetchPlaylistsFromServer();
+      await fetchPlaylistsFromServer();
       if (playlist?.id) {
         navigate(`/playlists/${playlist.id}`);
       }
@@ -721,10 +1004,11 @@ export const Hub: React.FC = () => {
     }
   };
 
-  const fetchHubData = async () => {
-    setIsLoading(true);
+  const fetchHubData = useCallback(async (options: { background?: boolean } = {}) => {
+    if (!options.background) setIsLoading(true);
     try {
-      const res = await fetch('/api/hub', { headers: getAuthHeader() });
+      const url = options.background ? '/api/hub?queueRefresh=false' : '/api/hub';
+      const res = await fetch(url, { headers: getAuthHeader() });
 
       if (res.ok) {
         const data = await res.json();
@@ -740,17 +1024,37 @@ export const Hub: React.FC = () => {
           }))
           .filter((col: any) => col.tracks.length > 0);
 
-        setCollections(mappedCollections);
+        const nextSignature = getCollectionsSignature(mappedCollections);
+        const didChange = collectionsSignatureRef.current !== nextSignature;
+        collectionsSignatureRef.current = nextSignature;
+        setCollections((prev) => (getCollectionsSignature(prev) === nextSignature ? prev : mappedCollections));
         // System playlists are persisted server-side during the hub fetch.
         // Refresh the playlist store so PlaylistDetail can resolve them by ID.
-        void fetchPlaylistsFromServer();
+        if (didChange) void fetchPlaylistsFromServer();
       }
     } catch (e) {
       console.error('Failed to load hub data', e);
     } finally {
-      setIsLoading(false);
+      if (!options.background) setIsLoading(false);
+    }
+  }, [fetchPlaylistsFromServer, getAuthHeader, library]);
+
+  const handleOpenSmartPlaylist = async (collection: HubCollection | null | undefined) => {
+    if (!collection?.id || openingSmartPlaylistId) return;
+
+    setOpeningSmartPlaylistId(collection.id);
+    try {
+      const currentPlaylists = usePlayerStore.getState().playlists;
+      if (!currentPlaylists.some((playlist) => playlist.id === collection.id)) {
+        await fetchPlaylistsFromServer();
+      }
+      navigate(`/playlists/${collection.id}`);
+    } finally {
+      setOpeningSmartPlaylistId(null);
     }
   };
+
+  const isInitialLoading = (isLoading || isSmartLoading) && collections.length === 0 && !smartBundle;
 
   useEffect(() => {
     if (library.length > 0) {
@@ -760,7 +1064,23 @@ export const Hub: React.FC = () => {
       setIsLoading(false);
       setIsSmartLoading(false);
     }
-  }, [library]);
+  }, [fetchHubData, fetchSmartBundle, library.length]);
+
+  useEffect(() => {
+    if (library.length === 0 || isInitialLoading) return;
+
+    const startedAt = Date.now();
+    const interval = window.setInterval(() => {
+      if (Date.now() - startedAt > HUB_REFRESH_POLL_DURATION_MS) {
+        window.clearInterval(interval);
+        return;
+      }
+      void fetchHubData({ background: true });
+      void fetchSmartBundle({ background: true });
+    }, HUB_REFRESH_POLL_MS);
+
+    return () => window.clearInterval(interval);
+  }, [fetchHubData, fetchSmartBundle, library.length, isInitialLoading]);
 
   useEffect(() => {
     if (shouldAnimateCards && !isLoading) hasPlayedHubCardIntro = true;
@@ -806,8 +1126,22 @@ export const Hub: React.FC = () => {
     setPlaylist(tracks, 0);
   };
 
-  const aiPlaylists = collections.filter((c) => c.isLlmGenerated);
-  const systemCollections = collections.filter(
+  const collectionSignature = useMemo(() => getCollectionsSignature(collections), [collections]);
+  const smartBundleSignature = useMemo(() => getSmartBundleSignature(smartBundle), [smartBundle]);
+  const { value: visibleCollections } = useCrossfadedValue(
+    collections,
+    collectionSignature,
+    isCollectionListEmpty
+  );
+  const { value: visibleSmartBundle } = useCrossfadedValue(
+    smartBundle,
+    smartBundleSignature,
+    isSmartBundleEmpty
+  );
+  const showSmartSkeletons = isSmartLoading && !visibleSmartBundle;
+
+  const aiPlaylists = visibleCollections.filter((c) => c.isLlmGenerated);
+  const systemCollections = visibleCollections.filter(
     (c) => !c.isLlmGenerated && (c.isSystem || (c.id || '').startsWith('engine_'))
   );
 
@@ -830,8 +1164,6 @@ export const Hub: React.FC = () => {
         entity: genreEntities.find((g: any) => g.name?.toLowerCase() === genre.toLowerCase()),
       }));
   }, [library, genreEntities]);
-
-  const isInitialLoading = (isLoading || isSmartLoading) && collections.length === 0 && !smartBundle;
 
   if (isInitialLoading) {
     return <HubLoadingSkeleton />;
@@ -867,19 +1199,30 @@ export const Hub: React.FC = () => {
         </div>
       )}
 
-      {smartBundle && smartBundle.jumpBackIn.length > 0 && (
+      {showSmartSkeletons ? (
+        <JumpBackInSectionSkeleton />
+      ) : visibleSmartBundle && visibleSmartBundle.jumpBackIn.length > 0 && (
         <section>
           <h2 className="text-lg font-semibold text-[var(--color-text-secondary)] mb-4">
             Jump back in
           </h2>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-2 sm:gap-3">
-            {smartBundle.jumpBackIn.slice(0, 8).map((tile) => (
-              <JumpTileCard
-                key={`${tile.type}:${tile.id}`}
-                tile={{ ...tile, imageUrl: resolveTileImage(tile) }}
-                onActivate={handleJumpTile}
-                onPlay={handlePlayJumpTile}
-              />
+            {visibleSmartBundle.jumpBackIn.slice(0, 8).map((tile, index) => (
+              <AnimatedTileSlot
+                key={`jump-back-in-${index}`}
+                value={tile}
+                signature={`${tile.type}:${tile.id}:${tile.title}:${tile.subtitle}:${tile.imageUrl || ''}:${tile.lastPlayedAt}`}
+              >
+                {(displayTile, phase) => (
+                  <JumpTileCard
+                    tile={{ ...displayTile, imageUrl: resolveTileImage(displayTile) }}
+                    onActivate={handleJumpTile}
+                    onPlay={handlePlayJumpTile}
+                    motionClassName={getTileMotionClassName(phase)}
+                    textMotionClassName={getTileTextMotionClassName(phase)}
+                  />
+                )}
+              </AnimatedTileSlot>
             ))}
           </div>
         </section>
@@ -949,7 +1292,9 @@ export const Hub: React.FC = () => {
         </section>
       )}
 
-      {smartBundle && (smartBundle.daylist || smartBundle.onRepeat || smartBundle.repeatRewind || smartBundle.artistRadios.length > 0) && (
+      {showSmartSkeletons ? (
+        <UniqueYoursSectionSkeleton />
+      ) : visibleSmartBundle && (visibleSmartBundle.daylist || visibleSmartBundle.onRepeat || visibleSmartBundle.repeatRewind || visibleSmartBundle.artistRadios.length > 0) && (
         <section>
           <h2 className="text-xl sm:text-2xl font-bold text-[var(--color-text-primary)] mb-1">
             Uniquely yours
@@ -961,55 +1306,86 @@ export const Hub: React.FC = () => {
             ariaLabel="Uniquely yours"
             viewportClassName="flex overflow-x-auto snap-x snap-mandatory gap-3 hub-scroll-mobile hub-scroll-unique pb-1 sm:gap-5 sm:pb-2"
           >
-            {smartBundle.daylist && (
-              <UniqueCard
-                kind="daylist"
-                title={smartBundle.daylist.title || 'Daylist'}
-                subtitle={smartBundle.daylist.description || undefined}
-                onClick={() =>
-                  smartBundle.daylist?.id && navigate(`/playlists/${smartBundle.daylist.id}`)
-                }
-                onPlay={() => smartBundle.daylist && handlePlayCollection(smartBundle.daylist.tracks)}
-              />
+            {visibleSmartBundle.daylist && (
+              <AnimatedTileSlot
+                value={visibleSmartBundle.daylist}
+                signature={getCollectionSignature(visibleSmartBundle.daylist)}
+              >
+                {(displayDaylist, phase) => (
+                  <UniqueCard
+                    kind="daylist"
+                    title={displayDaylist.title || 'Daylist'}
+                    subtitle={displayDaylist.description || undefined}
+                    onClick={() => handleOpenSmartPlaylist(displayDaylist)}
+                    onPlay={() => handlePlayCollection(displayDaylist.tracks)}
+                    loading={openingSmartPlaylistId === displayDaylist.id}
+                    coverMotionClassName={getTileMotionClassName(phase)}
+                    textMotionClassName={getTileTextMotionClassName(phase)}
+                  />
+                )}
+              </AnimatedTileSlot>
             )}
-            {smartBundle.onRepeat && (
-              <UniqueCard
-                kind="on-repeat"
-                title="On Repeat"
-                subtitle="Songs you love right now"
-                onClick={() =>
-                  smartBundle.onRepeat?.id && navigate(`/playlists/${smartBundle.onRepeat.id}`)
-                }
-                onPlay={() => smartBundle.onRepeat && handlePlayCollection(smartBundle.onRepeat.tracks)}
-              />
+            {visibleSmartBundle.onRepeat && (
+              <AnimatedTileSlot
+                value={visibleSmartBundle.onRepeat}
+                signature={getCollectionSignature(visibleSmartBundle.onRepeat)}
+              >
+                {(displayOnRepeat, phase) => (
+                  <UniqueCard
+                    kind="on-repeat"
+                    title="On Repeat"
+                    subtitle="Songs you love right now"
+                    onClick={() => handleOpenSmartPlaylist(displayOnRepeat)}
+                    onPlay={() => handlePlayCollection(displayOnRepeat.tracks)}
+                    loading={openingSmartPlaylistId === displayOnRepeat.id}
+                    coverMotionClassName={getTileMotionClassName(phase)}
+                    textMotionClassName={getTileTextMotionClassName(phase)}
+                  />
+                )}
+              </AnimatedTileSlot>
             )}
-            {smartBundle.repeatRewind && (
-              <UniqueCard
-                kind="repeat-rewind"
-                title="Repeat Rewind"
-                subtitle="Your past favorites"
-                onClick={() =>
-                  smartBundle.repeatRewind?.id && navigate(`/playlists/${smartBundle.repeatRewind.id}`)
-                }
-                onPlay={() =>
-                  smartBundle.repeatRewind && handlePlayCollection(smartBundle.repeatRewind.tracks)
-                }
-              />
+            {visibleSmartBundle.repeatRewind && (
+              <AnimatedTileSlot
+                value={visibleSmartBundle.repeatRewind}
+                signature={getCollectionSignature(visibleSmartBundle.repeatRewind)}
+              >
+                {(displayRepeatRewind, phase) => (
+                  <UniqueCard
+                    kind="repeat-rewind"
+                    title="Repeat Rewind"
+                    subtitle="Your past favorites"
+                    onClick={() => handleOpenSmartPlaylist(displayRepeatRewind)}
+                    onPlay={() => handlePlayCollection(displayRepeatRewind.tracks)}
+                    loading={openingSmartPlaylistId === displayRepeatRewind.id}
+                    coverMotionClassName={getTileMotionClassName(phase)}
+                    textMotionClassName={getTileTextMotionClassName(phase)}
+                  />
+                )}
+              </AnimatedTileSlot>
             )}
-            {smartBundle.artistRadios.map((candidate) => (
-              <UniqueCard
-                key={candidate.artistId}
-                kind="artist-radio"
-                title={`${candidate.artistName} Radio`}
-                subtitle={
-                  candidate.withArtists && candidate.withArtists.length > 0
-                    ? `With ${candidate.withArtists.join(', ')}`
-                    : 'Inspired by your top artist'
-                }
-                imageUrl={candidate.imageUrl}
-                onClick={() => handleOpenArtistRadio(candidate)}
-                loading={radioLoadingId === candidate.artistId}
-              />
+            {visibleSmartBundle.artistRadios.map((candidate, index) => (
+              <AnimatedTileSlot
+                key={`artist-radio-${index}`}
+                value={candidate}
+                signature={`${candidate.artistId}:${candidate.artistName}:${candidate.imageUrl || ''}:${candidate.withArtists.join('|')}`}
+              >
+                {(displayCandidate, phase) => (
+                  <UniqueCard
+                    kind="artist-radio"
+                    title={`${displayCandidate.artistName} Radio`}
+                    subtitle={
+                      displayCandidate.withArtists && displayCandidate.withArtists.length > 0
+                        ? `With ${displayCandidate.withArtists.join(', ')}`
+                        : 'Inspired by your top artist'
+                    }
+                    imageUrl={displayCandidate.imageUrl}
+                    onClick={() => handleOpenArtistRadio(displayCandidate)}
+                    loading={radioLoadingId === displayCandidate.artistId}
+                    coverMotionClassName={getTileMotionClassName(phase)}
+                    textMotionClassName={getTileTextMotionClassName(phase)}
+                  />
+                )}
+              </AnimatedTileSlot>
             ))}
           </HorizontalScrollRail>
         </section>
@@ -1017,7 +1393,7 @@ export const Hub: React.FC = () => {
 
       <LiveConcertsHubSection />
 
-      {smartBundle && (smartBundle.seasonalRewind || smartBundle.yearRewind) && (
+      {visibleSmartBundle && (visibleSmartBundle.seasonalRewind || visibleSmartBundle.yearRewind) && (
         <section>
           <h2 className="text-xl sm:text-2xl font-bold text-[var(--color-text-primary)] mb-1">
             Time capsules
@@ -1029,33 +1405,40 @@ export const Hub: React.FC = () => {
             ariaLabel="Time capsules"
             viewportClassName="flex overflow-x-auto snap-x snap-mandatory gap-4 hub-scroll-mobile pb-2"
           >
-            {smartBundle.yearRewind && (
+            {visibleSmartBundle.yearRewind && (
               <div className="snap-start">
-                <CapsuleCard
-                  collection={smartBundle.yearRewind}
-                  onOpen={() =>
-                    smartBundle.yearRewind?.id &&
-                    navigate(`/playlists/${smartBundle.yearRewind.id}`)
-                  }
-                  onPlay={() =>
-                    smartBundle.yearRewind && handlePlayCollection(smartBundle.yearRewind.tracks)
-                  }
-                />
+                <AnimatedTileSlot
+                  value={visibleSmartBundle.yearRewind}
+                  signature={getCollectionSignature(visibleSmartBundle.yearRewind)}
+                >
+                  {(displayYearRewind, phase) => (
+                    <CapsuleCard
+                      collection={displayYearRewind}
+                      onOpen={() => handleOpenSmartPlaylist(displayYearRewind)}
+                      onPlay={() => handlePlayCollection(displayYearRewind.tracks)}
+                      motionClassName={getTileMotionClassName(phase)}
+                      textMotionClassName={getTileTextMotionClassName(phase)}
+                    />
+                  )}
+                </AnimatedTileSlot>
               </div>
             )}
-            {smartBundle.seasonalRewind && (
+            {visibleSmartBundle.seasonalRewind && (
               <div className="snap-start">
-                <CapsuleCard
-                  collection={smartBundle.seasonalRewind}
-                  onOpen={() =>
-                    smartBundle.seasonalRewind?.id &&
-                    navigate(`/playlists/${smartBundle.seasonalRewind.id}`)
-                  }
-                  onPlay={() =>
-                    smartBundle.seasonalRewind &&
-                    handlePlayCollection(smartBundle.seasonalRewind.tracks)
-                  }
-                />
+                <AnimatedTileSlot
+                  value={visibleSmartBundle.seasonalRewind}
+                  signature={getCollectionSignature(visibleSmartBundle.seasonalRewind)}
+                >
+                  {(displaySeasonalRewind, phase) => (
+                    <CapsuleCard
+                      collection={displaySeasonalRewind}
+                      onOpen={() => handleOpenSmartPlaylist(displaySeasonalRewind)}
+                      onPlay={() => handlePlayCollection(displaySeasonalRewind.tracks)}
+                      motionClassName={getTileMotionClassName(phase)}
+                      textMotionClassName={getTileTextMotionClassName(phase)}
+                    />
+                  )}
+                </AnimatedTileSlot>
               </div>
             )}
           </HorizontalScrollRail>
