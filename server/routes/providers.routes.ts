@@ -9,6 +9,7 @@ import {
 } from '../services/listenbrainz.service';
 import { requireAuth, requireAdmin } from '../middleware/auth';
 import { mbFetch, checkMbEnabled, refreshMbToken } from '../services/musicbrainz.service';
+import { writeDebugLog } from '../services/debugLogger.service';
 import {
   getArtistData,
   getArtistTopTracks,
@@ -61,6 +62,18 @@ async function getMbRedirectUri(req: import('express').Request): Promise<string>
 
 function getLastFmCallbackUri(req: import('express').Request): string {
   return `${getServerOrigin(req)}/api/providers/lastfm/callback`;
+}
+
+function maskLastFmApiKey(value: unknown): string {
+  if (typeof value !== 'string' || value.length < 8) return 'missing';
+  return `${value.slice(0, 6)}...${value.slice(-4)}`;
+}
+
+function logLastFmOAuth(line: string) {
+  console.log(`[Last.fm OAuth] ${line}`);
+  try {
+    writeDebugLog('lastfm-oauth.log', line);
+  } catch {}
 }
 
 function finishLastFmCallback(
@@ -454,10 +467,12 @@ router.get('/providers/lastfm/authorize', async (req, res) => {
     }
 
     const cbUrl = `${getLastFmCallbackUri(req)}?cb_user=${encodeURIComponent(userId)}&cb_state=${encodeURIComponent(pendingState)}`;
-    const authUrl = `https://www.last.fm/api/auth/?api_key=${apiKey}&cb=${encodeURIComponent(cbUrl)}`;
+    const authUrl = `https://www.last.fm/api/auth?api_key=${apiKey}&cb=${encodeURIComponent(cbUrl)}`;
+    logLastFmOAuth(`authorize user=${userId} apiKey=${maskLastFmApiKey(apiKey)} callback=${cbUrl} appOrigin=${appOrigin || 'none'}`);
     res.json({ url: authUrl });
   } catch (err: any) {
     console.error('[Last.fm] authorize error:', err.message);
+    logLastFmOAuth(`authorize_error error=${err.message || 'unknown'}`);
     res.status(500).json({ error: err.message });
   }
 });
@@ -468,23 +483,34 @@ router.get('/providers/lastfm/callback', async (req, res) => {
     const callbackState = req.query.cb_state as string;
     const appOrigin = userId ? (await getUserSetting(userId, 'lastFmAppOrigin')) as string | null : null;
     const returnBase = (appOrigin && typeof appOrigin === 'string' && appOrigin.trim()) ? appOrigin.trim() : getServerOrigin(req);
+    const hasToken = typeof req.query.token === 'string' && req.query.token.length > 0;
+    logLastFmOAuth(`callback_hit user=${userId || 'missing'} hasState=${callbackState ? 'yes' : 'no'} hasToken=${hasToken ? 'yes' : 'no'} returnBase=${returnBase}`);
 
-    if (!userId) return finishLastFmCallback(res, returnBase, false, 'missing_user');
-    if (!callbackState) return finishLastFmCallback(res, returnBase, false, 'missing_state');
+    if (!userId) {
+      logLastFmOAuth('callback_reject reason=missing_user');
+      return finishLastFmCallback(res, returnBase, false, 'missing_user');
+    }
+    if (!callbackState) {
+      logLastFmOAuth(`callback_reject user=${userId} reason=missing_state`);
+      return finishLastFmCallback(res, returnBase, false, 'missing_state');
+    }
 
     const { token, error } = req.query;
 
     if (error) {
+      logLastFmOAuth(`callback_reject user=${userId} reason=lastfm_error error=${error as string}`);
       return finishLastFmCallback(res, returnBase, false, error as string);
     }
 
     if (!token) {
+      logLastFmOAuth(`callback_reject user=${userId} reason=missing_token`);
       return finishLastFmCallback(res, returnBase, false, 'missing_token');
     }
 
     // Verify the callback belongs to the auth flow we initiated for this user.
     const pendingState = await getUserSetting(userId, 'lastFmPendingState');
     if (!pendingState || pendingState !== callbackState) {
+      logLastFmOAuth(`callback_reject user=${userId} reason=state_mismatch pending=${pendingState ? 'yes' : 'no'}`);
       return finishLastFmCallback(res, returnBase, false, 'state_mismatch');
     }
 
@@ -492,13 +518,21 @@ router.get('/providers/lastfm/callback', async (req, res) => {
     const sharedSecret = (await getSystemSetting('lastFmSharedSecret')) || '';
 
     if (!apiKey) {
+      logLastFmOAuth(`callback_reject user=${userId} reason=no_api_key`);
       return finishLastFmCallback(res, returnBase, false, 'no_api_key');
     }
 
     // Exchange token for session key
-    const sessionRes = await lfmFetch(userId, 'auth.getSession', { token: token as string }, { apiKey, sharedSecret, sessionKey: '' });
+    let sessionRes: any;
+    try {
+      sessionRes = await lfmFetch(userId, 'auth.getSession', { token: token as string }, { apiKey, sharedSecret, sessionKey: '' });
+    } catch (err: any) {
+      logLastFmOAuth(`callback_reject user=${userId} reason=session_exchange_failed apiKey=${maskLastFmApiKey(apiKey)} error=${err.message || 'unknown'}`);
+      return finishLastFmCallback(res, returnBase, false, err.message || 'session_exchange_failed');
+    }
 
     if (!sessionRes.session?.key) {
+      logLastFmOAuth(`callback_reject user=${userId} reason=session_failed response=${JSON.stringify(sessionRes).slice(0, 300)}`);
       return finishLastFmCallback(res, returnBase, false, 'session_failed');
     }
 
@@ -508,12 +542,14 @@ router.get('/providers/lastfm/callback', async (req, res) => {
     await setUserSetting(userId, 'lastFmPendingState', '');
     await setUserSetting(userId, 'lastFmPendingToken', '');
 
+    logLastFmOAuth(`callback_success user=${userId} lastFmUser=${sessionRes.session.name || 'unknown'}`);
     finishLastFmCallback(res, returnBase, true);
   } catch (err: any) {
     console.error('[Last.fm] callback error:', err.message);
     const userId = req.query.cb_user as string;
     const appOrigin = userId ? (await getUserSetting(userId, 'lastFmAppOrigin')) as string | null : null;
     const returnBase = (appOrigin && typeof appOrigin === 'string' && appOrigin.trim()) ? appOrigin.trim() : getServerOrigin(req);
+    logLastFmOAuth(`callback_error user=${userId || 'missing'} error=${err.message || 'unknown'}`);
     finishLastFmCallback(res, returnBase, false, 'internal_error');
   }
 });

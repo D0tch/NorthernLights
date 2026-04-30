@@ -83,7 +83,17 @@ export async function lfmFetch(
     body: body.toString(),
   });
 
-  const json = await res.json();
+  const raw = await res.text();
+  let json: any;
+  try {
+    json = raw ? JSON.parse(raw) : {};
+  } catch {
+    throw new Error(`Last.fm HTTP ${res.status}: non-JSON response ${raw.slice(0, 120)}`);
+  }
+
+  if (!res.ok) {
+    throw new Error(`Last.fm HTTP ${res.status}: ${json.message || raw.slice(0, 120) || 'request failed'}`);
+  }
 
   if (json.error) {
     throw new Error(`Last.fm error ${json.error}: ${json.message}`);
