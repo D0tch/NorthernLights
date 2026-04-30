@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useToast } from '../../hooks/useToast';
 import { ConfirmModal } from '../ConfirmModal';
@@ -26,7 +26,6 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
     const setListenBrainzConnected = usePlayerStore(state => state.setListenBrainzConnected);
     const setListenBrainzUsername = usePlayerStore(state => state.setListenBrainzUsername);
     const setListenBrainzScrobbleEnabled = usePlayerStore(state => state.setListenBrainzScrobbleEnabled);
-    const loadSettings = usePlayerStore(state => state.loadSettings);
     
     const { addToast } = useToast();
     
@@ -38,60 +37,6 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
     const username = currentUser?.username || 'User';
 
     const showToast = (msg: string, type: 'success' | 'error' | 'info') => addToast(msg, type);
-
-    // Surface Last.fm OAuth callback status from the redirect back to the app.
-    // If we're running inside the OAuth popup, notify the opener tab via
-    // BroadcastChannel and close ourselves. Otherwise behave as before
-    // (user may have had popups blocked and fell back to same-tab redirect).
-    useEffect(() => {
-        const params = new URLSearchParams(window.location.search);
-        const connected = params.get('lfm_connected');
-        const error = params.get('lfm_error');
-        if (!connected && !error) return;
-
-        const inPopup = !!window.opener && window.opener !== window;
-        try {
-            const channel = new BroadcastChannel('oauth');
-            channel.postMessage({ provider: 'lastfm', ok: !!connected, error: error || null });
-            channel.close();
-        } catch {}
-
-        if (inPopup) {
-            try { window.close(); } catch {}
-            return;
-        }
-
-        if (connected) {
-            addToast('Last.fm connected successfully', 'success');
-            loadSettings();
-        } else if (error) {
-            addToast(`Last.fm authorization failed: ${error}`, 'error');
-        }
-        params.delete('lfm_connected');
-        params.delete('lfm_error');
-        const query = params.toString();
-        const cleanUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`;
-        window.history.replaceState({}, '', cleanUrl);
-    }, [addToast, loadSettings]);
-
-    // Listen for OAuth completion broadcast from the popup.
-    useEffect(() => {
-        let channel: BroadcastChannel | null = null;
-        try {
-            channel = new BroadcastChannel('oauth');
-            channel.onmessage = (e) => {
-                const msg = e.data;
-                if (!msg || msg.provider !== 'lastfm') return;
-                if (msg.ok) {
-                    addToast('Last.fm connected successfully', 'success');
-                    loadSettings();
-                } else {
-                    addToast(`Last.fm authorization failed: ${msg.error || 'unknown'}`, 'error');
-                }
-            };
-        } catch {}
-        return () => { try { channel?.close(); } catch {} };
-    }, [addToast, loadSettings]);
 
     return (
         <div className="settings-section">

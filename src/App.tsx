@@ -263,6 +263,79 @@ const App: React.FC = () => {
     window.history.replaceState({}, '', cleanUrl);
   }, [addToast]);
 
+  const lastFmOauthMessageAtRef = React.useRef(0);
+  const handleLastFmOAuthResult = React.useCallback((ok: boolean, error?: string | null) => {
+    const now = Date.now();
+    if (now - lastFmOauthMessageAtRef.current < 750) return;
+    lastFmOauthMessageAtRef.current = now;
+
+    if (ok) {
+      addToast('Last.fm connected successfully', 'success');
+      usePlayerStore.getState().loadSettings();
+    } else {
+      addToast(`Last.fm authorization failed: ${error || 'unknown'}`, 'error');
+    }
+  }, [addToast]);
+
+  // Surface Last.fm OAuth callback status from the redirect back to the app.
+  // The callback opens in a fresh app shell inside the popup, so this handler
+  // must live at App level rather than inside the settings account tab.
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const connected = params.get('lfm_connected');
+    const error = params.get('lfm_error');
+    if (!connected && !error) return;
+
+    const payload = { provider: 'lastfm', ok: !!connected, error: error || null };
+    const inPopup = !!window.opener && window.opener !== window;
+
+    if (inPopup) {
+      try {
+        const channel = new BroadcastChannel('oauth');
+        channel.postMessage(payload);
+        channel.close();
+      } catch {}
+
+      try {
+        window.opener.postMessage(payload, window.location.origin);
+      } catch {}
+
+      try { window.close(); } catch {}
+      return;
+    }
+
+    handleLastFmOAuthResult(payload.ok, payload.error);
+    params.delete('lfm_connected');
+    params.delete('lfm_error');
+    const query = params.toString();
+    const cleanUrl = `${window.location.pathname}${query ? `?${query}` : ''}${window.location.hash}`;
+    window.history.replaceState({}, '', cleanUrl);
+  }, [handleLastFmOAuthResult]);
+
+  // Listen for OAuth completion broadcasts from popup windows.
+  React.useEffect(() => {
+    let channel: BroadcastChannel | null = null;
+    const onOAuthMessage = (msg: any) => {
+      if (!msg || msg.provider !== 'lastfm') return;
+      handleLastFmOAuthResult(!!msg.ok, msg.error || null);
+    };
+    const onWindowMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      onOAuthMessage(event.data);
+    };
+
+    try {
+      channel = new BroadcastChannel('oauth');
+      channel.onmessage = (event) => onOAuthMessage(event.data);
+    } catch {}
+
+    window.addEventListener('message', onWindowMessage);
+    return () => {
+      try { channel?.close(); } catch {}
+      window.removeEventListener('message', onWindowMessage);
+    };
+  }, [handleLastFmOAuthResult]);
+
   const handleApplyPwaUpdate = React.useCallback(() => {
     if (playbackState === 'playing') {
       playbackManager.persistContinuitySnapshot();
