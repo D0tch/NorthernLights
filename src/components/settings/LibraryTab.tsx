@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useToast } from '../../hooks/useToast';
-import { Folder, Trash2, Download, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { Folder, Download, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
 import { PromptModal } from '../PromptModal';
 import { ConfirmModal } from '../ConfirmModal';
 
@@ -41,7 +41,7 @@ export const LibraryTab: React.FC = () => {
     const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, { bytes: number; total: number; status: string }>>({});
     const [isModelDownloading, setIsModelDownloading] = useState(false);
     const modelSseRef = useRef<EventSource | null>(null);
-    
+
     const [promptDialog, setPromptDialog] = useState<{ title: string; label?: string; placeholder?: string; onSubmit: (value: string) => void } | null>(null);
     const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel?: string; onConfirm: () => void } | null>(null);
     
@@ -326,10 +326,10 @@ export const LibraryTab: React.FC = () => {
                             const pct = Math.round((totalStats.analyzed / totalStats.totalTracks) * 100);
                             return (<div className="mt-2"><div className="flex justify-between text-xs text-[var(--color-text-secondary)] mb-1"><span>Library Coverage</span><span>{totalStats.analyzed} / {totalStats.totalTracks} tracks ({pct}%)</span></div><div className="w-full h-2 rounded-full bg-[var(--glass-border)] overflow-hidden"><div className="h-full rounded-full transition-[width,background-color] duration-500" style={{ width: `${pct}%`, backgroundColor: pct === 100 ? '#22c55e' : pct > 50 ? '#f59e0b' : '#ef4444' }} /></div></div>);
                         })()}
-                    </div>
+	                    </div>
 
-                    {/* ML Models */}
-                    <div className="mt-6 pt-4 border-t border-[var(--glass-border)]">
+	                    {/* ML Models */}
+	                    <div className="mt-6 pt-4 border-t border-[var(--glass-border)]">
                         <div className="flex justify-between items-center mb-3">
                             <div>
                                 <h4 className="text-lg font-semibold text-[var(--color-text-primary)]">ML Models</h4>

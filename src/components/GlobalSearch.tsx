@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../store';
 import { Search as SearchIcon, X, Play, MoreHorizontal, ArrowLeft } from 'lucide-react';
 import { TrackInfo } from '../utils/fileSystem';
+import { normalizeArtistIdentityKey } from '../utils/artistUtils';
 import { AlbumArt } from './AlbumArt';
 import { ArtistInitial } from './library/ArtistInitial';
 import { LoveButton } from './LoveButton';
@@ -327,10 +328,16 @@ export const GlobalSearch: React.FC = () => {
     const { matchedArtists, matchedAlbums, matchedTracks } = useMemo<SearchMatches>(() => {
         if (!q) return EMPTY_SEARCH_MATCHES;
 
+        // Canonical-key form of the query lets variants like "n'to" match "NTO".
+        const qKey = normalizeArtistIdentityKey(q);
+
         const nextArtists: { name: string; id: string }[] = [];
         for (const artist of artists as Array<{ name?: string; id: string }>) {
             const name = artist.name;
-            if (!name?.toLowerCase().includes(q)) continue;
+            if (!name) continue;
+            const lowerHit = name.toLowerCase().includes(q);
+            const keyHit = qKey ? normalizeArtistIdentityKey(name).includes(qKey) : false;
+            if (!lowerHit && !keyHit) continue;
             nextArtists.push({ name, id: artist.id });
             if (nextArtists.length >= 5) break;
         }
@@ -344,7 +351,13 @@ export const GlobalSearch: React.FC = () => {
             if (nextAlbums.length >= 5) break;
         }
 
-        const matchedArtistNames = new Set(nextArtists.map(artist => artist.name.toLowerCase()));
+        // Cross-reference tracks via canonical key so tracks still tagged with
+        // pre-merge variants (e.g. "N'to") match the canonical artist ("NTO").
+        const matchedArtistKeys = new Set(
+            nextArtists
+                .map(artist => normalizeArtistIdentityKey(artist.name))
+                .filter(Boolean)
+        );
         const tracksSet = new Set<string>();
         const nextTracks: TrackInfo[] = [];
 
@@ -356,13 +369,13 @@ export const GlobalSearch: React.FC = () => {
             const directMatch = title.toLowerCase().includes(q) || path.toLowerCase().includes(q);
             let artistMatch = false;
 
-            if (!directMatch && matchedArtistNames.size > 0) {
+            if (!directMatch && matchedArtistKeys.size > 0) {
                 const trackArtists = Array.isArray(track.artists)
                     ? track.artists
                     : typeof track.artists === 'string'
                         ? [track.artists]
                         : [];
-                artistMatch = trackArtists.some(artist => matchedArtistNames.has(artist.toLowerCase()));
+                artistMatch = trackArtists.some(artist => matchedArtistKeys.has(normalizeArtistIdentityKey(artist)));
             }
 
             if (!directMatch && !artistMatch) continue;

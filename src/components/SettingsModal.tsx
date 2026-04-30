@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { usePlayerStore } from '../store/index';
-import { Globe, User, Palette, Folder, Play, Cpu, LogOut, Search, X, Users, Database, Brain, Ticket } from 'lucide-react';
+import { Globe, User, Palette, Folder, Play, Cpu, LogOut, Search, X, Users, Database, Brain, Ticket, GitMerge } from 'lucide-react';
 
 interface SettingsModalProps {
     onClose: () => void;
@@ -17,6 +17,7 @@ const GenreMatrixTab = React.lazy(() => import('./settings/GenreMatrixTab').then
 const DatabaseTab = React.lazy(() => import('./settings/DatabaseTab').then(module => ({ default: module.DatabaseTab })));
 const MetadataTab = React.lazy(() => import('./settings/MetadataTab').then(module => ({ default: module.MetadataTab })));
 const LiveMusicTab = React.lazy(() => import('./settings/LiveMusicTab').then(module => ({ default: module.LiveMusicTab })));
+const ArtistEntitiesTab = React.lazy(() => import('./settings/ArtistEntitiesTab').then(module => ({ default: module.ArtistEntitiesTab })));
 const AdminDashboard = React.lazy(() => import('./settings/AdminDashboard').then(module => ({ default: module.AdminDashboard })));
 
 const SettingsTabFallback: React.FC = () => (
@@ -68,6 +69,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         { id: 'Appearance', label: 'Appearance', category: 'App Settings' },
         ...(isAdmin ? [
             { id: 'Library', label: 'Library', category: 'App Settings' },
+            { id: 'Artist Entities', label: 'Artist Entities', category: 'App Settings' },
             { id: 'Metadata', label: 'Metadata', category: 'App Settings' },
         ] : []),
         { id: 'Playback', label: 'Playback', category: 'App Settings' },
@@ -87,6 +89,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         // Also search within common setting labels for this tab
         if (tab.id === 'Appearance') return 'light dark theme'.includes(query);
         if (tab.id === 'Library') return 'folder path scan library stats analysis'.includes(query);
+        if (tab.id === 'Artist Entities') return 'artist duplicate merge canonical compound credit identity'.includes(query);
         if (tab.id === 'Metadata') return 'genius musicbrainz lastfm jambase provider album bio image api mapping keys concerts tour live'.includes(query);
         if (tab.id === 'Live Music') return 'concerts tour live tickets jambase events location subscribe artists'.includes(query);
         if (tab.id === 'Playback') return 'infinity discovery genre artist amnesia matrix llm playlist diversity blend tracks wander'.includes(query);
@@ -126,6 +129,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                                     tab.id === 'Live Music' ? Ticket :
                                     tab.id === 'Appearance' ? Palette :
                                     tab.id === 'Library' ? Folder :
+                                    tab.id === 'Artist Entities' ? GitMerge :
                                     tab.id === 'Metadata' ? Globe :
                                     tab.id === 'Playback' ? Play :
                                     tab.id === 'System' ? Cpu :
@@ -196,6 +200,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                                                             tab.id === 'Live Music' ? Ticket :
                                                             tab.id === 'Appearance' ? Palette :
                                                             tab.id === 'Library' ? Folder :
+                                    tab.id === 'Artist Entities' ? GitMerge :
                                                             tab.id === 'Metadata' ? Globe :
                                                             tab.id === 'Playback' ? Play :
                                                             tab.id === 'System' ? Cpu :
@@ -255,6 +260,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                                 {activeTab === 'Live Music' && <LiveMusicTab />}
                                 {activeTab === 'Appearance' && <AppearanceTab />}
                                 {isAdmin && activeTab === 'Library' && <LibraryTab />}
+                                {isAdmin && activeTab === 'Artist Entities' && <ArtistEntitiesTab />}
                                 {isAdmin && activeTab === 'Metadata' && <MetadataTab />}
                                 {activeTab === 'Playback' && <PlaybackTab />}
                                 
