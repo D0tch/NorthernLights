@@ -42,3 +42,12 @@ server/scratch/
 .agents/
 .claude/
 skills-lock.json
+
+# Claude Code config
+CLAUDE.md
+.codex
+
+# Project documentation (personal tracking)
+TASKS.md
+MEMORY.md
+AGENTS.md
