@@ -215,7 +215,10 @@ const App: React.FC = () => {
       d.currentFile
     );
     if (wasScanning && !d.isScanning && d.libraryChanged) {
-      usePlayerStore.getState().fetchLibraryFromServer();
+      (async () => {
+        await usePlayerStore.getState().fetchLibraryFromServer();
+        await usePlayerStore.getState().fetchPlaylistsFromServer();
+      })();
     }
   }, []);
 

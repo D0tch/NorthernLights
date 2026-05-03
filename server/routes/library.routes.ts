@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { ChildProcessPool } from '../workers/processPool';
 import * as mm from 'music-metadata';
-import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getExistingPaths, deleteTracksByIds, purgeOrphanedEntities, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting, normalizeArtistNames, getPrimaryArtistName, normalizeArtistIdentityKey } from '../database';
+import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getExistingPaths, deleteTracksByPaths, purgeOrphanedEntities, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting, normalizeArtistNames, getPrimaryArtistName, normalizeArtistIdentityKey } from '../database';
 import { genreMatrixService } from '../services/genreMatrix.service';
 import { loveTrack, unloveTrack } from '../services/lastfm.service';
 import { submitMbRecordingRating } from '../services/musicbrainz.service';
@@ -635,7 +635,7 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
   // Get all paths currently known for this directory
   const allExisting = await getExistingPaths(); // Set<base64-path>
 
-  const staleIds: string[] = [];
+  const stalePaths: string[] = [];
   for (const existingPath of allExisting) {
     // Only consider tracks that belong to this directory (byte-level prefix check)
     const fileBuf = Buffer.from(existingPath, 'base64');
@@ -646,14 +646,14 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
 
     // If this path is no longer on disk, mark for removal
     if (!diskPaths.has(existingPath)) {
-      staleIds.push(existingPath); // these are the base64 path values
+      stalePaths.push(existingPath);
     }
   }
 
   // Remove stale DB entries
-  if (staleIds.length > 0) {
-    console.log(`[Scanner] Removing ${staleIds.length} stale track(s) from ${dirPath}`);
-    await deleteTracksByIds(staleIds);
+  if (stalePaths.length > 0) {
+    console.log(`[Scanner] Removing ${stalePaths.length} stale track(s) from ${dirPath}`);
+    await deleteTracksByPaths(stalePaths);
     // Clean up any albums/artists/genres that now have zero tracks
     const purged = await purgeOrphanedEntities();
     if (purged.albums > 0 || purged.artists > 0 || purged.genres > 0) {
@@ -664,9 +664,9 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
   // Determine truly new files (not already in DB)
   const newFileBufs = fileBufs.filter(b => !allExisting.has(b.toString('base64')));
 
-  if (newFileBufs.length === 0 && staleIds.length === 0) {
+  if (newFileBufs.length === 0 && stalePaths.length === 0) {
     console.log(`[Scanner] No changes detected in ${dirPath}`);
-    return { removed: staleIds.length, added: 0 };
+    return { removed: stalePaths.length, added: 0 };
   }
 
   if (newFileBufs.length > 0) {
@@ -695,7 +695,7 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
   }
 
   // Trigger Genre Matrix regeneration after any change
-  if (newFileBufs.length > 0 || staleIds.length > 0) {
+  if (newFileBufs.length > 0 || stalePaths.length > 0) {
     setImmediate(() => {
       genreMatrixService.runDiffAndGenerate()
         .catch(e => console.error('[Genre Matrix] Post-scan categorization failed:', e));
@@ -703,8 +703,8 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
   }
 
   const totalDuration = ((Date.now() - totalStartTime) / 1000).toFixed(1);
-  console.log(`[Scanner] Sync walk complete for ${dirPath}: +${newFileBufs.length} added, -${staleIds.length} removed (Total: ${totalDuration}s)`);
-  return { removed: staleIds.length, added: newFileBufs.length };
+  console.log(`[Scanner] Sync walk complete for ${dirPath}: +${newFileBufs.length} added, -${stalePaths.length} removed (Total: ${totalDuration}s)`);
+  return { removed: stalePaths.length, added: newFileBufs.length };
 }
 
 // Trigger standalone analysis (no scan — analyzes tracks missing features)
