@@ -632,6 +632,62 @@ interface DaylistConcept {
   title: string;
   description: string;
   target_genres: string[];
+  banned_genres?: string[];
+  target_vector?: number[];
+}
+
+const DAYLIST_TITLE_WORDS = new Set([
+  'lazy', 'easy', 'warm', 'bright', 'quiet', 'mellow', 'dreamy', 'soft',
+  'focused', 'slow', 'sunny', 'cozy', 'gentle', 'calm', 'loose', 'late',
+]);
+
+const DAYLIST_DEFAULT_MOODS: Record<string, { word: string; vector: number[]; banned: string[] }> = {
+  'late night': { word: 'Quiet', vector: [0.16, 0.22, 0.18, 0.42, 0.58, 0.72, 0.16, 0.18], banned: ['metal', 'punk', 'hardcore', 'techno'] },
+  'early morning': { word: 'Gentle', vector: [0.22, 0.36, 0.24, 0.45, 0.38, 0.66, 0.24, 0.28], banned: ['metal', 'hardcore', 'industrial'] },
+  morning: { word: 'Easy', vector: [0.34, 0.52, 0.36, 0.52, 0.24, 0.48, 0.42, 0.42], banned: ['doom metal', 'hardcore', 'noise'] },
+  midday: { word: 'Bright', vector: [0.58, 0.66, 0.54, 0.56, 0.18, 0.30, 0.62, 0.58], banned: ['ambient', 'drone', 'doom metal'] },
+  afternoon: { word: 'Lazy', vector: [0.32, 0.42, 0.30, 0.48, 0.28, 0.58, 0.38, 0.34], banned: ['metal', 'hardcore', 'drum and bass', 'techno'] },
+  evening: { word: 'Warm', vector: [0.42, 0.38, 0.38, 0.54, 0.26, 0.54, 0.48, 0.42], banned: ['hardcore', 'noise', 'industrial'] },
+  night: { word: 'Mellow', vector: [0.28, 0.30, 0.28, 0.48, 0.42, 0.62, 0.34, 0.30], banned: ['metal', 'hardcore', 'gabber', 'drum and bass'] },
+};
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
+function normalizeDaylistVector(vector: unknown, timeOfDay: string): number[] {
+  const fallback = DAYLIST_DEFAULT_MOODS[timeOfDay]?.vector || DAYLIST_DEFAULT_MOODS.afternoon.vector;
+  if (!Array.isArray(vector) || vector.length !== 8) return fallback;
+  const normalized = vector.map((value) => Number(value));
+  if (normalized.some((value) => !Number.isFinite(value))) return fallback;
+  return normalized.map(clamp01);
+}
+
+function normalizeDaylistGenres(genres: unknown, fallback: string[]): string[] {
+  const raw = Array.isArray(genres) ? genres : fallback;
+  return Array.from(new Set(raw.map((genre) => String(genre).trim().toLowerCase()).filter(Boolean))).slice(0, 5);
+}
+
+function titleCaseDaylist(value: string): string {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}`)
+    .join(' ');
+}
+
+function simplifyDaylistTitle(rawTitle: string | undefined, weekday: string, timeOfDay: string): string {
+  const weekdayLower = weekday.toLowerCase();
+  const timeLower = timeOfDay.toLowerCase();
+  const fallbackWord = DAYLIST_DEFAULT_MOODS[timeLower]?.word || 'Easy';
+  const normalized = String(rawTitle || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const words = normalized.split(/\s+/).filter(Boolean);
+  const moodWord = words.find((word) => DAYLIST_TITLE_WORDS.has(word)) || fallbackWord.toLowerCase();
+  return titleCaseDaylist(`${moodWord} ${weekdayLower} ${timeLower}`);
 }
 
 async function generateDaylistConcept(
@@ -649,15 +705,21 @@ async function generateDaylistConcept(
 Today is ${weekday} ${timeOfDay}. The listener's recent genres include: ${recentGenresStr}.
 
 Create a single playlist concept with:
-- a quirky, all-lowercase title combining 2-4 mood/genre/atmosphere words ending with the weekday and time-of-day, e.g. "indie folk petrichor tuesday afternoon", "warm cinematic ambient sunday morning", "punky neon disco friday night"
-- a one-sentence description
-- 3-5 target genres pulled from the listener's recent genre list when possible, otherwise loosely related
+- a SIMPLE title with exactly 3 words: one plain mood adjective + weekday + time-of-day. Good: "Lazy Wednesday Afternoon", "Warm Friday Evening", "Quiet Sunday Night". Bad: poetic, genre-heavy, surreal, or more than 3 words.
+- a short plain description
+- 3-5 target genres pulled from the listener's recent genre list when possible
+- 2-4 banned genres that clash with the exact mood
+- target_vector with the same 8D order used by Hub playlists: [energy, brightness, percussiveness, chromagram, instrumentalness, acousticness, danceability, tempo]
+
+Choose target_vector values precisely for the mood. For "lazy afternoon", prefer low-medium energy, softer percussiveness, higher acousticness, moderate/low danceability, slower tempo. Avoid generic 0.5 values.
 
 Output ONLY valid JSON, no prose:
 {
-  "title": "indie folk petrichor tuesday afternoon",
-  "description": "Soft strings and rain-soaked guitar for an unhurried Tuesday.",
-  "target_genres": ["indie folk", "ambient folk", "chamber pop"]
+  "title": "Lazy Wednesday Afternoon",
+  "description": "Unhurried songs for a soft Wednesday afternoon.",
+  "target_genres": ["indie folk", "ambient folk", "chamber pop"],
+  "banned_genres": ["metal", "hardcore", "techno"],
+  "target_vector": [0.32, 0.42, 0.30, 0.48, 0.28, 0.58, 0.38, 0.34]
 }
 `;
 
@@ -671,22 +733,16 @@ Output ONLY valid JSON, no prose:
     const parsed = extractJson(content);
     if (!parsed || !parsed.title || !Array.isArray(parsed.target_genres)) return null;
     return {
-      title: String(parsed.title).toLowerCase(),
+      title: simplifyDaylistTitle(String(parsed.title || ''), weekday, timeOfDay),
       description: String(parsed.description || ''),
-      target_genres: parsed.target_genres.map((g: any) => String(g).toLowerCase()),
+      target_genres: normalizeDaylistGenres(parsed.target_genres, recentGenres.slice(0, 4)),
+      banned_genres: normalizeDaylistGenres(parsed.banned_genres, DAYLIST_DEFAULT_MOODS[timeOfDay]?.banned || []),
+      target_vector: normalizeDaylistVector(parsed.target_vector, timeOfDay),
     };
   } catch (err) {
     console.error('[Daylist] LLM error', err);
     return null;
   }
-}
-
-// The title prompt asks for "<weekday> <time-of-day>" flavour, but freshness
-// uses created_at instead of title text so LLM formatting cannot cause loops.
-function daylistBucketSuffix(now: Date): string {
-  const weekday = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
-  const timeOfDay = describeTimeOfDay(now.getHours());
-  return `${weekday} ${timeOfDay}`;
 }
 
 function getDaylistBucketStartMs(now: Date): number {
@@ -734,37 +790,58 @@ async function computeDaylistFresh(userId: string, limit: number) {
   const recentGenres = genresRes.rows.map((r: any) => String(r.genre).toLowerCase());
 
   const concept = await generateDaylistConcept(weekday, timeOfDay, recentGenres);
-  const fallbackTitle = `${recentGenres.slice(0, 2).join(' ') || 'eclectic'} ${weekday} ${timeOfDay}`;
-  const title = concept?.title || fallbackTitle;
+  const fallbackTitle = simplifyDaylistTitle(undefined, weekday, timeOfDay);
+  const title = concept?.title ? simplifyDaylistTitle(concept.title, weekday, timeOfDay) : fallbackTitle;
   const description =
     concept?.description ||
     `A fresh mix for your ${weekday} ${timeOfDay}.`;
-  const targetGenres = concept?.target_genres?.length ? concept.target_genres : recentGenres.slice(0, 4);
+  const targetGenres = normalizeDaylistGenres(concept?.target_genres, recentGenres.slice(0, 4));
+  const bannedGenres = normalizeDaylistGenres(
+    concept?.banned_genres,
+    DAYLIST_DEFAULT_MOODS[timeOfDay]?.banned || []
+  );
+  const targetVector = normalizeDaylistVector(concept?.target_vector, timeOfDay);
+  const targetVectorStr = `[${targetVector.join(',')}]`;
 
-  // Pick tracks matching target genres, preferring the user's library tracks
-  // they haven't played to death today
-  let tracksRes;
-  if (targetGenres.length > 0) {
-    const placeholders = targetGenres.map((_, i) => `$${i + 2}`).join(',');
-    tracksRes = await db.query(
-      `
-      SELECT t.id
-      FROM tracks t
-      LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
-      WHERE (LOWER(COALESCE(t.genre, '')) IN (${placeholders})
-        OR LOWER(COALESCE(t.genres, '')) ~ ANY(ARRAY[${targetGenres.map((_, i) => `$${i + 2}`).join(',')}]))
-        ${christmasExclusion('t')}
-      ORDER BY RANDOM()
-      LIMIT $${targetGenres.length + 2}
-      `,
-      [userId, ...targetGenres, limit]
-    );
-  } else {
-    tracksRes = await db.query(
-      `SELECT t.id FROM tracks t WHERE TRUE ${christmasExclusion('t')} ORDER BY RANDOM() LIMIT $1`,
-      [limit]
-    );
-  }
+  const genreMatchSql = `
+    EXISTS (
+      SELECT 1
+      FROM unnest($3::text[]) AS target_genre(name)
+      WHERE LOWER(COALESCE(t.genre, '')) = target_genre.name
+         OR LOWER(COALESCE(t.genres, '')) LIKE '%' || target_genre.name || '%'
+    )
+  `;
+
+  const tracksRes = await db.query(
+    `
+    SELECT t.id
+    FROM tracks t
+    LEFT JOIN track_features tf ON tf.track_id = t.id
+    LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
+    WHERE (
+        tf.acoustic_vector_8d IS NOT NULL
+        OR CARDINALITY($3::text[]) = 0
+        OR ${genreMatchSql}
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM unnest($4::text[]) AS banned_genre(name)
+        WHERE LOWER(COALESCE(t.genre, '')) = banned_genre.name
+           OR LOWER(COALESCE(t.genres, '')) LIKE '%' || banned_genre.name || '%'
+      )
+      ${christmasExclusion('t')}
+    ORDER BY
+      CASE
+        WHEN tf.acoustic_vector_8d IS NULL THEN 1.15
+        ELSE tf.acoustic_vector_8d <-> $2::vector
+      END ASC,
+      CASE WHEN ${genreMatchSql} THEN 0 ELSE 1 END ASC,
+      COALESCE(ups.last_played_at, NOW() - INTERVAL '10 years') DESC,
+      RANDOM()
+    LIMIT $5
+    `,
+    [userId, targetVectorStr, targetGenres, bannedGenres, limit]
+  );
 
   let trackIds = tracksRes.rows.map((r: any) => r.id);
   if (trackIds.length === 0) {
