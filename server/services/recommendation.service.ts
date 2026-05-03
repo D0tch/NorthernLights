@@ -1,4 +1,4 @@
-import { initDB, createPlaylist, addTracksToPlaylist, getPlaylists, getPlaylistTracks, getUserRecentTracks, getUserTopTracks, deleteSystemPlaylistsForUser } from '../database';
+import { initDB, createPlaylist, addTracksToPlaylist, getPlaylists, getPlaylistTracks, getUserRecentTracks, getUserTopTracks, deleteSystemPlaylistsForUser, getSystemSetting } from '../database';
 import { genreMatrixService } from './genreMatrix.service';
 import { getLibraryProfile, GenreHealth } from './libraryProfile.service';
 import { compileConceptToLibrary } from './llmConceptCompiler.service';
@@ -112,6 +112,118 @@ function isPathBlockedByBannedGenre(path: string, bannedGenres: string[]): boole
 function getFullGenrePath(row: any): string {
   const leafGenre = (row.genre || '').toLowerCase();
   return row.genre_path || genreMatrixService.getGenrePath(leafGenre) || leafGenre;
+}
+
+function toSystemGenreSlug(genre: string): string {
+  const slug = normalizeLooseKey(genre)
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+  return slug || 'genre';
+}
+
+function formatSystemGenreName(genre: string): string {
+  return String(genre || 'Genre')
+    .trim()
+    .replace(/\s+/g, ' ')
+    .split(' ')
+    .map((part) => {
+      if (!part) return part;
+      if (part === '&') return part;
+      if (/^[A-Z0-9&-]+$/.test(part) && part.length <= 4) return part;
+      return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+    })
+    .join(' ');
+}
+
+function formatDecadeLabel(decade: number): string {
+  if (!Number.isFinite(decade) || decade < 1950) {
+    return `${decade}s`;
+  }
+  return `${String(decade % 100).padStart(2, '0')}'s`;
+}
+
+function getEngineHubGenerationIntervalMs(schedule: string | null | undefined): number | null {
+  const normalized = String(schedule || 'Daily').trim().toLowerCase();
+  const hourMs = 60 * 60 * 1000;
+
+  switch (normalized) {
+    case 'manual only':
+      return null;
+    case 'hourly':
+      return hourMs;
+    case 'every 2 hours':
+    case 'every 2 hrs':
+      return 2 * hourMs;
+    case 'every 4 hours':
+    case 'every 4 hrs':
+      return 4 * hourMs;
+    case 'weekly':
+      return 7 * 24 * hourMs;
+    case 'daily':
+    default:
+      return 24 * hourMs;
+  }
+}
+
+function hashSystemOrder(value: string): number {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index++) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
+function getEngineSystemPriority(collection: any): number {
+  const id = String(collection?.id || '');
+  if (id.startsWith('engine_upnext')) return 0;
+  if (id.startsWith('engine_vault')) return 1;
+  if (id.startsWith('engine_jumpback')) return 2;
+  return 10;
+}
+
+function orderEngineSystemHubs(collections: any[], seed: string | number): any[] {
+  return [...collections].sort((a, b) => {
+    const priorityDelta = getEngineSystemPriority(a) - getEngineSystemPriority(b);
+    if (priorityDelta !== 0) return priorityDelta;
+    if (getEngineSystemPriority(a) < 10) return String(a.id || '').localeCompare(String(b.id || ''));
+    return hashSystemOrder(`${seed}:${a.id || a.title}`) - hashSystemOrder(`${seed}:${b.id || b.title}`);
+  });
+}
+
+function isEngineSystemPlaylist(playlist: any): boolean {
+  return !!playlist?.isSystem && (playlist.generationSource || 'system') === 'system';
+}
+
+const defaultSystemPlaylistConfig = {
+  upNext: true,
+  vault: true,
+  jumpBackIn: true,
+  genreHeavyRotation: true,
+  genreRediscovery: true,
+  decadeMixes: true,
+  decadeGenreMixes: true,
+};
+
+function normalizeSystemPlaylistConfig(value: unknown): Record<keyof typeof defaultSystemPlaylistConfig, boolean> {
+  const parsed = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return Object.fromEntries(
+    Object.entries(defaultSystemPlaylistConfig).map(([key, defaultValue]) => [
+      key,
+      typeof parsed[key] === 'boolean' ? parsed[key] : defaultValue,
+    ])
+  ) as Record<keyof typeof defaultSystemPlaylistConfig, boolean>;
+}
+
+function isEnginePlaylistEnabled(id: string, config: Record<keyof typeof defaultSystemPlaylistConfig, boolean>): boolean {
+  if (id.startsWith('engine_upnext')) return config.upNext;
+  if (id.startsWith('engine_vault')) return config.vault;
+  if (id.startsWith('engine_jumpback')) return config.jumpBackIn;
+  if (id.startsWith('engine_genre-most')) return config.genreHeavyRotation;
+  if (id.startsWith('engine_genre-stale')) return config.genreRediscovery;
+  if (id.startsWith('engine_decade-genre')) return config.decadeGenreMixes;
+  if (id.startsWith('engine_decade')) return config.decadeMixes;
+  return true;
 }
 
 function normalizeTargetVector(vector: unknown): number[] | null {
@@ -1363,27 +1475,77 @@ export async function getHubCollections(
   }
 
   // --- ENGINE-DRIVEN CATEGORIES (per-user) ---
+  const systemPlaylistTrackLimit = 15;
+  const systemPlaylistMinTracks = 15;
+  const maxGenreSystemMixes = 10;
+  const maxDecadeSystemMixes = 6;
+  const maxDecadeGenreSystemMixes = 12;
+
+  const shouldRefreshEngineWithLlm =
+    llmConcepts.length > 0 && (settings.llmGenerationSource ?? 'hub') === 'hub';
+  const systemPlaylistConfig = normalizeSystemPlaylistConfig(await getSystemSetting('systemPlaylistConfig'));
+  const cachedEnginePlaylists = userId
+    ? existingPlaylists.filter((playlist: any) =>
+        isEngineSystemPlaylist(playlist) &&
+        isEnginePlaylistEnabled(String(playlist.id || ''), systemPlaylistConfig)
+      )
+    : [];
+  const cachedEngineCreatedAt = cachedEnginePlaylists
+    .map((playlist: any) => Number(playlist.createdAt || 0))
+    .filter((createdAt: number) => Number.isFinite(createdAt) && createdAt > 0);
+  const latestEngineCreatedAt = cachedEngineCreatedAt.length > 0 ? Math.max(...cachedEngineCreatedAt) : null;
+  const engineSchedule = (await getSystemSetting('hubGenerationSchedule')) || 'Daily';
+  const engineIntervalMs = getEngineHubGenerationIntervalMs(engineSchedule);
+  const cachedEngineHubs = (
+    await Promise.all(cachedEnginePlaylists.map(async (playlist: any) => {
+      const tracks = await getPlaylistTracks(playlist.id, userId);
+      if (tracks.length < systemPlaylistMinTracks) return null;
+      return {
+        id: playlist.id,
+        title: playlist.title,
+        description: playlist.description,
+        isLlmGenerated: false,
+        isSystem: true,
+        tracks,
+      };
+    }))
+  ).filter(Boolean) as any[];
+  const engineCacheIsFresh =
+    !shouldRefreshEngineWithLlm &&
+    cachedEngineHubs.length > 0 &&
+    cachedEngineHubs.length === cachedEnginePlaylists.length &&
+    latestEngineCreatedAt !== null &&
+    (engineIntervalMs === null || (Date.now() - latestEngineCreatedAt) < engineIntervalMs);
+
+  if (engineCacheIsFresh) {
+    hubs.push(...orderEngineSystemHubs(cachedEngineHubs, latestEngineCreatedAt));
+    return hubs;
+  }
+
   // Wipe stale system playlists for this user up-front so sections that fail to
   // generate don't leave outdated rows behind.
   if (userId) {
     await deleteSystemPlaylistsForUser(userId);
   }
 
+  const engineHubs: any[] = [];
+
   // Persist a system-owned playlist and return the descriptor for the hub list.
   const persistSystem = async (slug: string, title: string, description: string, tracks: any[]) => {
-    if (!userId || tracks.length === 0) {
-      return { id: `engine_${slug}`, title, description, isLlmGenerated: false, isSystem: true, tracks };
+    const selectedTracks = tracks.slice(0, systemPlaylistTrackLimit);
+    if (!userId || selectedTracks.length < systemPlaylistMinTracks) {
+      return null;
     }
     const id = `engine_${slug}_${userId}`;
     await createPlaylist(id, title, description, false, userId, true);
-    await addTracksToPlaylist(id, tracks.map((t: any) => t.id));
-    return { id, title, description, isLlmGenerated: false, isSystem: true, tracks };
+    await addTracksToPlaylist(id, selectedTracks.map((t: any) => t.id));
+    return { id, title, description, isLlmGenerated: false, isSystem: true, tracks: selectedTracks };
   };
 
   const constraints = await getDynamicConstraints();
 
   // 1. Up Next (Near user's recent history, genre-aware re-ranking)
-  if (userId) {
+  if (userId && systemPlaylistConfig.upNext) {
     const userRecentTracks = await getUserRecentTracks(userId, 5);
     if (userRecentTracks.length >= 3) {
       // Get MusiCNN and EffNet vectors for the user's recent tracks
@@ -1423,11 +1585,12 @@ export async function getHubCollections(
         if (upNextRes.rows.length > 0) {
           const ranked = reRankByHopCost(upNextRes.rows, referenceGenre, 30);
           const pool = ranked.sort(() => 0.5 - Math.random());
-          hubs.unshift(await persistSystem('upnext', 'Up Next', 'Based on what you just listened to.', pool.slice(0, 15)));
+          const playlist = await persistSystem('upnext', 'Up Next', 'Based on what you just listened to.', pool);
+          if (playlist) engineHubs.push(playlist);
         }
       }
     }
-  } else {
+  } else if (systemPlaylistConfig.upNext) {
     // Fallback: use global tracks table
     const recentTracksRes = await queryWithRetry(
       'SELECT t.id, t.genre, tf.acoustic_vector_8d, tf.embedding_vector FROM tracks t JOIN track_features tf ON t.id = tf.track_id WHERE t.last_played_at IS NOT NULL AND tf.acoustic_vector_8d IS NOT NULL ORDER BY t.last_played_at DESC LIMIT 5'
@@ -1461,7 +1624,8 @@ export async function getHubCollections(
        if (upNextRes.rows.length > 0) {
          const ranked = reRankByHopCost(upNextRes.rows, referenceGenre, 30);
          const pool = ranked.sort(() => 0.5 - Math.random());
-         hubs.unshift(await persistSystem('upnext', 'Up Next', 'Based on what you just listened to.', pool.slice(0, 15)));
+         const playlist = await persistSystem('upnext', 'Up Next', 'Based on what you just listened to.', pool);
+         if (playlist) engineHubs.push(playlist);
        }
     }
   }
@@ -1472,7 +1636,7 @@ export async function getHubCollections(
   const twoYearsMs = 2 * 365 * 24 * 60 * 60 * 1000;
 
   let jumpRes;
-  if (userId) {
+  if (userId && systemPlaylistConfig.jumpBackIn) {
     jumpRes = await queryWithRetry(`
       SELECT t.*, ups.play_count, ups.last_played_at,
         ups.play_count * GREATEST(0, 1 - POWER(
@@ -1488,7 +1652,7 @@ export async function getHubCollections(
       ORDER BY heatScore DESC
       LIMIT 30
     `, [userId]);
-  } else {
+  } else if (systemPlaylistConfig.jumpBackIn) {
     // Fallback: global (backward compat)
     jumpRes = await queryWithRetry(`
       SELECT *,
@@ -1505,13 +1669,15 @@ export async function getHubCollections(
     `);
   }
 
-  if (jumpRes.rows.length > 0) {
-     const shuffled = jumpRes.rows.sort(() => 0.5 - Math.random());
-     hubs.unshift(await persistSystem('jumpback', 'Jump Back In', 'Tracks you love that have been waiting.', shuffled.slice(0, 15)));
+  const jumpRows = jumpRes?.rows ?? [];
+  if (jumpRows.length > 0) {
+     const shuffled = jumpRows.sort(() => 0.5 - Math.random());
+     const playlist = await persistSystem('jumpback', 'Jump Back In', 'Tracks you love that have been waiting.', shuffled);
+     if (playlist) engineHubs.push(playlist);
   }
 
   // 3. The Vault (0 plays, acoustically near user's most-played tracks, genre-aware)
-  if (userId) {
+  if (userId && systemPlaylistConfig.vault) {
     const userTopTracks = await getUserTopTracks(userId, 10);
     if (userTopTracks.length > 0) {
       // Get MusiCNN and EffNet vectors for user's top tracks
@@ -1556,11 +1722,12 @@ export async function getHubCollections(
         if (vaultRes.rows.length > 0) {
           const ranked = reRankByHopCost(vaultRes.rows, referenceGenre, 30);
           const shuffled = ranked.sort(() => 0.5 - Math.random());
-          hubs.push(await persistSystem('vault', 'The Vault', 'Unplayed tracks that match your taste.', shuffled.slice(0, 15)));
+          const playlist = await persistSystem('vault', 'The Vault', 'Unplayed tracks that match your taste.', shuffled);
+          if (playlist) engineHubs.push(playlist);
         }
       }
     }
-  } else {
+  } else if (systemPlaylistConfig.vault) {
     // Fallback: global
     const topTracksRes = await queryWithRetry(
       'SELECT t.id, t.genre, tf.acoustic_vector_8d, tf.embedding_vector FROM tracks t JOIN track_features tf ON t.id = tf.track_id WHERE t.play_count > 0 AND tf.acoustic_vector_8d IS NOT NULL ORDER BY t.play_count DESC LIMIT 10'
@@ -1593,11 +1760,214 @@ export async function getHubCollections(
        if (vaultRes.rows.length > 0) {
          const ranked = reRankByHopCost(vaultRes.rows, referenceGenre, 30);
          const shuffled = ranked.sort(() => 0.5 - Math.random());
-         hubs.push(await persistSystem('vault', 'The Vault', 'Unplayed tracks that match your taste.', shuffled.slice(0, 15)));
+         const playlist = await persistSystem('vault', 'The Vault', 'Unplayed tracks that match your taste.', shuffled);
+         if (playlist) engineHubs.push(playlist);
        }
     }
   }
 
+  // 4. Genre system playlists. For the user's strongest genres, create one
+  // full familiar set and one rediscovery set whose tracks are untouched for 4+ weeks.
+  if (userId && (systemPlaylistConfig.genreHeavyRotation || systemPlaylistConfig.genreRediscovery)) {
+    const genreStatsRes = await queryWithRetry(`
+      SELECT
+        trim(t.genre) AS genre,
+        COUNT(*)::int AS track_count,
+        COALESCE(SUM(ups.play_count), 0)::int AS user_plays,
+        COUNT(*) FILTER (
+          WHERE ups.track_id IS NULL
+             OR ups.play_count = 0
+             OR ups.last_played_at IS NULL
+             OR ups.last_played_at < NOW() - INTERVAL '4 weeks'
+        )::int AS rediscovery_count
+      FROM tracks t
+      LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
+      WHERE t.genre IS NOT NULL AND trim(t.genre) <> ''
+      GROUP BY trim(t.genre)
+      HAVING COUNT(*) >= ${systemPlaylistMinTracks}
+      ORDER BY COALESCE(SUM(ups.play_count), 0) DESC, COUNT(*) DESC
+      LIMIT ${maxGenreSystemMixes}
+    `, [userId]);
+
+    const seenGenreSlugs = new Set<string>();
+    for (const row of genreStatsRes.rows) {
+      const rawGenre = String((row as any).genre || '').trim();
+      const genreSlug = toSystemGenreSlug(rawGenre);
+      if (!rawGenre || seenGenreSlugs.has(genreSlug)) continue;
+      seenGenreSlugs.add(genreSlug);
+
+      const genreName = formatSystemGenreName(rawGenre);
+      const mostPlayedRes = Number((row as any).user_plays || 0) > 0
+        ? await queryWithRetry(`
+            SELECT t.*, ups.play_count, ups.last_played_at AS user_last_played
+            FROM user_playback_stats ups
+            JOIN tracks t ON t.id = ups.track_id
+            WHERE ups.user_id = $1
+              AND ups.play_count > 0
+              AND lower(trim(t.genre)) = lower($2)
+            ORDER BY ups.play_count DESC, ups.last_played_at DESC NULLS LAST
+            LIMIT ${systemPlaylistTrackLimit}
+          `, [userId, rawGenre])
+        : { rows: [] };
+
+      if (systemPlaylistConfig.genreHeavyRotation && mostPlayedRes.rows.length >= systemPlaylistMinTracks) {
+        const playlist = await persistSystem(
+          `genre-most-${genreSlug}`,
+          `${genreName} Heavy Rotation`,
+          `Your most-played ${genreName} tracks.`,
+          mostPlayedRes.rows
+        );
+        if (playlist) engineHubs.push(playlist);
+      }
+
+      const rediscoveryRes = Number((row as any).rediscovery_count || 0) > 0
+        ? await queryWithRetry(`
+            SELECT t.*, COALESCE(ups.play_count, 0) AS play_count, ups.last_played_at AS user_last_played
+            FROM tracks t
+            LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
+            WHERE lower(trim(t.genre)) = lower($2)
+              AND (
+                ups.track_id IS NULL
+                OR ups.play_count = 0
+                OR ups.last_played_at IS NULL
+                OR ups.last_played_at < NOW() - INTERVAL '4 weeks'
+              )
+            ORDER BY
+              CASE WHEN ups.track_id IS NULL OR ups.play_count = 0 THEN 0 ELSE 1 END ASC,
+              ups.last_played_at ASC NULLS FIRST,
+              random()
+            LIMIT ${systemPlaylistTrackLimit}
+          `, [userId, rawGenre])
+        : { rows: [] };
+
+      if (systemPlaylistConfig.genreRediscovery && rediscoveryRes.rows.length >= systemPlaylistMinTracks) {
+        const playlist = await persistSystem(
+          `genre-stale-${genreSlug}`,
+          `${genreName} Rediscovery`,
+          `Forgotten ${genreName} worth replaying.`,
+          rediscoveryRes.rows
+        );
+        if (playlist) engineHubs.push(playlist);
+      }
+    }
+  }
+
+  // 5. Decade system playlists. Build broad decade mixes first, then expand
+  // into decade + genre cards only when the library can fill the card.
+  if (userId && (systemPlaylistConfig.decadeMixes || systemPlaylistConfig.decadeGenreMixes)) {
+    const decadeStatsRes = await queryWithRetry(`
+      SELECT
+        (floor(t.year / 10) * 10)::int AS decade,
+        COUNT(*)::int AS track_count,
+        COALESCE(SUM(ups.play_count), 0)::int AS user_plays
+      FROM tracks t
+      LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
+      WHERE t.year IS NOT NULL
+        AND t.year >= 1950
+        AND t.year <= EXTRACT(YEAR FROM NOW())::int
+      GROUP BY (floor(t.year / 10) * 10)::int
+      HAVING COUNT(*) >= ${systemPlaylistMinTracks}
+      ORDER BY COALESCE(SUM(ups.play_count), 0) DESC, COUNT(*) DESC, (floor(t.year / 10) * 10)::int DESC
+      LIMIT ${maxDecadeSystemMixes}
+    `, [userId]);
+
+    const decadeValues = decadeStatsRes.rows
+      .map((row: any) => Number(row.decade))
+      .filter((decade: number) => Number.isFinite(decade));
+
+    for (const decade of systemPlaylistConfig.decadeMixes ? decadeValues : []) {
+      const decadeLabel = formatDecadeLabel(decade);
+      const decadeRes = await queryWithRetry(`
+        SELECT t.*, COALESCE(ups.play_count, 0) AS play_count, ups.last_played_at AS user_last_played
+        FROM tracks t
+        LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
+        WHERE t.year >= $2 AND t.year < $3
+        ORDER BY COALESCE(ups.play_count, 0) DESC, ups.last_played_at DESC NULLS LAST, random()
+        LIMIT ${systemPlaylistTrackLimit}
+      `, [userId, decade, decade + 10]);
+
+      if (decadeRes.rows.length >= systemPlaylistMinTracks) {
+        const playlist = await persistSystem(
+          `decade-${decade}`,
+          `${decadeLabel} Mix`,
+          `A run through the ${decadeLabel}.`,
+          decadeRes.rows
+        );
+        if (playlist) engineHubs.push(playlist);
+      }
+    }
+
+    if (systemPlaylistConfig.decadeGenreMixes && decadeValues.length > 0) {
+      const decadeGenreRes = await queryWithRetry(`
+        SELECT
+          (floor(t.year / 10) * 10)::int AS decade,
+          trim(t.genre) AS genre,
+          COUNT(*)::int AS track_count,
+          COALESCE(SUM(ups.play_count), 0)::int AS user_plays
+        FROM tracks t
+        LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
+        WHERE t.year IS NOT NULL
+          AND t.year >= 1950
+          AND t.year <= EXTRACT(YEAR FROM NOW())::int
+          AND t.genre IS NOT NULL
+          AND trim(t.genre) <> ''
+        GROUP BY (floor(t.year / 10) * 10)::int, trim(t.genre)
+        HAVING COUNT(*) >= ${systemPlaylistMinTracks}
+        ORDER BY user_plays DESC, track_count DESC, decade DESC
+        LIMIT 40
+      `, [userId]);
+
+      const decadeGenreCandidates = decadeGenreRes.rows as any[];
+      const selectedDecadeGenreRows: any[] = [];
+      const selectedGenreSlugs = new Set<string>();
+      for (const row of decadeGenreCandidates) {
+        const genreSlug = toSystemGenreSlug(String((row as any).genre || ''));
+        if (selectedGenreSlugs.has(genreSlug)) continue;
+        selectedGenreSlugs.add(genreSlug);
+        selectedDecadeGenreRows.push(row);
+        if (selectedDecadeGenreRows.length >= maxDecadeGenreSystemMixes) break;
+      }
+      for (const row of decadeGenreCandidates) {
+        if (selectedDecadeGenreRows.length >= maxDecadeGenreSystemMixes) break;
+        if (!selectedDecadeGenreRows.includes(row)) selectedDecadeGenreRows.push(row);
+      }
+
+      const seenDecadeGenreSlugs = new Set<string>();
+      for (const row of selectedDecadeGenreRows) {
+        const decade = Number((row as any).decade);
+        const rawGenre = String((row as any).genre || '').trim();
+        const genreSlug = toSystemGenreSlug(rawGenre);
+        const slug = `${decade}-${genreSlug}`;
+        if (!Number.isFinite(decade) || !rawGenre || seenDecadeGenreSlugs.has(slug)) continue;
+        seenDecadeGenreSlugs.add(slug);
+
+        const decadeLabel = formatDecadeLabel(decade);
+        const genreName = formatSystemGenreName(rawGenre);
+        const decadeGenreTracksRes = await queryWithRetry(`
+          SELECT t.*, COALESCE(ups.play_count, 0) AS play_count, ups.last_played_at AS user_last_played
+          FROM tracks t
+          LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
+          WHERE t.year >= $2
+            AND t.year < $3
+            AND lower(trim(t.genre)) = lower($4)
+          ORDER BY COALESCE(ups.play_count, 0) DESC, ups.last_played_at DESC NULLS LAST, random()
+          LIMIT ${systemPlaylistTrackLimit}
+        `, [userId, decade, decade + 10, rawGenre]);
+
+        if (decadeGenreTracksRes.rows.length >= systemPlaylistMinTracks) {
+          const playlist = await persistSystem(
+            `decade-genre-${slug}`,
+            `${decadeLabel} ${genreName}`,
+            `${genreName} from the ${decadeLabel}.`,
+            decadeGenreTracksRes.rows
+          );
+          if (playlist) engineHubs.push(playlist);
+        }
+      }
+    }
+  }
+
+  hubs.push(...orderEngineSystemHubs(engineHubs, Date.now()));
   return hubs;
 
 }

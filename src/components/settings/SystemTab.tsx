@@ -3,20 +3,80 @@ import { usePlayerStore } from '../../store/index';
 import { useToast } from '../../hooks/useToast';
 import { ConfirmModal } from '../ConfirmModal';
 
+type SystemSubTab = 'processing' | 'hub' | 'service';
+
+const systemPlaylistOptions = [
+    {
+        key: 'upNext',
+        title: 'Up Next',
+        description: 'Near-neighbor playlist based on recent listening.',
+    },
+    {
+        key: 'vault',
+        title: 'The Vault',
+        description: 'Unplayed tracks that match the user taste profile.',
+    },
+    {
+        key: 'jumpBackIn',
+        title: 'Jump Back In',
+        description: 'Older favourites that have been waiting.',
+    },
+    {
+        key: 'genreHeavyRotation',
+        title: 'Genre Heavy Rotation',
+        description: 'Most-played mixes for strong library genres.',
+    },
+    {
+        key: 'genreRediscovery',
+        title: 'Genre Rediscovery',
+        description: 'Forgotten genre tracks worth replaying.',
+    },
+    {
+        key: 'decadeMixes',
+        title: 'Decade Mixes',
+        description: "Broad decade playlists like 90's Mix.",
+    },
+    {
+        key: 'decadeGenreMixes',
+        title: 'Decade Genre Mixes',
+        description: "Focused mixes like 90's Pop when the library supports it.",
+    },
+] as const;
+
+const defaultSystemPlaylistConfig = Object.fromEntries(
+    systemPlaylistOptions.map(option => [option.key, true])
+) as Record<typeof systemPlaylistOptions[number]['key'], boolean>;
+
 export const SystemTab: React.FC = () => {
     const audioAnalysisCpu = usePlayerStore(state => state.audioAnalysisCpu);
     const scannerConcurrency = usePlayerStore(state => state.scannerConcurrency);
     const hubGenerationSchedule = usePlayerStore(state => state.hubGenerationSchedule);
+    const systemPlaylistConfig = usePlayerStore(state => state.systemPlaylistConfig);
     const setSettings = usePlayerStore(state => state.setSettings);
     const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
-    
+
     const { addToast } = useToast();
+    const [activeSubTab, setActiveSubTab] = useState<SystemSubTab>('processing');
     const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel?: string; onConfirm: () => void } | null>(null);
+
+    const effectiveSystemPlaylistConfig = {
+        ...defaultSystemPlaylistConfig,
+        ...systemPlaylistConfig,
+    };
+
+    const setSystemPlaylistEnabled = (key: keyof typeof defaultSystemPlaylistConfig, enabled: boolean) => {
+        setSettings({
+            systemPlaylistConfig: {
+                ...effectiveSystemPlaylistConfig,
+                [key]: enabled,
+            },
+        });
+    };
 
     const handleManualHubRegen = async () => {
         setConfirmDialog({
             title: 'Reset Hub',
-            message: 'This will delete ALL existing LLM-generated playlists and regenerate fresh ones. User-created playlists will not be affected.',
+            message: 'This will delete transient Hub-generated playlists and refresh the Hub mix set. User-created playlists will not be affected.',
             confirmLabel: 'Reset Hub',
             onConfirm: async () => {
                 setConfirmDialog(null);
@@ -41,77 +101,141 @@ export const SystemTab: React.FC = () => {
             <div className="settings-section-header mb-4">
                 <h3 className="text-xl font-bold text-[var(--color-text-primary)]">System & Processing</h3>
             </div>
-            <div className="mb-6">
-                <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Audio Analysis CPU Usage</label>
-                <select 
-                    value={audioAnalysisCpu} 
-                    onChange={e => setSettings({ audioAnalysisCpu: e.target.value })}
-                    className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
+
+            <div className="mb-6 flex flex-wrap gap-2">
+                <button
+                    type="button"
+                    className={`btn-tab ${activeSubTab === 'processing' ? 'active' : ''}`}
+                    onClick={() => setActiveSubTab('processing')}
                 >
-                    <option value="Background">Background (1 process)</option>
-                    <option value="Balanced">Balanced (4 processes)</option>
-                    <option value="Performance">Performance (8 processes)</option>
-                    <option value="Intensive">Intensive (16 processes)</option>
-                    <option value="Maximum">Maximum (all CPU cores)</option>
-                </select>
+                    Processing
+                </button>
+                <button
+                    type="button"
+                    className={`btn-tab ${activeSubTab === 'hub' ? 'active' : ''}`}
+                    onClick={() => setActiveSubTab('hub')}
+                >
+                    Hub Playlists
+                </button>
+                <button
+                    type="button"
+                    className={`btn-tab ${activeSubTab === 'service' ? 'active' : ''}`}
+                    onClick={() => setActiveSubTab('service')}
+                >
+                    Service
+                </button>
             </div>
 
-            <div className="mb-6">
-                <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Scanner Concurrency</label>
-                <select 
-                    value={scannerConcurrency} 
-                    onChange={e => setSettings({ scannerConcurrency: e.target.value })}
-                    className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
-                >
-                    <option value="HDD">HDD (4 processes)</option>
-                    <option value="SSD">Standard SSD (16 processes)</option>
-                    <option value="NVMe">Premium NVMe (32 processes)</option>
-                </select>
-                <p className="text-xs text-[var(--color-text-muted)] mt-1.5">Controls how many files are scanned simultaneously for metadata. Higher values require faster disk I/O.</p>
-            </div>
-
-            <div className="mb-6">
-                <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Hub Generation Schedule</label>
-                <select 
-                    value={hubGenerationSchedule} 
-                    onChange={e => setSettings({ hubGenerationSchedule: e.target.value })}
-                    className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
-                >
-                    <option value="Manual Only">Manual Only</option>
-                    <option value="Hourly">Hourly</option>
-                    <option value="Every 2 Hours">Every 2 hours</option>
-                    <option value="Every 4 Hours">Every 4 hours</option>
-                    <option value="Daily">Daily</option>
-                </select>
-                <div className="mt-4">
-                    <p className="text-xs text-[var(--color-text-muted)] mb-2 max-w-sm leading-relaxed">
-                        Refreshes are checked when a user logs in or opens the Hub. Inactive users are skipped.
-                        <span className="text-[var(--color-error)] block mt-1 font-medium">Resetting deletes transient Hub-generated LLM playlists and regenerates fresh ones. Prompt-generated playlists are kept.</span>
-                    </p>
-                    <button 
-                        onClick={handleManualHubRegen}
-                        className="btn btn-danger"
-                    >
-                        <span className="text-lg leading-none">↺</span> Reset Hub
-                    </button>
-                </div>
-            </div>
-
-            {/* Aurora App Auto-Start Configuration */}
-            <div className="mt-8 pt-6 border-t border-[var(--glass-border)]">
-                <div className="flex items-center gap-2 mb-3">
-                    <h4 className="text-lg font-semibold text-[var(--color-text-primary)]">Aurora Auto-Start</h4>
-                    <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/20 dark:border-amber-500/30">systemd</span>
-                </div>
-                <p className="text-sm text-[var(--color-text-muted)] mb-4 leading-relaxed">
-                    Configure Aurora to automatically start when your computer starts. This requires a user-level systemd service.
-                </p>
-                
-                <div className="bg-[var(--color-surface)] rounded-xl border border-[var(--glass-border)] p-4">
-                    <div className="flex items-center gap-2 mb-3">
-                        <span className="text-sm font-medium text-[var(--color-text-primary)]">Service Status:</span>
-                        <span className="text-xs px-2 py-1 rounded bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/20 dark:border-amber-500/30">Not Configured</span>
+            {activeSubTab === 'processing' && (
+                <div className="space-y-6">
+                    <div>
+                        <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Audio Analysis CPU Usage</label>
+                        <select
+                            value={audioAnalysisCpu}
+                            onChange={e => setSettings({ audioAnalysisCpu: e.target.value })}
+                            className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
+                        >
+                            <option value="Background">Background (1 process)</option>
+                            <option value="Balanced">Balanced (4 processes)</option>
+                            <option value="Performance">Performance (8 processes)</option>
+                            <option value="Intensive">Intensive (16 processes)</option>
+                            <option value="Maximum">Maximum (all CPU cores)</option>
+                        </select>
                     </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Scanner Concurrency</label>
+                        <select
+                            value={scannerConcurrency}
+                            onChange={e => setSettings({ scannerConcurrency: e.target.value })}
+                            className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
+                        >
+                            <option value="HDD">HDD (4 processes)</option>
+                            <option value="SSD">Standard SSD (16 processes)</option>
+                            <option value="NVMe">Premium NVMe (32 processes)</option>
+                        </select>
+                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5">Controls how many files are scanned simultaneously for metadata. Higher values require faster disk I/O.</p>
+                    </div>
+                </div>
+            )}
+
+            {activeSubTab === 'hub' && (
+                <div className="space-y-6">
+                    <div>
+                        <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Hub Generation Schedule</label>
+                        <select
+                            value={hubGenerationSchedule}
+                            onChange={e => setSettings({ hubGenerationSchedule: e.target.value })}
+                            className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
+                        >
+                            <option value="Manual Only">Manual Only</option>
+                            <option value="Hourly">Hourly</option>
+                            <option value="Every 2 Hours">Every 2 hours</option>
+                            <option value="Every 4 Hours">Every 4 hours</option>
+                            <option value="Daily">Daily</option>
+                        </select>
+                        <div className="mt-4">
+                            <p className="text-xs text-[var(--color-text-muted)] mb-2 max-w-sm leading-relaxed">
+                                Refreshes are checked when a user logs in or opens the Hub. System playlist toggles apply on the next Hub load after settings are saved.
+                                <span className="text-[var(--color-error)] block mt-1 font-medium">Resetting deletes transient Hub-generated playlists and regenerates fresh ones. Prompt-generated playlists are kept.</span>
+                            </p>
+                            <button
+                                onClick={handleManualHubRegen}
+                                className="btn btn-danger"
+                            >
+                                <span className="text-lg leading-none">↺</span> Reset Hub
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="pt-5 border-t border-[var(--glass-border)]">
+                        <div className="mb-3">
+                            <h4 className="text-lg font-semibold text-[var(--color-text-primary)]">System Playlists</h4>
+                            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">Choose which engine-backed playlist families can appear on the Hub Discover rail.</p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                            {systemPlaylistOptions.map(option => {
+                                const enabled = effectiveSystemPlaylistConfig[option.key];
+                                return (
+                                    <div
+                                        key={option.key}
+                                        className="flex items-start justify-between gap-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-4"
+                                    >
+                                        <div className="min-w-0">
+                                            <p className="text-sm font-semibold text-[var(--color-text-primary)]">{option.title}</p>
+                                            <p className="mt-1 text-xs leading-snug text-[var(--color-text-muted)]">{option.description}</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            aria-pressed={enabled}
+                                            onClick={() => setSystemPlaylistEnabled(option.key, !enabled)}
+                                            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${enabled ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}
+                                        >
+                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {activeSubTab === 'service' && (
+                <div>
+                    <div className="flex items-center gap-2 mb-3">
+                        <h4 className="text-lg font-semibold text-[var(--color-text-primary)]">Aurora Auto-Start</h4>
+                        <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/20 dark:border-amber-500/30">systemd</span>
+                    </div>
+                    <p className="text-sm text-[var(--color-text-muted)] mb-4 leading-relaxed">
+                        Configure Aurora to automatically start when your computer starts. This requires a user-level systemd service.
+                    </p>
+
+                    <div className="bg-[var(--color-surface)] rounded-xl border border-[var(--glass-border)] p-4">
+                        <div className="flex items-center gap-2 mb-3">
+                            <span className="text-sm font-medium text-[var(--color-text-primary)]">Service Status:</span>
+                            <span className="text-xs px-2 py-1 rounded bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/20 dark:border-amber-500/30">Not Configured</span>
+                        </div>
                         <p className="mb-4 text-amber-700 dark:text-amber-200/80 italic">
                             Note: You must run <b>npm run build</b> once before starting the service.
                         </p>
@@ -127,17 +251,18 @@ export const SystemTab: React.FC = () => {
                             <p className="mb-1">ExecStart=/bin/bash -c 'cd "/var/home/andreas/VS Code/Music App" && npx tsx server/index.ts'</p>
                             <p className="mb-1">Restart=on-failure</p>
                             <p className="mb-1">RestartSec=10</p>
-                        <p className="mb-1"></p>
-                        <p className="mb-1">[Install]</p>
-                        <p className="mb-1">WantedBy=default.target</p>
-                        <p className="mb-1">EOF</p>
-                        <p className="mb-1"></p>
-                        <p className="mb-1">systemctl --user daemon-reload</p>
-                        <p className="mb-1">systemctl --user enable aurora.service</p>
-                        <p className="mb-1">systemctl --user start aurora.service</p>
+                            <p className="mb-1"></p>
+                            <p className="mb-1">[Install]</p>
+                            <p className="mb-1">WantedBy=default.target</p>
+                            <p className="mb-1">EOF</p>
+                            <p className="mb-1"></p>
+                            <p className="mb-1">systemctl --user daemon-reload</p>
+                            <p className="mb-1">systemctl --user enable aurora.service</p>
+                            <p className="mb-1">systemctl --user start aurora.service</p>
+                        </div>
                     </div>
                 </div>
-            </div>
+            )}
 
             {confirmDialog && (
                 <ConfirmModal

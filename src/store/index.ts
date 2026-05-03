@@ -65,6 +65,26 @@ const normalizeHubGenerationSchedule = (value: unknown): string => {
     : 'Daily';
 };
 
+const defaultSystemPlaylistConfig = {
+  upNext: true,
+  vault: true,
+  jumpBackIn: true,
+  genreHeavyRotation: true,
+  genreRediscovery: true,
+  decadeMixes: true,
+  decadeGenreMixes: true,
+};
+
+const normalizeSystemPlaylistConfig = (value: unknown): Record<string, boolean> => {
+  const parsed = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return Object.fromEntries(
+    Object.entries(defaultSystemPlaylistConfig).map(([key, defaultValue]) => [
+      key,
+      typeof parsed[key] === 'boolean' ? parsed[key] : defaultValue,
+    ])
+  );
+};
+
 const normalizeMbdbLastImport = (value: unknown): PlayerState['mbdbLastImported'] => {
   if (!value) return null;
 
@@ -260,6 +280,7 @@ export interface PlayerState {
   audioAnalysisCpu: string;
   scannerConcurrency: string;
   hubGenerationSchedule: string;
+  systemPlaylistConfig: Record<string, boolean>;
   llmBaseUrl: string;
   llmApiKey: string;
   llmModelName: string;
@@ -743,6 +764,7 @@ export const usePlayerStore = create<PlayerState>()(
         audioAnalysisCpu: 'Balanced',
         scannerConcurrency: 'SSD',
         hubGenerationSchedule: 'Daily',
+        systemPlaylistConfig: { ...defaultSystemPlaylistConfig },
         llmBaseUrl: '',
         llmApiKey: '',
         llmModelName: '',
@@ -895,6 +917,7 @@ export const usePlayerStore = create<PlayerState>()(
                 audioAnalysisCpu: data.audioAnalysisCpu || 'Balanced',
                 scannerConcurrency: data.scannerConcurrency || 'SSD',
                 hubGenerationSchedule: normalizeHubGenerationSchedule(data.hubGenerationSchedule),
+                systemPlaylistConfig: normalizeSystemPlaylistConfig(data.systemPlaylistConfig),
                 llmBaseUrl: data.llmBaseUrl || '',
                 llmApiKey: data.llmApiKey || '',
                 llmModelName: data.llmModelName || '',
@@ -975,6 +998,7 @@ export const usePlayerStore = create<PlayerState>()(
                 audioAnalysisCpu: state.audioAnalysisCpu,
                 scannerConcurrency: state.scannerConcurrency,
                 hubGenerationSchedule: state.hubGenerationSchedule,
+                systemPlaylistConfig: state.systemPlaylistConfig,
                 llmBaseUrl: state.llmBaseUrl,
                 llmApiKey: state.llmApiKey,
                 llmModelName: state.llmModelName,

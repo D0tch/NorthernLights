@@ -453,80 +453,6 @@ const HubCard: React.FC<HubCardProps> = ({ collection, onOpen, onPlay, onPinTogg
   );
 };
 
-interface DiscoverCardProps {
-  collection: HubCollection;
-  onOpen: () => void;
-  onPlay: () => void;
-  animate?: boolean;
-}
-
-const DiscoverCard: React.FC<DiscoverCardProps> = ({ collection, onOpen, onPlay, animate = false }) => {
-  const { artUrls } = useDominantColor(collection.tracks);
-  const covers = artUrls.slice(0, 4);
-  const hasCovers = covers.length > 0;
-
-  return (
-    <div
-      className={`relative flex flex-col sm:flex-row gap-3 p-4 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98] ${animate ? 'hub-card-animate' : ''}`}
-      onClick={onOpen}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          onOpen();
-        }
-      }}
-      aria-label={`Play ${collection.title || 'Untitled playlist'}`}
-    >
-      {/* Left: 2x2 Cover Grid */}
-      <div className="grid grid-cols-2 gap-0 shrink-0 w-full sm:w-40 rounded-lg overflow-hidden">
-        {hasCovers ? (
-          covers.map((url, i) => (
-            <img
-              key={i}
-              src={url}
-              alt=""
-              className="aspect-square object-cover"
-            />
-          ))
-        ) : (
-          <div className="col-span-2 aspect-video bg-[var(--color-surface-variant)] flex items-center justify-center">
-            <Disc3 className="w-8 h-8 text-[var(--color-text-muted)] opacity-40" />
-          </div>
-        )}
-      </div>
-
-      {/* Right: Content */}
-      <div className="flex flex-col justify-center min-w-0">
-        <h3 className="font-semibold text-base sm:text-lg text-[var(--color-text-primary)] line-clamp-1 group-hover:text-[var(--color-primary)] transition-colors">
-          {collection.title || 'Untitled Playlist'}
-        </h3>
-        {collection.description && (
-          <p className="text-sm text-[var(--color-text-secondary)] line-clamp-2 mt-1">
-            {collection.description}
-          </p>
-        )}
-        <p className="text-xs text-[var(--color-text-muted)] mt-2">
-          {collection.tracks.length} {collection.tracks.length === 1 ? 'track' : 'tracks'}
-        </p>
-      </div>
-
-      {/* Floating Play Button (hover reveal) */}
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onPlay();
-        }}
-        className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 group-focus-within:opacity-100 group-focus-within:translate-y-0 transition-ui duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95 z-20"
-        aria-label="Play"
-      >
-        <Play className="w-5 h-5 ml-0.5" fill="currentColor" />
-      </button>
-    </div>
-  );
-};
-
 interface ExploreCardProps {
   genre: string;
   trackCount: number;
@@ -751,7 +677,18 @@ const CapsuleCard: React.FC<CapsuleCardProps> = ({
 // matching Spotify's row in screenshot 2. The cover treatment varies by
 // kind, but the wrapper geometry stays consistent so the row reads as a
 // single grid.
-type UniqueCardKind = 'daylist' | 'on-repeat' | 'repeat-rewind' | 'artist-radio';
+type UniqueCardKind =
+  | 'daylist'
+  | 'on-repeat'
+  | 'repeat-rewind'
+  | 'artist-radio'
+  | 'up-next'
+  | 'system-jumpback'
+  | 'vault'
+  | 'genre-most-played'
+  | 'genre-rediscovery'
+  | 'decade'
+  | 'decade-genre';
 
 function getDaylistCover(): { gradient: string; Icon: React.FC<any> } {
   const h = new Date().getHours();
@@ -762,11 +699,24 @@ function getDaylistCover(): { gradient: string; Icon: React.FC<any> } {
   return { gradient: 'linear-gradient(135deg, #312e81, #1e3a8a, #0c4a6e)', Icon: Moon };          // night
 }
 
+function getSystemGenreCoverLabel(title: string): string {
+  return title
+    .replace(/\s+(Heavy Rotation|Rediscovery)$/i, '')
+    .trim();
+}
+
+function getSystemDecadeCoverLabel(title: string): string {
+  return title
+    .replace(/\s+Mix$/i, '')
+    .trim();
+}
+
 interface UniqueCardProps {
   kind: UniqueCardKind;
   title: string;
   subtitle?: string;
   imageUrl?: string | null;
+  tracks?: TrackInfo[];
   onClick: () => void;
   onPlay?: () => void;
   loading?: boolean;
@@ -779,6 +729,7 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
   title,
   subtitle,
   imageUrl,
+  tracks = [],
   onClick,
   onPlay,
   loading = false,
@@ -787,6 +738,54 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
 }) => {
   let coverContent: React.ReactNode;
   let badgeLabel: string;
+  const shouldUseMosaic =
+    kind === 'up-next' ||
+    kind === 'system-jumpback' ||
+    kind === 'vault' ||
+    kind === 'genre-most-played' ||
+    kind === 'genre-rediscovery' ||
+    kind === 'decade' ||
+    kind === 'decade-genre';
+  const { artUrls } = useDominantColor(shouldUseMosaic ? tracks : []);
+  const mosaicCovers = artUrls.slice(0, 4);
+  const mosaicGridClass =
+    mosaicCovers.length <= 1
+      ? 'grid-cols-1'
+      : mosaicCovers.length === 2
+        ? 'grid-cols-2 grid-rows-1'
+        : 'grid-cols-2 grid-rows-2';
+
+  const renderMosaicCover = (fallbackGradient: string, Icon: React.FC<any>, coverLabel?: string) => (
+    <>
+      {mosaicCovers.length > 0 ? (
+        <div
+          className={`absolute inset-0 grid bg-[var(--color-surface-variant)] ${mosaicGridClass}`}
+        >
+          {mosaicCovers.map((url, index) => (
+            <img
+              key={`${url}-${index}`}
+              src={url}
+              alt=""
+              className={`h-full w-full object-cover ${
+                mosaicCovers.length === 3 && index === 2 ? 'col-span-2' : ''
+              }`}
+            />
+          ))}
+        </div>
+      ) : (
+        <div className="absolute inset-0" style={{ background: fallbackGradient }} />
+      )}
+      <div className="absolute inset-0 bg-black/[0.16]" />
+      <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/35 to-transparent" />
+      {coverLabel ? (
+        <span className="absolute inset-x-3 bottom-3 line-clamp-2 text-left text-2xl font-black leading-none tracking-normal text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.6)]">
+          {coverLabel}
+        </span>
+      ) : (
+        <Icon className="absolute right-4 bottom-4 w-10 h-10 text-white/80 drop-shadow" strokeWidth={1.5} />
+      )}
+    </>
+  );
 
   if (kind === 'daylist') {
     const { gradient, Icon } = getDaylistCover();
@@ -813,7 +812,7 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
       </>
     );
     badgeLabel = 'Rewind';
-  } else {
+  } else if (kind === 'artist-radio') {
     coverContent = imageUrl ? (
       <img src={imageUrl} alt="" className="absolute inset-0 w-full h-full object-cover" />
     ) : (
@@ -823,6 +822,27 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
       </>
     );
     badgeLabel = 'Radio';
+  } else if (kind === 'up-next') {
+    coverContent = renderMosaicCover('linear-gradient(135deg, #1f2937, #334155)', Compass);
+    badgeLabel = 'Up Next';
+  } else if (kind === 'system-jumpback') {
+    coverContent = renderMosaicCover('linear-gradient(135deg, #2f2a3a, #4b3f5c)', ListMusic);
+    badgeLabel = 'Jump Back';
+  } else if (kind === 'vault') {
+    coverContent = renderMosaicCover('linear-gradient(135deg, #1f2937, #3f4752)', Disc3);
+    badgeLabel = 'Vault';
+  } else if (kind === 'genre-most-played') {
+    coverContent = renderMosaicCover('linear-gradient(135deg, #332b2b, #4a3c34)', Repeat, getSystemGenreCoverLabel(title));
+    badgeLabel = 'Most Played';
+  } else if (kind === 'genre-rediscovery') {
+    coverContent = renderMosaicCover('linear-gradient(135deg, #26363a, #3e4a3e)', Rewind, getSystemGenreCoverLabel(title));
+    badgeLabel = 'Rediscover';
+  } else if (kind === 'decade') {
+    coverContent = renderMosaicCover('linear-gradient(135deg, #2f343f, #4a4a46)', Disc3, getSystemDecadeCoverLabel(title));
+    badgeLabel = 'Decade';
+  } else {
+    coverContent = renderMosaicCover('linear-gradient(135deg, #2f343f, #4f463c)', Disc3, getSystemDecadeCoverLabel(title));
+    badgeLabel = 'Decade';
   }
 
   return (
@@ -877,6 +897,18 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
     </div>
   );
 };
+
+function getSystemUniqueCardKind(collection: HubCollection): UniqueCardKind {
+  const id = collection.id || '';
+  if (id.startsWith('engine_upnext')) return 'up-next';
+  if (id.startsWith('engine_jumpback')) return 'system-jumpback';
+  if (id.startsWith('engine_vault')) return 'vault';
+  if (id.startsWith('engine_genre-most')) return 'genre-most-played';
+  if (id.startsWith('engine_genre-stale')) return 'genre-rediscovery';
+  if (id.startsWith('engine_decade-genre')) return 'decade-genre';
+  if (id.startsWith('engine_decade')) return 'decade';
+  return 'up-next';
+}
 
 export const Hub: React.FC = () => {
   const { library, setPlaylist, getAuthHeader, togglePin, currentUser, genres: genreEntities, fetchPlaylistsFromServer, playlists } = usePlayerStore();
@@ -1447,20 +1479,37 @@ export const Hub: React.FC = () => {
 
       {systemCollections.length > 0 && (
         <section>
-          <h2 className="text-lg font-semibold text-[var(--color-text-secondary)] mb-4">
+          <h2 className="text-xl sm:text-2xl font-bold text-[var(--color-text-primary)] mb-1">
             Discover
           </h2>
-          <div className="grid grid-cols-2 gap-3">
+          <p className="text-sm text-[var(--color-text-secondary)] mb-5">
+            System mixes shaped by your library and listening history
+          </p>
+          <HorizontalScrollRail
+            ariaLabel="Discover"
+            viewportClassName="flex overflow-x-auto snap-x snap-mandatory gap-3 hub-scroll-mobile hub-scroll-unique pb-1 sm:gap-5 sm:pb-2"
+          >
             {systemCollections.map((collection) => (
-              <DiscoverCard
+              <AnimatedTileSlot
                 key={collection.id}
-                collection={collection}
-                onOpen={() => collection.id && navigate(`/playlists/${collection.id}`)}
-                onPlay={() => handlePlayCollection(collection.tracks)}
-                animate={shouldAnimateCards}
-              />
+                value={collection}
+                signature={getCollectionSignature(collection)}
+              >
+                {(displayCollection, phase) => (
+                  <UniqueCard
+                    kind={getSystemUniqueCardKind(displayCollection)}
+                    title={displayCollection.title || 'System Mix'}
+                    subtitle={displayCollection.description || undefined}
+                    tracks={displayCollection.tracks}
+                    onClick={() => displayCollection.id && navigate(`/playlists/${displayCollection.id}`)}
+                    onPlay={() => handlePlayCollection(displayCollection.tracks)}
+                    coverMotionClassName={getTileMotionClassName(phase)}
+                    textMotionClassName={getTileTextMotionClassName(phase)}
+                  />
+                )}
+              </AnimatedTileSlot>
             ))}
-          </div>
+          </HorizontalScrollRail>
         </section>
       )}
 
