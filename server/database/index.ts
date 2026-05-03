@@ -1096,8 +1096,7 @@ export async function removeTracksByDirectory(dirPath: string) {
   }
 }
 
-// Delete a specific set of tracks by their IDs (used by the sync-walk diff).
-// IDs are base64-encoded file paths, same as the primary key.
+// Delete a specific set of tracks by their IDs.
 export async function deleteTracksByIds(ids: string[]): Promise<void> {
   if (ids.length === 0) return;
   const db = await initDB();
@@ -1105,6 +1104,18 @@ export async function deleteTracksByIds(ids: string[]): Promise<void> {
     const chunk = ids.slice(i, i + 100);
     const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(',');
     await db.query(`DELETE FROM tracks WHERE id IN (${placeholders})`, chunk);
+  }
+}
+
+// Delete tracks by their stored base64 path values. Sync-walk diffs disk paths
+// against tracks.path, while tracks.id may differ on existing libraries.
+export async function deleteTracksByPaths(paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  const db = await initDB();
+  for (let i = 0; i < paths.length; i += 100) {
+    const chunk = paths.slice(i, i + 100);
+    const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(',');
+    await db.query(`DELETE FROM tracks WHERE path IN (${placeholders})`, chunk);
   }
 }
 
@@ -1241,6 +1252,7 @@ const UNKNOWN_GENRE = 'Unknown Genre';
 const FEATURE_ARTIST_BACKFILL_SETTING = 'artistCreditFeatureBackfillV1';
 const ARTIST_CANONICALIZATION_SETTING = 'artistCanonicalizationV1';
 const COMPOUND_CREDIT_SPLIT_SETTING = 'artistCompoundCreditSplitV1';
+const ALBUM_ARTIST_NAME_SYNC_SETTING = 'albumArtistNameSyncV1';
 
 function cleanArtistNamePart(value: string): string {
   return value
@@ -1686,6 +1698,33 @@ async function mergeArtistRows(db: Pool, canonical: ArtistCanonicalRow, duplicat
     await client.query('UPDATE tracks SET artist_id = $1 WHERE artist_id = $2', [canonical.id, duplicate.id]);
     await client.query('UPDATE concert_events SET artist_id = $1 WHERE artist_id = $2', [canonical.id, duplicate.id]);
 
+    // For amp-compound merges, the duplicate's name may also be stored as the
+    // owner string on `albums.artist_name`. The display layer falls back to a
+    // clean split when both halves are still known artists ("Tony Bennett &
+    // Lady Gaga" -> two chips), so only rewrite the album owner when the
+    // duplicate's halves don't both resolve to known artist rows. This keeps
+    // collaboration headers intact while cleaning up junk credits like
+    // "Sia & At home with the kids" once the second half is gone.
+    if (!sameCanonicalIdentity) {
+      const halves = (duplicate.name || '').split(/\s+[&+]\s+/).map(s => s.trim()).filter(Boolean);
+      let cleanSplit = halves.length >= 2;
+      if (cleanSplit) {
+        for (const h of halves) {
+          const key = normalizeArtistIdentityKey(h);
+          if (!key) { cleanSplit = false; break; }
+          if (key === duplicate.normalized_key) { cleanSplit = false; break; }
+          const exists = await client.query('SELECT 1 FROM artists WHERE normalized_key = $1 AND id <> $2 LIMIT 1', [key, duplicate.id]);
+          if (exists.rows.length === 0) { cleanSplit = false; break; }
+        }
+      }
+      if (!cleanSplit) {
+        await client.query(
+          'UPDATE albums SET artist_name = $1 WHERE LOWER(artist_name) = LOWER($2)',
+          [canonical.name, duplicate.name]
+        );
+      }
+    }
+
     await client.query(`
       INSERT INTO user_artist_subscriptions (user_id, artist_id, created_at, source)
       SELECT user_id, $1, created_at, source
@@ -1853,6 +1892,63 @@ async function migrateCompoundArtistCredits(db: Pool) {
   }
 }
 
+// Aligns `albums.artist_name` to the album's track-level resolved artist when
+// the stored owner is a compound credit ("Sia & At home with the kids") whose
+// halves can't both be resolved to existing artist rows — meaning the album
+// header would otherwise render a single non-clickable chunk. Albums whose
+// owner splits cleanly via the display parser (e.g. "Tony Bennett & Lady Gaga"
+// / "The Chainsmokers + Kygo") are intentionally left alone so the header
+// keeps both collaborators as clickable chips.
+async function syncAlbumArtistNames(db: Pool) {
+  if (await getSystemSetting(ALBUM_ARTIST_NAME_SYNC_SETTING) === true) return;
+
+  const knownKeysRes = await db.query(
+    `SELECT normalized_key FROM artists WHERE normalized_key IS NOT NULL`
+  );
+  const knownKeys = new Set<string>();
+  for (const row of knownKeysRes.rows) {
+    if (row.normalized_key) knownKeys.add(row.normalized_key);
+  }
+
+  const albumsRes = await db.query(`
+    SELECT id, artist_name FROM albums
+    WHERE artist_name ~ '\\s+[&+]\\s+'
+      AND artist_name NOT LIKE '%,%'
+  `);
+
+  let updated = 0;
+  for (const album of albumsRes.rows) {
+    const artistName: string = album.artist_name || '';
+    const halves = artistName.split(/\s+[&+]\s+/).map(s => s.trim()).filter(Boolean);
+    if (halves.length < 2) continue;
+
+    // Display layer would split cleanly into clickable chips — leave alone.
+    if (halves.every(h => knownKeys.has(normalizeArtistIdentityKey(h)))) continue;
+
+    // Otherwise, align to the album's track consensus when all tracks share
+    // the same artist_id. Skip multi-artist (compilation-style) albums.
+    const consensusRes = await db.query(`
+      SELECT a.id AS artist_id, a.name
+      FROM tracks t
+      JOIN artists a ON a.id = t.artist_id
+      WHERE t.album_id = $1
+      GROUP BY a.id, a.name
+    `, [album.id]);
+
+    if (consensusRes.rows.length !== 1) continue;
+    const newName: string = consensusRes.rows[0].name || '';
+    if (!newName || newName === artistName) continue;
+
+    await db.query('UPDATE albums SET artist_name = $1 WHERE id = $2', [newName, album.id]);
+    updated++;
+  }
+
+  await setSystemSetting(ALBUM_ARTIST_NAME_SYNC_SETTING, true);
+  if (updated > 0) {
+    console.log(`[DB Migration] Aligned ${updated} album artist_name field(s) with track consensus`);
+  }
+}
+
 export interface ArtistDuplicateCandidate {
   candidateKey: string;
   normalizedKey: string;
@@ -1941,18 +2037,20 @@ export async function getArtistDuplicateCandidates(): Promise<ArtistDuplicateCan
     candidatesByKey.set(candidate.candidateKey, candidate);
   }
 
-  // (2) Amp-compound credits like "Sia & At home with the kids" where the
-  // first half ("Sia") already exists as its own artist row. Genuine duos
-  // ("Nik & Jay", "Chase & Status") aren't surfaced because their first half
-  // doesn't exist as a separate artist row in the library.
+  // (2) Collaboration-compound credits like "Sia & At home with the kids" or
+  // "The Chainsmokers + Kygo" where the first half ("Sia" / "The Chainsmokers")
+  // already exists as its own artist row. Genuine duos ("Nik & Jay",
+  // "Chase & Status") aren't surfaced because their first half doesn't exist
+  // as a separate artist row in the library.
+  const COLLAB_SEPARATOR_RE = /\s+[&+]\s+/;
   const baseByKey = new Map<string, any>();
   for (const row of allArtists) {
     if (!baseByKey.has(row.normalized_key)) baseByKey.set(row.normalized_key, row);
   }
   for (const row of allArtists) {
     const name: string = row.name;
-    if (!name.includes(' & ') || name.includes(',')) continue;
-    const firstHalf = name.split(' & ', 1)[0].trim();
+    if (!COLLAB_SEPARATOR_RE.test(name) || name.includes(',')) continue;
+    const firstHalf = name.split(COLLAB_SEPARATOR_RE)[0].trim();
     if (!firstHalf) continue;
     const firstHalfKey = normalizeArtistIdentityKey(firstHalf);
     if (!firstHalfKey || firstHalfKey.length < 3) continue;
@@ -2068,6 +2166,7 @@ export async function migrateEntityIds() {
   const db = await initDB();
   await canonicalizeArtistEntities(db);
   await migrateCompoundArtistCredits(db);
+  await syncAlbumArtistNames(db);
 
   // One-time deduplication to fix case-sensitive album/genre duplicates.
   try {

@@ -189,14 +189,16 @@ export const ArtistEntitiesTab: React.FC = () => {
                     <div className="flex-1">
                         <p className="font-medium text-[var(--color-text-primary)] mb-1">Compound credits</p>
                         <p className="text-xs leading-relaxed">
-                            A credit string like <span className="font-mono">Tony Bennett &amp; Lady Gaga</span> or{' '}
+                            A credit string like <span className="font-mono">Tony Bennett &amp; Lady Gaga</span>,{' '}
+                            <span className="font-mono">The Chainsmokers + Kygo</span>, or{' '}
                             <span className="font-mono">Sia &amp; At home with the kids</span> got stored as a single
-                            artist row. The first half of the credit already exists as its own artist row in your library —
-                            that&rsquo;s the canonical individual to merge into. Tracks and attachments move across, but the
-                            credit row&rsquo;s MBID/image/etc. are <em>not</em> copied (they belong to the credit string,
-                            not the individual). Album collaborations like Cheek to Cheek will then show under primary
-                            releases on both collaborators&rsquo; pages, because ArtistDetail treats &ge;50% credited tracks
-                            as a co-primary album.
+                            artist row (we surface both <span className="font-mono">&amp;</span> and{' '}
+                            <span className="font-mono">+</span> separators). The first half of the credit already exists
+                            as its own artist row in your library — that&rsquo;s the canonical individual to merge into.
+                            Tracks and attachments move across, but the credit row&rsquo;s MBID/image/etc. are <em>not</em>
+                            copied (they belong to the credit string, not the individual). Album collaborations like
+                            Cheek to Cheek will then show under primary releases on both collaborators&rsquo; pages, because
+                            ArtistDetail treats &ge;50% credited tracks as a co-primary album.
                         </p>
                     </div>
                 </div>

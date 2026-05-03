@@ -17,7 +17,8 @@ import {
 } from '@dnd-kit/sortable';
 import { usePlayerStore } from '../store';
 import { ChevronLeft, ChevronRight, ListPlus, Loader2 } from 'lucide-react';
-import { parseArtists } from '../utils/artistUtils';
+import { parseArtistsForDisplay } from '../utils/artistUtils';
+import { useKnownArtistKeys } from '../hooks/useKnownArtistKeys';
 import { PlaylistItem } from './PlaylistItem';
 import { PromptModal } from './PromptModal';
 import { useToast } from '../hooks/useToast';
@@ -51,6 +52,12 @@ export const PlaylistSidebar: React.FC = () => {
     const entity = state.artists.find((a: any) => a.name?.toLowerCase() === artistName.toLowerCase());
     return entity ? `/library/artist/${entity.id}` : null;
   });
+
+  const knownArtistKeys = useKnownArtistKeys();
+  const parseArtists = useCallback(
+    (str: string) => parseArtistsForDisplay(str, knownArtistKeys),
+    [knownArtistKeys]
+  );
 
   const parentRef = useRef<HTMLDivElement>(null);
 

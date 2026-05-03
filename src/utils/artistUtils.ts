@@ -57,6 +57,44 @@ export function parseArtists(artistStr?: string): string[] {
   return result;
 }
 
+// Collaboration separators: " & " or " + ". Bare "and" / "with" / "vs"
+// are intentionally omitted — too many false positives in real names.
+const COLLAB_SEPARATOR = /\s+[&+]\s+/;
+
+/**
+ * Like `parseArtists`, but also splits a residual ` & ` or ` + ` join when
+ * every half resolves to a known artist row. Lets credits like
+ * "Tony Bennett & Lady Gaga" or "The Chainsmokers + Kygo" render as two
+ * individually-clickable chips after their compound row has been merged into
+ * one of the individuals, while leaving genuine groups like "Nik & Jay" or
+ * "Hall & Oates" whole (their joined form is the known artist).
+ */
+export function parseArtistsForDisplay(
+  artistStr: string | undefined,
+  knownArtistKeys: Set<string>
+): string[] {
+  const parts = parseArtists(artistStr);
+  if (knownArtistKeys.size === 0) return parts;
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const part of parts) {
+    let split = [part];
+    if (COLLAB_SEPARATOR.test(part)) {
+      const halves = part.split(COLLAB_SEPARATOR).map(cleanCreditPart).filter(Boolean);
+      if (halves.length > 1 && halves.every(h => knownArtistKeys.has(normalizeArtistIdentityKey(h)))) {
+        split = halves;
+      }
+    }
+    for (const name of split) {
+      const key = name.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(name);
+    }
+  }
+  return result;
+}
+
 /**
  * Check whether a given artist name appears in a track's artist field.
  * Matches via canonical identity key so apostrophe/diacritic variants

@@ -3,7 +3,8 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { AlbumArt } from '../AlbumArt';
-import { parseArtists } from '../../utils/artistUtils';
+import { parseArtistsForDisplay } from '../../utils/artistUtils';
+import { useKnownArtistKeys } from '../../hooks/useKnownArtistKeys';
 import { formatTime } from '../../utils/formatTime';
 import { BackButton } from './BackButton';
 import { useAlbumData } from '../../hooks/useAlbumData';
@@ -131,9 +132,16 @@ const AlbumTrackRow = memo(({
     onPlay,
     onContextMenu,
 }: AlbumTrackRowProps) => {
-    const artistNames = Array.isArray(track.artists) && track.artists.length > 0
-        ? track.artists
-        : parseArtists(track.artist || '');
+    const knownArtistKeys = useKnownArtistKeys();
+    const artistNames = useMemo(() => {
+        const raw = Array.isArray(track.artists) && track.artists.length > 0
+            ? track.artists
+            : parseArtistsForDisplay(track.artist || '', knownArtistKeys);
+        // Re-explode each entry so a single-element array like
+        // ["Tony Bennett & Lady Gaga"] becomes ["Tony Bennett", "Lady Gaga"]
+        // when both halves resolve to known artists.
+        return raw.flatMap(n => parseArtistsForDisplay(n, knownArtistKeys));
+    }, [track.artists, track.artist, knownArtistKeys]);
 
     return (
         <div
@@ -214,6 +222,7 @@ export const AlbumDetail: React.FC = () => {
     const artists = usePlayerStore(state => state.artists);
     const setPlaylist = usePlayerStore(state => state.setPlaylist);
     const openContextMenu = usePlayerStore(state => state.openContextMenu);
+    const knownArtistKeys = useKnownArtistKeys();
     const [linksMenuOpen, setLinksMenuOpen] = useState(false);
     const linksButtonRef = useRef<HTMLButtonElement>(null);
     const trackListRef = useRef<HTMLDivElement>(null);
@@ -394,7 +403,7 @@ export const AlbumDetail: React.FC = () => {
     const albumArtist = albumInfo?.artist_name || albumTracks[0]?.albumArtist || albumTracks[0]?.artist || 'Unknown Artist';
     const artUrl = albumTracks.find(t => t.artUrl)?.artUrl;
     const albumYear = albumTracks.find(t => t.year)?.year;
-    const headerArtists = parseArtists(albumArtist);
+    const headerArtists = parseArtistsForDisplay(albumArtist, knownArtistKeys);
 
     return (
         <div className="relative flex flex-col overflow-hidden p-4 md:p-8 lg:p-12 flex-1">

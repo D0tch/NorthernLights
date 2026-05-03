@@ -37,7 +37,8 @@ import { useDominantColor } from '../../hooks/useDominantColor';
 import { useToast } from '../../hooks/useToast';
 import { usePlayerStore } from '../../store';
 import { formatTime } from '../../utils/formatTime';
-import { parseArtists } from '../../utils/artistUtils';
+import { parseArtistsForDisplay } from '../../utils/artistUtils';
+import { useKnownArtistKeys } from '../../hooks/useKnownArtistKeys';
 import type { TrackInfo } from '../../utils/fileSystem';
 import { getSuggestedPlaylistTracks } from '../../utils/playlistSuggestions';
 
@@ -146,9 +147,13 @@ const PlaylistTrackRow = memo(({
   readOnly = false,
 }: PlaylistTrackRowProps) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id, disabled: readOnly });
-  const artistNames = Array.isArray(track.artists) && track.artists.length > 0
-    ? track.artists
-    : parseArtists(track.artist || track.albumArtist || '');
+  const knownArtistKeys = useKnownArtistKeys();
+  const artistNames = useMemo(() => {
+    const raw = Array.isArray(track.artists) && track.artists.length > 0
+      ? track.artists
+      : parseArtistsForDisplay(track.artist || track.albumArtist || '', knownArtistKeys);
+    return raw.flatMap(n => parseArtistsForDisplay(n, knownArtistKeys));
+  }, [track.artists, track.artist, track.albumArtist, knownArtistKeys]);
 
   return (
     <div
@@ -387,18 +392,20 @@ export const PlaylistDetail: React.FC = () => {
     [playlistTracks]
   );
 
+  const knownArtistKeys = useKnownArtistKeys();
   const artistCount = useMemo(() => {
     const seen = new Set<string>();
     for (const track of playlistTracks) {
-      const names = Array.isArray(track.artists) && track.artists.length > 0
+      const raw = Array.isArray(track.artists) && track.artists.length > 0
         ? track.artists
-        : parseArtists(track.artist || track.albumArtist || '');
+        : parseArtistsForDisplay(track.artist || track.albumArtist || '', knownArtistKeys);
+      const names = raw.flatMap(n => parseArtistsForDisplay(n, knownArtistKeys));
       for (const name of names) {
         if (name) seen.add(name.toLowerCase());
       }
     }
     return seen.size;
-  }, [playlistTracks]);
+  }, [playlistTracks, knownArtistKeys]);
 
   const suggestionEntries = useMemo(
     () => getSuggestedPlaylistTracks(library, deferredPlaylistTracks, 8),

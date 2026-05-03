@@ -2,7 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { TrackInfo } from '../../utils/fileSystem';
-import { normalizeArtistIdentityKey, trackMatchesArtist } from '../../utils/artistUtils';
+import { normalizeArtistIdentityKey, parseArtistsForDisplay, trackMatchesArtist } from '../../utils/artistUtils';
+import { useKnownArtistKeys } from '../../hooks/useKnownArtistKeys';
 import { useArtistData } from '../../hooks/useArtistData';
 import { useArtistTopTracks } from '../../hooks/useArtistTopTracks';
 import { AlbumArt } from '../AlbumArt';
@@ -297,23 +298,32 @@ export const ArtistDetail: React.FC = () => {
         return library.filter(t => t.artistId === artistId);
     }, [library, artistId, artistName]);
 
+    const knownArtistKeys = useKnownArtistKeys();
+
     // Tracks where this artist APPEARS but is NOT the album owner.
-    // Compares using canonical identity keys so post-merge variants
-    // (e.g. tracks tagged "N'to" still match the canonical "NTO" artist).
+    // Compares using canonical identity keys (so post-merge variants like
+    // "N'to" / "NTO" match) AND artist-aware credit splitting (so a joined
+    // entry like "Tony Bennett & Lady Gaga" in tracks.artists matches both
+    // halves when both are known artists in the library).
     const otherCreditedTracks = useMemo(() => {
         if (!artistName) return [];
         const artistKey = normalizeArtistIdentityKey(artistName);
         if (!artistKey) return [];
+        const splitMatches = (raw: string | undefined) =>
+            !!raw && parseArtistsForDisplay(raw, knownArtistKeys).some(a => normalizeArtistIdentityKey(a) === artistKey);
         return library.filter(t => {
             if (t.artistId === artistId) return false;
-            const albumOwnerKey = normalizeArtistIdentityKey(t.albumArtist || t.artist || '');
-            if (albumOwnerKey === artistKey) return false;
-            if (Array.isArray(t.artists)) {
-                return t.artists.some(a => normalizeArtistIdentityKey(a) === artistKey);
+            const ownerSrc = t.albumArtist || t.artist || '';
+            if (normalizeArtistIdentityKey(ownerSrc) === artistKey) return false;
+            if (Array.isArray(t.artists) && t.artists.length > 0) {
+                return t.artists.some(a => {
+                    if (normalizeArtistIdentityKey(a) === artistKey) return true;
+                    return splitMatches(a);
+                });
             }
-            return trackMatchesArtist(t.artist, artistName);
+            return trackMatchesArtist(t.artist, artistName) || splitMatches(t.artist);
         });
-    }, [library, artistId, artistName]);
+    }, [library, artistId, artistName, knownArtistKeys]);
 
     // Among the credited-but-not-owner tracks, identify whole albums where
     // this artist is a co-primary collaborator rather than a guest feature.
@@ -350,10 +360,12 @@ export const ArtistDetail: React.FC = () => {
             const allOnAlbum = tracksByAlbum.get(k) || [];
             if (allOnAlbum.length === 0) continue;
             const credited = allOnAlbum.filter(at => {
-                if (Array.isArray(at.artists)) {
-                    return at.artists.some(a => normalizeArtistIdentityKey(a) === artistKey);
+                const splitHit = (raw: string | undefined) =>
+                    !!raw && parseArtistsForDisplay(raw, knownArtistKeys).some(a => normalizeArtistIdentityKey(a) === artistKey);
+                if (Array.isArray(at.artists) && at.artists.length > 0) {
+                    return at.artists.some(a => normalizeArtistIdentityKey(a) === artistKey || splitHit(a));
                 }
-                return trackMatchesArtist(at.artist, artistName);
+                return trackMatchesArtist(at.artist, artistName) || splitHit(at.artist);
             }).length;
             if (credited / allOnAlbum.length >= COLLABORATION_TRACK_RATIO) {
                 collaborationKeys.add(k);
@@ -366,7 +378,7 @@ export const ArtistDetail: React.FC = () => {
             (collaborationKeys.has(albumKeyOf(t)) ? collab : feat).push(t);
         }
         return { collaborationTracks: collab, featuredTracks: feat };
-    }, [library, otherCreditedTracks, artistName]);
+    }, [library, otherCreditedTracks, artistName, knownArtistKeys]);
 
     // Aggregate file-embedded URLs from all primary tracks, deduplicated
     const fileLinks = useMemo(() => {
