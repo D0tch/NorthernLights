@@ -2078,4 +2078,9 @@ body {
     flex-basis: min(52vw, 200px);
     max-width: 200px;
   }
+
+  .hub-scroll-mobile.hub-scroll-live > * {
+    flex-basis: min(85vw, 380px);
+    max-width: 380px;
+  }
 }

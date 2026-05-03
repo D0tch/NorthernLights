@@ -271,7 +271,7 @@ export const LiveConcertsHubSection: React.FC = () => {
                     flex gap-3 sm:gap-4
                     overflow-x-auto hide-scrollbar
                     snap-x snap-mandatory
-                    -mx-4 px-4 sm:mx-0 sm:px-0
+                    hub-scroll-mobile hub-scroll-live
                     pb-2
                 "
             >
