@@ -2504,10 +2504,20 @@ export async function deleteSystemPlaylistsForUser(userId: string) {
   const db = await initDB();
   await db.query(`
     DELETE FROM playlist_tracks
-    WHERE playlist_id IN (SELECT id FROM playlists WHERE is_system = TRUE AND user_id = $1)
+    WHERE playlist_id IN (
+      SELECT id FROM playlists
+      WHERE is_system = TRUE
+        AND user_id = $1
+        AND COALESCE(generation_source, 'system') = 'system'
+    )
   `, [userId]);
   const res = await db.query(
-    'DELETE FROM playlists WHERE is_system = TRUE AND user_id = $1',
+    `
+      DELETE FROM playlists
+      WHERE is_system = TRUE
+        AND user_id = $1
+        AND COALESCE(generation_source, 'system') = 'system'
+    `,
     [userId]
   );
   return res.rowCount || 0;
