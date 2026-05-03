@@ -63,16 +63,21 @@
 
     cast-media-player {
       position: fixed;
-      inset: 0;
-      width: 100vw;
-      height: 100vh;
-      opacity: 0;
-      pointer-events: none;
+      left: -10000px !important;
+      top: -10000px !important;
+      width: 1px !important;
+      height: 1px !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+      z-index: -1 !important;
+      overflow: hidden !important;
+      clip-path: inset(50%) !important;
     }
 
     .shell {
-      position: relative;
-      z-index: 2;
+      position: fixed;
+      inset: 0;
+      z-index: 10;
       width: 100%;
       height: 100%;
       padding: 5vh 5vw;
@@ -683,6 +688,21 @@
         }
       }
 
+      function suppressDefaultCastUi() {
+        var defaultPlayer = document.querySelector('cast-media-player');
+        if (!defaultPlayer) return;
+        defaultPlayer.setAttribute('aria-hidden', 'true');
+        defaultPlayer.style.setProperty('left', '-10000px', 'important');
+        defaultPlayer.style.setProperty('top', '-10000px', 'important');
+        defaultPlayer.style.setProperty('width', '1px', 'important');
+        defaultPlayer.style.setProperty('height', '1px', 'important');
+        defaultPlayer.style.setProperty('opacity', '0', 'important');
+        defaultPlayer.style.setProperty('pointer-events', 'none', 'important');
+        defaultPlayer.style.setProperty('z-index', '-1', 'important');
+        defaultPlayer.style.setProperty('overflow', 'hidden', 'important');
+        defaultPlayer.style.setProperty('clip-path', 'inset(50%)', 'important');
+      }
+
       function withAuth(url) {
         if (!url) return url;
         try {
@@ -878,6 +898,27 @@
         renderQueue();
       }
 
+      function postReceiverHeartbeat(reason) {
+        if (!currentAuthToken) return;
+        try {
+          var mediaInfo = playerManager.getMediaInformation();
+          var title = getDisplayTitle(mediaInfo);
+          var currentTime = playerManager.getCurrentTimeSec ? playerManager.getCurrentTimeSec() : 0;
+          var duration = playerManager.getDurationSec ? playerManager.getDurationSec() : 0;
+          postServerLog(
+            'ok',
+            '[' + LOG_TAG + '] Receiver heartbeat: ' + reason,
+            'state=' + currentPlayerState +
+              ' title=' + title +
+              ' time=' + Math.floor(currentTime || 0) +
+              ' duration=' + Math.floor(duration || 0) +
+              ' overlay=active'
+          );
+        } catch (e) {
+          postServerLog('warn', '[' + LOG_TAG + '] Receiver heartbeat failed', safeStringify(e));
+        }
+      }
+
       var playbackConfig = new cast.framework.PlaybackConfig();
       playbackConfig.manifestRequestHandler = function(requestInfo) {
         applyAuth(requestInfo, 'Manifest');
@@ -901,12 +942,14 @@
       };
 
       context.addEventListener(cast.framework.system.EventType.READY, function() {
+        suppressDefaultCastUi();
         logAndPost('ok', LOG_TAG, 'Receiver started — forced codec: ' + FORCED_CAST_CODEC);
         syncUi(true);
       });
 
       context.addEventListener(cast.framework.system.EventType.ERROR, function(e) {
         setDebugVisible(true);
+        suppressDefaultCastUi();
         logAndPost('error', LOG_TAG, 'Receiver error: ' + safeStringify(e));
       });
 
@@ -949,6 +992,8 @@
 
           currentPlayerState = 'LOADING';
           lastRender.queueKey = '';
+          suppressDefaultCastUi();
+          postReceiverHeartbeat('load');
           syncUi(true);
           return loadRequestData;
         }
@@ -982,6 +1027,7 @@
         function(e) {
           currentPlayerState = 'IDLE';
           setDebugVisible(true);
+          suppressDefaultCastUi();
           logAndPost('error', LOG_TAG, 'Player error: ' + decodeError(e));
           syncUi(true);
         }
@@ -991,6 +1037,7 @@
         cast.framework.events.EventType.BUFFERING,
         function(e) {
           currentPlayerState = e.isBuffering ? 'BUFFERING' : currentPlayerState;
+          suppressDefaultCastUi();
           logAndPost('ok', LOG_TAG, 'Buffering: ' + e.isBuffering);
           syncUi(true);
         }
@@ -1004,15 +1051,25 @@
             logAndPost('ok', LOG_TAG, 'State: ' + e.mediaStatus.playerState +
               (e.mediaStatus.idleReason ? ' (' + e.mediaStatus.idleReason + ')' : ''));
             lastRender.queueKey = '';
+            suppressDefaultCastUi();
+            postReceiverHeartbeat('media-status');
             syncUi(true);
           }
         }
       );
 
       setInterval(function() {
+        suppressDefaultCastUi();
         syncUi(false);
       }, UI_PROGRESS_INTERVAL_MS);
 
+      setInterval(function() {
+        if (currentPlayerState === 'PLAYING' || currentPlayerState === 'BUFFERING') {
+          postReceiverHeartbeat('interval');
+        }
+      }, 60000);
+
+      suppressDefaultCastUi();
       logAndPost('ok', LOG_TAG, 'Starting receiver...');
       context.start({ playbackConfig: playbackConfig });
       logAndPost('ok', LOG_TAG, 'context.start() returned OK');

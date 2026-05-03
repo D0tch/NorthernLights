@@ -15,6 +15,7 @@ export type CastState = 'NO_DEVICES_AVAILABLE' | 'NOT_CONNECTED' | 'CONNECTING' 
 
 const SESSION_STORAGE_KEY = 'cast_session_id';
 const CUSTOM_RECEIVER_HLS_CODEC = 'aac';
+type CastLogLevel = 'ok' | 'warn' | 'error';
 
 // Maps audio format strings (from music-metadata and file extensions) to MIME types.
 // Keys must be lowercase. Covers: MPEG, FLAC, OGG, MP4/M4A, WAV/WAVE, WMA, AAC.
@@ -78,11 +79,16 @@ export class CastManager {
 
     // Tracks whether this manager initiated the cast session (vs joining an existing one)
     private autoCastInProgress = false;
+    private userSessionRequestPending = false;
     private rejoinSessionPending = false;
     private rejoinHydrationTimer: ReturnType<typeof setTimeout> | null = null;
     private rejoinHydrationAttempts = 0;
     private readonly maxRejoinHydrationAttempts = 12;
     private readonly rejoinHydrationDelayMs = 250;
+    private reconnectInProgress = false;
+    private lastStoredSessionRejoinAt = 0;
+    private lastUnmappedSessionLogAt = 0;
+    private readonly storedSessionRejoinThrottleMs = 5000;
 
     // Serializes concurrent loadMedia calls to prevent session_error on rapid clicks
     private currentLoadPromise: Promise<void> = Promise.resolve();
@@ -109,6 +115,8 @@ export class CastManager {
         if (typeof cast !== 'undefined' && cast.framework) {
             this.initializeCastApi();
         }
+
+        this.attachLifecycleReconcileHandlers();
     }
 
     public static getInstance(): CastManager {
@@ -161,6 +169,90 @@ export class CastManager {
         }
     }
 
+    private getCurrentSessionId(): string {
+        try {
+            return this.castContext?.getCurrentSession?.()?.getSessionId?.() || '';
+        } catch {
+            return '';
+        }
+    }
+
+    private getSafeDeviceName(): string {
+        try {
+            return this.getCastDeviceName() || 'unknown-device';
+        } catch {
+            return 'unknown-device';
+        }
+    }
+
+    private describeError(error: unknown): string {
+        if (!error) return '';
+        if (error instanceof Error) {
+            return `${error.name}: ${error.message}${error.stack ? `\n${error.stack}` : ''}`;
+        }
+        try {
+            return JSON.stringify(error);
+        } catch {
+            return String(error);
+        }
+    }
+
+    private sanitizeLogDetail(value: string): string {
+        return value
+            .replace(/([?&]token=)[^&\s]+/g, '$1[redacted]')
+            .replace(/Bearer\s+[A-Za-z0-9._-]+/g, 'Bearer [redacted]')
+            .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[jwt-redacted]');
+    }
+
+    private logCast(level: CastLogLevel, message: string, detail?: string) {
+        const authToken = usePlayerStore.getState().authToken;
+        if (!authToken) return;
+        const safeDetail = detail ? this.sanitizeLogDetail(detail) : '';
+        try {
+            fetch('/api/cast/log', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Authorization: `Bearer ${authToken}`,
+                },
+                body: JSON.stringify({
+                    source: 'cast-sender',
+                    session: this.getSafeDeviceName(),
+                    level,
+                    message,
+                    detail: [
+                        `state=${this.state}`,
+                        `sid=${this.getCurrentSessionId() || 'none'}`,
+                        safeDetail,
+                    ].filter(Boolean).join(' '),
+                }),
+                keepalive: true,
+            }).catch(() => {});
+        } catch {
+            // Diagnostics must never affect playback.
+        }
+    }
+
+    private attachLifecycleReconcileHandlers() {
+        const schedule = (reason: string) => this.scheduleSessionReconcile(reason);
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') schedule('visibility-visible');
+        });
+        window.addEventListener('pageshow', () => schedule('pageshow'));
+        window.addEventListener('focus', () => schedule('window-focus'));
+        window.addEventListener('online', () => schedule('network-online'));
+        document.addEventListener('resume', () => schedule('document-resume'));
+    }
+
+    private scheduleSessionReconcile(reason: string) {
+        [0, 750, 2500].forEach((delay) => {
+            window.setTimeout(() => {
+                void this.reconcileActiveSession(`${reason}+${delay}ms`);
+            }, delay);
+        });
+    }
+
     public hasStoredSession(): boolean {
         try {
             return !!window.localStorage.getItem(SESSION_STORAGE_KEY);
@@ -178,6 +270,7 @@ export class CastManager {
         this.rejoinSessionPending = true;
         this.rejoinHydrationAttempts = 0;
         this.clearRejoinHydrationTimer();
+        this.logCast('ok', `Begin Cast hydration: ${reason}`);
         void this.waitForRemoteSessionHydration(reason);
     }
 
@@ -188,6 +281,7 @@ export class CastManager {
         if (this.hasActiveRemoteMediaSession(mediaSession)) {
             this.rejoinSessionPending = false;
             this.clearRejoinHydrationTimer();
+            this.logCast('ok', `Remote media available during hydration: ${reason}`);
             await this.hydrateSenderFromRemoteSession(mediaSession, reason);
             return;
         }
@@ -195,9 +289,13 @@ export class CastManager {
         if (this.rejoinHydrationAttempts >= this.maxRejoinHydrationAttempts) {
             this.rejoinSessionPending = false;
             this.clearRejoinHydrationTimer();
-            console.warn('[Cast] Remote session hydration timed out; allowing local auto-cast fallback');
-            if (this.state === 'CONNECTED' && !this.autoCastInProgress) {
-                this.handleCastConnected();
+            const hasSession = !!this.castContext?.getCurrentSession?.();
+            this.logCast('warn', `Remote session hydration timed out: ${reason}`, `hasSession=${hasSession}`);
+            console.warn('[Cast] Remote session hydration timed out; not auto-casting stale local state');
+            if (!hasSession) {
+                localStorage.removeItem(SESSION_STORAGE_KEY);
+                this.state = this.castContext?.getCastState?.() || 'NOT_CONNECTED';
+                this.notifyStateChange();
             }
             return;
         }
@@ -206,6 +304,60 @@ export class CastManager {
         this.rejoinHydrationTimer = setTimeout(() => {
             void this.waitForRemoteSessionHydration(reason);
         }, this.rejoinHydrationDelayMs);
+    }
+
+    public async reconcileActiveSession(reason: string = 'manual'): Promise<boolean> {
+        if (!this.castContext || this.reconnectInProgress) return false;
+
+        this.reconnectInProgress = true;
+        try {
+            const sdkState = this.castContext.getCastState?.();
+            const session = this.castContext.getCurrentSession?.() || null;
+            const mediaSession = session?.getMediaSession?.() || null;
+
+            if (session) {
+                const sessionId = session.getSessionId?.();
+                if (sessionId) localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+                this.state = 'CONNECTED';
+                this.notifyStateChange();
+
+                if (this.hasActiveRemoteMediaSession(mediaSession)) {
+                    this.logCast('ok', `Reconciled active Cast session: ${reason}`);
+                    await this.hydrateSenderFromRemoteSession(mediaSession, reason);
+                    return true;
+                }
+
+                this.logCast('warn', `Cast session exists without active media: ${reason}`);
+                return false;
+            }
+
+            const storedId = localStorage.getItem(SESSION_STORAGE_KEY);
+            if (storedId) {
+                const now = Date.now();
+                if (now - this.lastStoredSessionRejoinAt >= this.storedSessionRejoinThrottleMs) {
+                    this.lastStoredSessionRejoinAt = now;
+                    this.logCast('ok', `Attempting stored Cast session rejoin: ${reason}`, `stored=${storedId}`);
+                    this.rejoinSessionPending = true;
+                    try {
+                        chrome.cast.requestSessionById(storedId);
+                        this.beginRejoinHydration(`stored-rejoin:${reason}`);
+                    } catch (error) {
+                        this.rejoinSessionPending = false;
+                        localStorage.removeItem(SESSION_STORAGE_KEY);
+                        this.logCast('warn', `Stored Cast session rejoin failed: ${reason}`, this.describeError(error));
+                    }
+                }
+                return false;
+            }
+
+            if (sdkState && sdkState !== this.state) {
+                this.state = sdkState;
+                this.notifyStateChange();
+            }
+            return false;
+        } finally {
+            this.reconnectInProgress = false;
+        }
     }
 
     private initializeCastApi() {
@@ -268,11 +420,15 @@ export class CastManager {
                     const prevState = this.state;
                     this.state = event.castState;
                     this.notifyStateChange();
+                    this.logCast('ok', `CAST_STATE_CHANGED: ${prevState} -> ${this.state}`);
 
                     // Fresh connection with no existing remote media: auto-cast local playback.
                     // Existing/resumed remote media must win over stale local sender state.
                     if (prevState !== 'CONNECTED' && this.state === 'CONNECTED' && !this.autoCastInProgress) {
-                        if (this.castContext.getCurrentSession?.() || this.rejoinSessionPending || this.hasStoredSession()) {
+                        if (this.userSessionRequestPending) {
+                            return;
+                        }
+                        if (this.rejoinSessionPending || this.hasStoredSession()) {
                             this.beginRejoinHydration('cast-connected');
                             return;
                         }
@@ -299,16 +455,22 @@ export class CastManager {
                                 if (sid) {
                                     localStorage.setItem(SESSION_STORAGE_KEY, sid);
                                     console.log('[Cast] Session started, stored ID:', sid);
+                                    this.logCast('ok', 'SESSION_STARTED', `sid=${sid}`);
                                 }
                             }
                             if (this.rejoinSessionPending) {
                                 this.beginRejoinHydration('session-started');
+                            } else if (this.userSessionRequestPending) {
+                                window.setTimeout(() => {
+                                    void this.startPlaybackForCurrentSession('session-started');
+                                }, 250);
                             }
                             break;
 
                         case cast.framework.SessionState.SESSION_RESUMED:
                             this.state = this.castContext.getCastState();
                             this.notifyStateChange();
+                            this.logCast('ok', 'SESSION_RESUMED');
                             // Re-store the session ID
                             const resumedSession = this.castContext.getCurrentSession();
                             if (resumedSession) {
@@ -319,8 +481,11 @@ export class CastManager {
                             break;
 
                         case cast.framework.SessionState.SESSION_ENDING:
+                            this.logCast('ok', 'SESSION_ENDING');
+                            break;
                         case cast.framework.SessionState.SESSION_ENDED:
                             console.log('[Cast] Session ended');
+                            this.logCast('ok', 'SESSION_ENDED');
                             localStorage.removeItem(SESSION_STORAGE_KEY);
                             this.rejoinSessionPending = false;
                             this.clearRejoinHydrationTimer();
@@ -337,6 +502,7 @@ export class CastManager {
                 () => {
                     if (!this.player.isConnected) {
                         console.log('[Cast] Remote player disconnected');
+                        this.logCast('warn', 'Remote player disconnected');
                         localStorage.removeItem(SESSION_STORAGE_KEY);
                         this.rejoinSessionPending = false;
                         this.clearRejoinHydrationTimer();
@@ -425,9 +591,11 @@ export class CastManager {
 
             // --- Try to rejoin an existing session on init ---
             this.tryRejoinSession();
+            this.scheduleSessionReconcile('cast-init');
 
         } catch (e) {
             console.error("Failed to initialize Google Cast API", e);
+            this.logCast('error', 'Failed to initialize Google Cast API', this.describeError(e));
             toast.error('Failed to initialize Google Cast. Please refresh and try again.');
         }
     }
@@ -624,7 +792,25 @@ export class CastManager {
         }
 
         console.log(`[Cast] Hydrated sender from remote session (${reason})`);
+        this.logCast('ok', `Hydrated sender from remote session: ${reason}`, `trackSynced=${trackSynced} playerState=${playerState || 'unknown'} time=${currentTime} duration=${duration}`);
         return trackSynced;
+    }
+
+    private async startPlaybackForCurrentSession(reason: string): Promise<void> {
+        if (this.autoCastInProgress) return;
+        if (this.castContext?.getCastState) {
+            this.state = this.castContext.getCastState();
+            this.notifyStateChange();
+        }
+        if (!this.castContext?.getCurrentSession?.()) return;
+
+        const mediaSession = this.getMediaSession();
+        if (this.hasActiveRemoteMediaSession(mediaSession)) {
+            await this.hydrateSenderFromRemoteSession(mediaSession, reason);
+            return;
+        }
+
+        await this.handleCastConnected();
     }
 
     private syncCurrentTrackFromSession(mediaSession: any | null = this.getMediaSession()): boolean {
@@ -636,11 +822,17 @@ export class CastManager {
         const sessionIndex = this.resolveTrackIndexFromSession(mediaSession, state.playlist);
         if (sessionIndex !== null) {
             if (sessionIndex !== state.currentIndex) {
+                this.logCast('ok', 'Syncing sender track index from Cast session', `from=${state.currentIndex} to=${sessionIndex}`);
                 this.onTrackChange?.(sessionIndex);
             }
             return true;
         }
 
+        const now = Date.now();
+        if (now - this.lastUnmappedSessionLogAt > 10000) {
+            this.lastUnmappedSessionLogAt = now;
+            this.logCast('warn', 'Could not map Cast session item to local playlist');
+        }
         return false;
     }
 
@@ -698,15 +890,8 @@ export class CastManager {
         if (!storedId) return;
 
         console.log('[Cast] Attempting to rejoin session:', storedId);
-        this.rejoinSessionPending = true;
-        try {
-            chrome.cast.requestSessionById(storedId);
-        } catch (e) {
-            console.warn('[Cast] Failed to rejoin session:', e);
-            this.rejoinSessionPending = false;
-            localStorage.removeItem(SESSION_STORAGE_KEY);
-            toast.info('Cast session could not be restored. Starting fresh.');
-        }
+        this.logCast('ok', 'Boot rejoin requested', `stored=${storedId}`);
+        void this.reconcileActiveSession('boot-stored-session');
     }
 
     /**
@@ -729,6 +914,7 @@ export class CastManager {
         const currentTime = playbackManager.getCurrentTime();
 
         console.log(`[Cast] Auto-casting: "${track.title}" by ${track.artist} (position: ${currentTime.toFixed(1)}s)`);
+        this.logCast('ok', 'Auto-casting current local queue', `index=${currentIndex} title=${track.title || 'Unknown Title'} position=${currentTime.toFixed(1)}`);
 
         this.autoCastInProgress = true;
         try {
@@ -763,6 +949,7 @@ export class CastManager {
             }
         } catch (e) {
             console.error('[Cast] Failed to auto-cast current track:', e);
+            this.logCast('error', 'Failed to auto-cast current track', this.describeError(e));
             toast.error('Connected to Cast device but failed to play media.');
         } finally {
             this.autoCastInProgress = false;
@@ -861,12 +1048,15 @@ export class CastManager {
         request.autoplay = true;
 
         try {
+            this.logCast('ok', 'Loading single media on Cast device', `title=${title} useHls=${useHls} url=${mediaUrl}`);
             await castSession.loadMedia(request);
             this.queueItemIdByEntryId.clear();
+            this.logCast('ok', 'Single media load succeeded', `title=${title}`);
         } catch (e: any) {
             const errorDetail = e?.code || e?.message || String(e);
             const errorDesc = e?.description || '';
             console.error(`[Cast] Failed to load media: ${errorDetail}${errorDesc ? ' — ' + errorDesc : ''}`, e);
+            this.logCast('error', 'Failed to load single media', `${errorDetail}${errorDesc ? ' - ' + errorDesc : ''} ${this.describeError(e)}`);
             if (!String(errorDetail).includes('cancel') && !String(errorDetail).includes('abort')) {
                 toast.error(`Failed to play "${title}" on Cast device.`);
             }
@@ -936,6 +1126,7 @@ export class CastManager {
                 }
             }).length;
             console.log(`[Cast] Queue load summary: items=${queueItems.length} startIndex=${normalizedStartIndex} approxPayloadChars=${approxPayloadChars}`);
+            this.logCast('ok', 'Queue load requested', `items=${queueItems.length} startIndex=${normalizedStartIndex} bytesApprox=${approxPayloadChars}`);
         } catch { /* ignore */ }
 
         // Serialize loadMedia calls to prevent concurrent loads from clashing
@@ -946,10 +1137,12 @@ export class CastManager {
 
         try {
             await castSession.loadMedia(request);
+            this.logCast('ok', 'Queue load succeeded', `items=${queueItems.length} startIndex=${normalizedStartIndex}`);
         } catch (e: any) {
             const errorDetail = e?.code || e?.message || String(e);
             const errorDesc = e?.description || '';
             console.error(`[Cast] Failed to load queue: ${errorDetail}${errorDesc ? ' — ' + errorDesc : ''}`, e);
+            this.logCast('error', 'Failed to load queue', `${errorDetail}${errorDesc ? ' - ' + errorDesc : ''} ${this.describeError(e)}`);
             if (!String(errorDetail).includes('cancel') && !String(errorDetail).includes('abort')) {
                 toast.error('Failed to load queue on Cast device.');
             }
@@ -1119,15 +1312,22 @@ export class CastManager {
 
     public async requestSession() {
         if (!this.castContext) return;
+        this.userSessionRequestPending = true;
         try {
+            this.logCast('ok', 'User requested Cast session');
             await this.castContext.requestSession();
+            this.logCast('ok', 'Cast session request resolved');
+            await this.startPlaybackForCurrentSession('request-session');
         } catch (e: any) {
             console.error("Failed to request cast session", e);
+            this.logCast('error', 'Cast session request failed', this.describeError(e));
             // User cancelled or an error occurred
             const msg = e?.message || String(e);
             if (!msg.includes('cancel') && !msg.includes('abort') && !msg.includes('cancelled')) {
                 toast.error('Failed to connect to Cast device. Please try again.');
             }
+        } finally {
+            this.userSessionRequestPending = false;
         }
     }
 
