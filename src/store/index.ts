@@ -1101,13 +1101,35 @@ export const usePlayerStore = create<PlayerState>()(
 
               const libraryWithUrls = data.tracks.map((t: TrackInfo) => hydrateServerTrack(t, token, quality));
 
-              set({
-                library: libraryWithUrls,
-                libraryFolders: data.directories,
-                artists: data.artists || [],
-                albums: data.albums || [],
-                genres: data.genres || [],
-                isLibraryLoading: false,
+              set((state: PlayerState): Partial<PlayerState> => {
+                const libraryIds = new Set(libraryWithUrls.map((track: TrackInfo) => track.id));
+                const queueChanged = state.playlist.some((track: TrackInfo) => !libraryIds.has(track.id));
+                let nextQueue = state.playlist;
+                let nextIndex = state.currentIndex;
+
+                if (queueChanged) {
+                  const currentTrack = state.currentIndex !== null ? state.playlist[state.currentIndex] : null;
+                  nextQueue = state.playlist.filter((track: TrackInfo) => libraryIds.has(track.id));
+
+                  if (currentTrack && !libraryIds.has(currentTrack.id)) {
+                    playbackManager.stop();
+                    nextIndex = null;
+                  } else if (state.currentIndex !== null && currentTrack) {
+                    const remappedIndex = nextQueue.findIndex((track: TrackInfo) => track.id === currentTrack.id);
+                    nextIndex = remappedIndex >= 0 ? remappedIndex : null;
+                  }
+                }
+
+                return {
+                  library: libraryWithUrls,
+                  libraryFolders: data.directories,
+                  artists: data.artists || [],
+                  albums: data.albums || [],
+                  genres: data.genres || [],
+                  playlist: nextQueue,
+                  currentIndex: nextIndex,
+                  isLibraryLoading: false,
+                };
               });
             } else {
               set({ isLibraryLoading: false });
