@@ -808,7 +808,7 @@ export const PlaylistDetail: React.FC = () => {
                   </div>
                   <div className="flex shrink-0 gap-2">
                     <button
-                      onClick={() => playNext(track)}
+                      onClick={() => playNext(track, { notify: true, undo: true })}
                       className="btn btn-ghost btn-sm hidden sm:inline-flex"
                     >
                       Play Next

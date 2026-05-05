@@ -16,7 +16,7 @@ import {
   verticalListSortingStrategy,
 } from '@dnd-kit/sortable';
 import { usePlayerStore } from '../store';
-import { ChevronLeft, ChevronRight, ListPlus, Loader2 } from 'lucide-react';
+import { ChevronLeft, ChevronRight, ListPlus, ListX, Loader2 } from 'lucide-react';
 import { parseArtistsForDisplay } from '../utils/artistUtils';
 import { useKnownArtistKeys } from '../hooks/useKnownArtistKeys';
 import { PlaylistItem } from './PlaylistItem';
@@ -36,6 +36,8 @@ export const PlaylistSidebar: React.FC = () => {
   const playlist = usePlayerStore(state => state.playlist);
   const removeFromPlaylist = usePlayerStore(state => state.removeFromPlaylist);
   const moveInPlaylist = usePlayerStore(state => state.moveInPlaylist);
+  const clearPlaylist = usePlayerStore(state => state.clearPlaylist);
+  const restoreQueueSnapshot = usePlayerStore(state => state.restoreQueueSnapshot);
   const playAtIndex = usePlayerStore(state => state.playAtIndex);
   const currentIndex = usePlayerStore(state => state.currentIndex);
   const openContextMenu = usePlayerStore(state => state.openContextMenu);
@@ -98,6 +100,32 @@ export const PlaylistSidebar: React.FC = () => {
     // Optionally handle any visual lock-ins or z-index updates during drag sequence manually
     // The PlaylistItem useSortable handles styling and opacity for us
   }, []);
+
+  const handleRemoveFromQueue = useCallback((index: number) => {
+    const removed = playlist[index];
+    if (!removed) return;
+
+    const snapshot = playlist.map((track) => ({ ...track }));
+    const snapshotIndex = currentIndex;
+    removeFromPlaylist(index);
+    addToast(`Removed "${removed.title || 'track'}" from queue.`, 'info', {
+      actionLabel: 'Undo',
+      onAction: () => restoreQueueSnapshot(snapshot, snapshotIndex),
+      duration: 6500,
+    });
+  }, [addToast, currentIndex, playlist, removeFromPlaylist, restoreQueueSnapshot]);
+
+  const handleClearQueue = useCallback(() => {
+    if (!playlist.length) return;
+    const snapshot = playlist.map((track) => ({ ...track }));
+    const snapshotIndex = currentIndex;
+    clearPlaylist();
+    addToast(`Cleared ${snapshot.length} ${snapshot.length === 1 ? 'track' : 'tracks'} from queue.`, 'info', {
+      actionLabel: 'Undo',
+      onAction: () => restoreQueueSnapshot(snapshot, snapshotIndex),
+      duration: 8000,
+    });
+  }, [addToast, clearPlaylist, currentIndex, playlist, restoreQueueSnapshot]);
 
   const handleSaveQueue = useCallback(async (title: string) => {
     const trackIds = playlist.map((track) => track.id).filter(Boolean);
@@ -166,6 +194,16 @@ export const PlaylistSidebar: React.FC = () => {
                     <ListPlus size={16} />
                   )}
                   <span className="hidden xl:inline">Save</span>
+                </button>
+                <button
+                  onClick={handleClearQueue}
+                  disabled={playlist.length === 0}
+                  className="btn btn-ghost btn-sm px-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Clear queue"
+                  aria-label="Clear queue"
+                >
+                  <ListX size={16} />
+                  <span className="hidden xl:inline">Clear</span>
                 </button>
                 <button 
                   onClick={() => setIsSidebarCollapsed(true)}
@@ -238,7 +276,7 @@ export const PlaylistSidebar: React.FC = () => {
                           isSidebarCollapsed={isSidebarCollapsed}
                           totalTracks={playlist.length}
                           onPlay={playAtIndex}
-                          onRemove={removeFromPlaylist}
+                          onRemove={handleRemoveFromQueue}
                           onMove={moveInPlaylist}
                           onContextMenu={openContextMenu}
                           getArtistLink={getArtistLink}

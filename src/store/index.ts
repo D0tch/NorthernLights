@@ -23,6 +23,9 @@ export interface ToastItem {
   id: number;
   message: string;
   type: ToastType;
+  duration?: number;
+  actionLabel?: string;
+  onAction?: () => void;
 }
 
 // Re-entrancy guard: incremented on each playAtIndex call to discard stale callbacks
@@ -160,6 +163,14 @@ export type PlaybackPrepareStatus = 'idle' | 'preparing' | 'ready' | 'failed';
 export type PlaybackRecoveryPath = 'none' | 'normal-hls-after-prepare-failure' | 'normal-hls-after-promotion-failure';
 export type PrebufferPolicy = 'off' | 'conservative' | 'aggressive';
 export type LlmVetoMode = 'hard' | 'adaptive';
+export type QueueMutationOptions = {
+  notify?: boolean;
+  undo?: boolean;
+  message?: string;
+};
+export type NextTrackOptions = {
+  notifyUpNext?: boolean;
+};
 
 export interface PlaybackTelemetry {
   lastUpdatedAt: number | null;
@@ -354,10 +365,12 @@ export interface PlayerState {
 
   // Play Queue Actions
   setPlaylist: (tracks: TrackInfo[], startIndex?: number) => Promise<void>;
-  addTrackToPlaylist: (track: TrackInfo) => void;
-  playNext: (track: TrackInfo) => void;
+  addTrackToPlaylist: (track: TrackInfo, options?: QueueMutationOptions) => void;
+  playNext: (track: TrackInfo, options?: QueueMutationOptions) => void;
   removeFromPlaylist: (index: number) => void;
   moveInPlaylist: (fromIndex: number, toIndex: number) => void;
+  clearPlaylist: () => void;
+  restoreQueueSnapshot: (playlist: TrackInfo[], currentIndex: number | null) => void;
 
   // Global Track Context Menu
   contextMenu: { track: TrackInfo; x: number; y: number; playlistId?: string; playlistTrackIndex?: number } | null;
@@ -369,7 +382,7 @@ export interface PlayerState {
   pause: () => void;
   resume: () => Promise<void>;
   stop: () => void;
-  nextTrack: () => Promise<void>;
+  nextTrack: (options?: NextTrackOptions) => Promise<void>;
   prevTrack: () => Promise<void>;
   setVolume: (v: number) => void;
   selectAudioOutput: () => Promise<void>;
@@ -413,7 +426,7 @@ export interface PlayerState {
 
   // Toast state
   toasts: ToastItem[];
-  addToast: (message: string, type: ToastType) => void;
+  addToast: (message: string, type: ToastType, options?: { actionLabel?: string; onAction?: () => void; duration?: number }) => void;
   removeToast: (id: number) => void;
 
   // PWA update state
@@ -509,7 +522,7 @@ export const usePlayerStore = create<PlayerState>()(
             // Stop at end of list
             const currentIdx = get().currentIndex!;
             if (currentIdx < get().playlist.length - 1 || get().shuffle) {
-              nextTrack();
+              void nextTrack({ notifyUpNext: true });
             } else if (get().isInfinityMode) {
               // Infinity Mode bounds reached! Fetch the next track natively
               fetchNextInfinityTrack(false);
@@ -518,7 +531,7 @@ export const usePlayerStore = create<PlayerState>()(
             }
           } else {
             // repeat === 'all'
-            nextTrack();
+            void nextTrack({ notifyUpNext: true });
           }
         },
         onVolumeChange: (volume) => {
@@ -874,6 +887,7 @@ export const usePlayerStore = create<PlayerState>()(
           set((state: PlayerState) => ({ ...state, ...settings }));
           if (settings.playbackDebugLogging !== undefined) {
             setPlaybackDebugLogging(settings.playbackDebugLogging);
+            castManager.setDiagnosticsVerbose(settings.playbackDebugLogging);
           }
           if (settings.prebufferPolicy && settings.prebufferPolicy !== previousPrebufferPolicy) {
             playbackManager.clearPreparedAudio();
@@ -1503,18 +1517,32 @@ export const usePlayerStore = create<PlayerState>()(
           }
         },
 
-        addTrackToPlaylist: (track: TrackInfo) => set((state: PlayerState) => {
+        addTrackToPlaylist: (track: TrackInfo, options?: QueueMutationOptions) => set((state: PlayerState) => {
+          const snapshot = options?.undo ? state.playlist.map((item) => ({ ...item })) : null;
+          const snapshotIndex = state.currentIndex;
           const queueTrack = cloneTrackForQueue(track);
           const nextPlaylist = [...state.playlist, queueTrack];
           if (castManager.isConnected()) {
             void castManager.appendToQueue(queueTrack);
           }
           prewarmNextFromState({ ...state, playlist: nextPlaylist });
-          queueMicrotask(() => persistContinuitySnapshot(true));
+          queueMicrotask(() => {
+            persistContinuitySnapshot(true);
+            if (options?.notify) {
+              const title = queueTrack.title || queueTrack.path.split(/[\\/]/).pop() || 'track';
+              get().addToast(options.message || `Added "${title}" to queue.`, 'success', options.undo && snapshot ? {
+                actionLabel: 'Undo',
+                onAction: () => get().restoreQueueSnapshot(snapshot, snapshotIndex),
+                duration: 6500,
+              } : undefined);
+            }
+          });
           return { playlist: nextPlaylist };
         }),
 
-        playNext: (track: TrackInfo) => set((state: PlayerState) => {
+        playNext: (track: TrackInfo, options?: QueueMutationOptions) => set((state: PlayerState) => {
+          const snapshot = options?.undo ? state.playlist.map((item) => ({ ...item })) : null;
+          const snapshotIndex = state.currentIndex;
           const newPlaylist = [...state.playlist];
           const insertAt = state.currentIndex !== null ? state.currentIndex + 1 : newPlaylist.length;
           const queueTrack = cloneTrackForQueue(track);
@@ -1523,7 +1551,17 @@ export const usePlayerStore = create<PlayerState>()(
             void castManager.insertNextInQueue(queueTrack);
           }
           prewarmNextFromState({ ...state, playlist: newPlaylist });
-          queueMicrotask(() => persistContinuitySnapshot(true));
+          queueMicrotask(() => {
+            persistContinuitySnapshot(true);
+            if (options?.notify) {
+              const title = queueTrack.title || queueTrack.path.split(/[\\/]/).pop() || 'track';
+              get().addToast(options.message || `Will play "${title}" next.`, 'success', options.undo && snapshot ? {
+                actionLabel: 'Undo',
+                onAction: () => get().restoreQueueSnapshot(snapshot, snapshotIndex),
+                duration: 6500,
+              } : undefined);
+            }
+          });
           return { playlist: newPlaylist };
         }),
 
@@ -1578,6 +1616,51 @@ export const usePlayerStore = create<PlayerState>()(
           queueMicrotask(() => persistContinuitySnapshot(true));
           return { playlist: newPlaylist, currentIndex: newIndex };
         }),
+
+        clearPlaylist: () => {
+          playbackManager.stop();
+          if (castManager.isConnected()) {
+            castManager.stop();
+          }
+          setPlaybackTimeState({ currentTime: 0, duration: 0 });
+          set({
+            playlist: [],
+            currentIndex: null,
+            playbackState: 'stopped',
+            isBuffering: false,
+          });
+          persistContinuitySnapshot(true);
+        },
+
+        restoreQueueSnapshot: (playlist: TrackInfo[], currentIndex: number | null) => {
+          const restored = ensureQueueEntryIds(playlist.map((track) => ({ ...track }))).tracks;
+          const boundedIndex = currentIndex !== null && restored[currentIndex] ? currentIndex : (restored.length ? 0 : null);
+          set({
+            playlist: restored,
+            currentIndex: boundedIndex,
+          });
+          prewarmNextFromState({ ...get(), playlist: restored, currentIndex: boundedIndex }, boundedIndex);
+          persistContinuitySnapshot(true);
+
+          if (castManager.isConnected() && boundedIndex !== null) {
+            const { repeat } = get();
+            void castManager.ensureQueuePlayback(
+              restored.map((item) => ({
+                queueEntryId: item.queueEntryId,
+                url: item.url || '',
+                rawUrl: item.rawUrl || '',
+                title: item.title || 'Unknown Title',
+                artist: item.artist || ((item.artists as string[])?.join(', ')) || 'Unknown Artist',
+                artUrl: item.artUrl,
+                album: item.album,
+                format: item.format,
+                duration: item.duration,
+              })),
+              boundedIndex,
+              repeat
+            );
+          }
+        },
 
         // Playback Actions
         playAtIndex: async (index: number) => {
@@ -1689,7 +1772,7 @@ export const usePlayerStore = create<PlayerState>()(
           persistContinuitySnapshot(true);
         },
 
-        nextTrack: async () => {
+        nextTrack: async (options?: NextTrackOptions) => {
           const { playlist, currentIndex, shuffle } = get();
           if (playlist.length === 0) return;
 
@@ -1703,6 +1786,14 @@ export const usePlayerStore = create<PlayerState>()(
             nextIndex = Math.floor(Math.random() * playlist.length);
           } else if (currentIndex !== null) {
             nextIndex = (currentIndex + 1) % playlist.length;
+          }
+
+          if (options?.notifyUpNext && playlist.length > 1) {
+            const upcoming = playlist[nextIndex];
+            if (upcoming) {
+              const title = upcoming.title || upcoming.path.split(/[\\/]/).pop() || 'track';
+              get().addToast(`Up next: ${title}`, 'info', { duration: 3200 });
+            }
           }
 
           await get().playAtIndex(nextIndex);
@@ -1851,14 +1942,18 @@ export const usePlayerStore = create<PlayerState>()(
         },
 
         toasts: [],
-        addToast: (message: string, type: ToastType) => {
+        addToast: (message: string, type: ToastType, options?: { actionLabel?: string; onAction?: () => void; duration?: number }) => {
           const id = Date.now();
           set((state: PlayerState) => ({
-            toasts: [...state.toasts, { id, message, type }]
+            toasts: [...state.toasts, {
+              id,
+              message,
+              type,
+              duration: options?.duration,
+              actionLabel: options?.actionLabel,
+              onAction: options?.onAction,
+            }]
           }));
-          setTimeout(() => {
-            get().removeToast(id);
-          }, 4000);
         },
         removeToast: (id: number) => {
           set((state: PlayerState) => ({
@@ -1916,6 +2011,7 @@ export const usePlayerStore = create<PlayerState>()(
       }),
       onRehydrateStorage: () => (state) => {
         setPlaybackDebugLogging(state?.playbackDebugLogging === true);
+        castManager.setDiagnosticsVerbose(state?.playbackDebugLogging === true);
       },
     }
   )

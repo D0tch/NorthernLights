@@ -155,7 +155,7 @@ export const TrackContextMenu: React.FC = () => {
         contextMenu, closeContextMenu,
         playlists, artists: artistEntities,
         addTracksToUserPlaylist, replaceTracksInUserPlaylist,
-        playNext, setPlaylist, toggleTrackLove,
+        addTrackToPlaylist, playNext, setPlaylist, toggleTrackLove,
     } = usePlayerStore();
 
     const navigate  = useNavigate();
@@ -224,7 +224,14 @@ export const TrackContextMenu: React.FC = () => {
     };
 
     const handlePlayNow  = () => { setPlaylist([track], 0); closeContextMenu(); };
-    const handlePlayNext = () => { playNext(track); done('Added to queue'); };
+    const handlePlayNext = () => {
+        playNext(track, { notify: true, undo: true });
+        done('Queued next');
+    };
+    const handleAddToQueue = () => {
+        addTrackToPlaylist(track, { notify: true, undo: true });
+        done('Added to queue');
+    };
     const handleToggleLove = async () => {
         try {
             await toggleTrackLove(track);
@@ -307,6 +314,7 @@ export const TrackContextMenu: React.FC = () => {
                     <ContextMenuList>
                         <ContextMenuButton icon={<Play size={15} />} label="Play Now"  onClick={handlePlayNow}  />
                         <ContextMenuButton icon={<Plus size={15} />} label="Play Next" onClick={handlePlayNext} />
+                        <ContextMenuButton icon={<ListPlus size={15} />} label="Add to Queue" onClick={handleAddToQueue} />
                         <ContextMenuButton
                             icon={<Heart size={15} fill={track.isLoved ? 'currentColor' : 'none'} />}
                             label={track.isLoved ? 'Remove Favorite' : 'Love Track'}
