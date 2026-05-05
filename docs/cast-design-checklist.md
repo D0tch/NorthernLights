@@ -99,8 +99,8 @@ Implementation note: `src/components/cast/CastButton.tsx` is the implemented pat
 
 | Item | Details |
 |------|---------|
-| Current risk | Desktop has controls, mobile has controls — no formal expanded Cast controller model; mobile Cast volume is weak |
-| Implementation | Create `CastExpandedController`; opens from mini player, desktop device chip, and Cast button connected state |
+| Current risk | Desktop, mobile mini, and mobile now-playing can drift if Cast controls are implemented as separate chrome |
+| Implementation | Consolidate Cast control into existing `PlayerControls`, `ProgressBar`, `MobileMiniPlayer`, and `MobileNowPlaying` surfaces |
 
 ### Display Elements
 
@@ -111,14 +111,12 @@ Implementation note: `src/components/cast/CastButton.tsx` is the implemented pat
 ### Behavior Requirements
 
 - Mobile Cast volume slider when casting
-- Mini controller persists while browsing the app
-- Opens expanded controller on tap
-- Navigation away from expanded controller never stops casting
+- Existing mini player reflects Cast device context while browsing the app
+- Existing desktop and mobile player controls route play/pause/seek/next/previous/repeat/volume through Cast while connected
+- Navigation away from Now Playing never stops casting
 
 ### Files to Modify
 
-- `src/components/cast/CastExpandedController.tsx`
-- `src/components/cast/CastMiniController.tsx`
 - `src/components/PlayerControls.tsx`
 - `src/components/MobileMiniPlayer.tsx`
 - `src/components/MobileNowPlaying.tsx`
@@ -126,10 +124,10 @@ Implementation note: `src/components/cast/CastButton.tsx` is the implemented pat
 ### Acceptance Criteria
 
 - [x] User can control play, pause, seek, next, previous, queue, repeat, and volume from sender while casting
-- [x] Mini controller is available outside expanded controller
-- [x] Expanded controller is easy to reopen
+- [x] Mobile mini player is the single compact playback surface while casting
+- [x] Desktop controls show connected device context without opening a duplicate Cast modal
 
-Implementation note: `src/components/cast/CastMiniController.tsx` persists while casting, `src/components/cast/CastExpandedController.tsx` provides full sender controls, and the desktop connected device chip opens the expanded controller.
+Implementation note: Cast sender controls are intentionally folded into the existing desktop and mobile player controls. Separate Cast mini players and Cast-only expanded controller modals were removed to avoid duplicate playback chrome.
 
 ---
 
@@ -155,7 +153,6 @@ Implementation note: `src/components/cast/CastMiniController.tsx` persists while
 
 - `src/store/index.ts`
 - `src/components/PlaylistSidebar.tsx`
-- `src/components/cast/CastExpandedController.tsx`
 - `src/utils/CastManager.ts`
 
 ### Acceptance Criteria
@@ -164,7 +161,7 @@ Implementation note: `src/components/cast/CastMiniController.tsx` persists while
 - [x] User gets visible confirmation and undo where appropriate
 - [x] Cast playback is not interrupted by queue edits
 
-Implementation note: queue mutation actions keep Cast queue API paths for append, Play Next, remove, and reorder. User-initiated Play Next/Add to Queue now show undoable toasts, auto-advance shows a compact `Up next` sender notification, `PlaylistSidebar` keeps remove/clear undo, and `CastExpandedController` now includes both Up Next and Recently Played session context.
+Implementation note: queue mutation actions keep Cast queue API paths for append, Play Next, remove, and reorder. User-initiated Play Next/Add to Queue now show undoable toasts, auto-advance shows a compact `Up next` sender notification, and `PlaylistSidebar` keeps remove/clear undo.
 
 ---
 
@@ -264,8 +261,6 @@ Implementation note: `PlaybackManager` now exposes a Media Session sync API for 
 ### Log Markers
 
 - `cast-button-state`
-- `sender-expanded-opened`
-- `sender-mini-visible`
 - `receiver-state`
 - `receiver-idle-timeout`
 - `receiver-paused-timeout`
@@ -277,8 +272,6 @@ Keep JWT redaction in logs. Add debug toggle in Settings > System or Playback fo
 
 - `src/utils/CastManager.ts`
 - `src/components/cast/CastButton.tsx`
-- `src/components/cast/CastMiniController.tsx`
-- `src/components/cast/CastExpandedController.tsx`
 - `src/components/settings/PlaybackTab.tsx`
 - `src/store/index.ts`
 - `public/receiver.html`
@@ -288,7 +281,7 @@ Keep JWT redaction in logs. Add debug toggle in Settings > System or Playback fo
 
 - [x] `logs/cast-receiver.log` can reconstruct sender, receiver, queue, and lifecycle state
 
-Implementation note: sender components now emit checklist markers for Cast button state, mini controller visibility, expanded controller opens, and stale transport recovery. The receiver emits `receiver-state`, `receiver-idle-timeout`, and `receiver-paused-timeout` markers independent of verbose network logging. Playback settings now expose a combined Playback & Cast debug toggle; when enabled, the sender passes receiver diagnostics verbosity through Cast `customData`. `/api/cast/log` also performs server-side JWT/token/Bearer redaction and newline cleanup before writing to `logs/cast-receiver.log`.
+Implementation note: sender components emit checklist markers for Cast button state and stale transport recovery. The receiver emits `receiver-state`, `receiver-idle-timeout`, and `receiver-paused-timeout` markers independent of verbose network logging. Playback settings now expose a combined Playback & Cast debug toggle; when enabled, the sender passes receiver diagnostics verbosity through Cast `customData`. `/api/cast/log` also performs server-side JWT/token/Bearer redaction and newline cleanup before writing to `logs/cast-receiver.log`.
 
 ---
 
@@ -303,10 +296,10 @@ Run these against at least one Chromecast and one Google TV target when availabl
 | # | Case | Expected result | Key log evidence |
 |---|------|-----------------|------------------|
 | 1 | First-time Cast button education | Cast launcher appears when receivers are available and the coach mark can be dismissed without affecting the SDK dialog | `cast-button-state` |
-| 2 | Cast from desktop | Custom NorthernLights receiver opens, HLS starts, sender mini/expanded controller remains usable | `cast-button-state`, `sender-mini-visible`, `receiver-state` |
+| 2 | Cast from desktop | Custom NorthernLights receiver opens, HLS starts, existing desktop player controls remain usable | `cast-button-state`, `receiver-state` |
 | 3 | Cast from Android PWA | Android can connect to the custom receiver and maintain sender control after background/foreground | `cast-button-state`, `receiver-state` |
 | 4 | Put phone away, reopen, change track | Sender hydrates from remote session and changes the active Cast track without snapping back to stale local state | hydration/reconcile log lines plus `receiver-state` |
-| 5 | Add queue item while casting | Queue item is inserted/appended without full playback interruption | queue mutation log lines plus `sender-mini-visible` |
+| 5 | Add queue item while casting | Queue item is inserted/appended without full playback interruption | queue mutation log lines plus `receiver-state` |
 | 6 | Reorder queue while casting | Receiver keeps playing and sender queue order remains controllable | queue move log lines |
 | 7 | Pause for 5 seconds | Receiver shows paused state and fades non-essential UI without stopping | `receiver-state from=PLAYING to=PAUSED` |
 | 8 | Pause for 20 minutes | Receiver stops itself after paused timeout | `receiver-paused-timeout` |

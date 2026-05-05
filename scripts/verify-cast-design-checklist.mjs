@@ -5,8 +5,6 @@ import process from 'node:process';
 
 const REQUIRED_MARKERS = [
   'cast-button-state',
-  'sender-expanded-opened',
-  'sender-mini-visible',
   'receiver-state',
   'receiver-idle-timeout',
   'receiver-paused-timeout',

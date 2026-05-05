@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Cast } from 'lucide-react';
-import { castManager } from '../../utils/CastManager';
+import { Cast, Loader2 } from 'lucide-react';
+import { castManager, type CastHealthStatus } from '../../utils/CastManager';
 
 type CastButtonSize = 'sm' | 'md' | 'lg';
 
@@ -27,6 +27,7 @@ export const CastButton: React.FC<CastButtonProps> = ({
 }) => {
   const [castApiAvailable, setCastApiAvailable] = useState(getInitialCastAvailable);
   const [castState, setCastState] = useState(castManager.getCastState());
+  const [castHealth, setCastHealth] = useState<CastHealthStatus>(castManager.getHealthStatus());
   const [deviceName, setDeviceName] = useState(castManager.getCastDeviceName());
   const [introDismissed, setIntroDismissed] = useState(() => {
     try {
@@ -54,15 +55,18 @@ export const CastButton: React.FC<CastButtonProps> = ({
       setCastState(nextState);
       setDeviceName(nextState === 'CONNECTED' ? castManager.getCastDeviceName() : '');
     });
+    const unsubscribeHealth = castManager.addHealthChangeListener(setCastHealth);
 
     return () => {
       window.removeEventListener('castApiAvailable', handleCastReady);
       unsubscribe();
+      unsubscribeHealth();
     };
   }, []);
 
   const isConnected = castState === 'CONNECTED';
   const isConnecting = castState === 'CONNECTING';
+  const isBusy = isConnecting || castHealth.phase === 'rejoining' || castHealth.phase === 'recovering';
   const hasDevices = castState !== 'NO_DEVICES_AVAILABLE';
   const isVisible = castApiAvailable && hasDevices;
 
@@ -73,11 +77,12 @@ export const CastButton: React.FC<CastButtonProps> = ({
   }, [castApiAvailable, castState, deviceName, isVisible, size]);
 
   const ariaLabel = useMemo(() => {
+    if (isBusy) return castHealth.message || 'Connecting to Cast device';
     if (isConnected && deviceName) return `Cast connected to ${deviceName}. Open Cast dialog`;
     if (isConnected) return 'Cast connected. Open Cast dialog';
     if (isConnecting) return 'Connecting to Cast device';
     return 'Cast to device';
-  }, [deviceName, isConnected, isConnecting]);
+  }, [castHealth.message, deviceName, isBusy, isConnected, isConnecting]);
 
   const dismissIntro = () => {
     setIntroDismissed(true);
@@ -88,19 +93,20 @@ export const CastButton: React.FC<CastButtonProps> = ({
     }
   };
 
-  const openController = () => {
-    window.dispatchEvent(new Event('aurora:open-cast-controller'));
-  };
-
   if (!isVisible) return null;
 
   return (
     <div
       className={`aurora-cast-control aurora-cast-control-${size} ${className}`}
       data-cast-state={castState}
+      data-cast-health={castHealth.phase}
     >
       <span className="aurora-cast-button-shell">
-        <Cast className="aurora-cast-icon" aria-hidden="true" strokeWidth={1.8} />
+        {isBusy ? (
+          <Loader2 className="aurora-cast-icon aurora-cast-spinner" aria-hidden="true" strokeWidth={1.9} />
+        ) : (
+          <Cast className="aurora-cast-icon" aria-hidden="true" strokeWidth={1.8} />
+        )}
         {React.createElement('google-cast-launcher', {
           class: 'aurora-cast-launcher',
           className: 'aurora-cast-launcher',
@@ -110,14 +116,12 @@ export const CastButton: React.FC<CastButtonProps> = ({
       </span>
 
       {showDeviceName && isConnected && deviceName && (
-        <button
-          type="button"
+        <span
           className={`aurora-cast-device ${labelClassName}`}
-          title={`Open Cast controller for ${deviceName}`}
-          onClick={openController}
+          title={`Casting to ${deviceName}`}
         >
           {deviceName}
-        </button>
+        </span>
       )}
 
       {showStopAction && isConnected && (

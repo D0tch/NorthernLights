@@ -103,8 +103,6 @@ export class CastManager {
     private lifecycleReconcileBurstActive = false;
     private diagnosticsVerbose = false;
     private lastCastButtonStateKey = '';
-    private lastMiniVisibleLogAt = 0;
-    private lastMiniVisibleKey = '';
 
     // Serializes concurrent loadMedia calls to prevent session_error on rapid clicks
     private currentLoadPromise: Promise<void> = Promise.resolve();
@@ -308,18 +306,6 @@ export class CastManager {
         if (this.lastCastButtonStateKey === detail) return;
         this.lastCastButtonStateKey = detail;
         this.logCast('ok', 'cast-button-state', detail);
-    }
-
-    public logSenderExpandedOpened(detail = '') {
-        this.logCast('ok', 'sender-expanded-opened', detail);
-    }
-
-    public logSenderMiniVisible(detail = '') {
-        const now = Date.now();
-        if (this.lastMiniVisibleKey === detail && now - this.lastMiniVisibleLogAt < 15000) return;
-        this.lastMiniVisibleKey = detail;
-        this.lastMiniVisibleLogAt = now;
-        this.logCast('ok', 'sender-mini-visible', detail);
     }
 
     private attachLifecycleReconcileHandlers() {
