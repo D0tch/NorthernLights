@@ -840,7 +840,6 @@ const HubHeader: React.FC<HubHeaderProps> = ({
       <div className="hub-header-content">
         <div className="hub-header-topline">
           <div className="hub-header-copy">
-            <span className="hub-header-kicker">hub</span>
             <h1 className="hub-header-title">
               {wordmark}
             </h1>
