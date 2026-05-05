@@ -177,6 +177,29 @@
       flex: 0 0 auto;
     }
 
+    .shell[data-player-state="APP_LOADING"] .status-dot,
+    .shell[data-player-state="BUFFERING"] .status-dot,
+    .shell[data-player-state="LOADING"] .status-dot,
+    .shell[data-player-state="SEEKING"] .status-dot {
+      background: var(--teal);
+      animation: receiver-pulse 1.1s ease-in-out infinite;
+    }
+
+    .shell[data-player-state="PAUSED"] .status-dot {
+      background: var(--text-muted);
+      box-shadow: none;
+    }
+
+    .shell[data-player-state="IDLE"] .status-dot {
+      background: rgba(255, 255, 255, 0.22);
+      box-shadow: none;
+    }
+
+    .shell[data-player-state="ERROR"] .status-dot {
+      background: var(--rose);
+      box-shadow: 0 0 18px rgba(244, 63, 94, 0.42);
+    }
+
     .stage {
       min-height: 0;
       display: grid;
@@ -297,6 +320,65 @@
       text-overflow: ellipsis;
     }
 
+    .state-banner {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.75vw;
+      margin-top: 2.2vh;
+      padding: 0.9vh 1vw;
+      min-height: 3.9vh;
+      border-radius: var(--radius-pill);
+      color: var(--text-soft);
+      font-size: 1.35vh;
+      background: rgba(255, 255, 255, 0.038);
+      border: 1px solid var(--border);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+      opacity: 0;
+      transform: translateY(-4px);
+      transition: opacity 220ms ease, transform 220ms ease, border-color 220ms ease;
+      pointer-events: none;
+    }
+
+    .state-banner.is-visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    .state-spinner {
+      width: 1.45vh;
+      height: 1.45vh;
+      border-radius: var(--radius-pill);
+      border: 2px solid rgba(255, 255, 255, 0.16);
+      border-top-color: var(--teal);
+      animation: receiver-spin 0.8s linear infinite;
+    }
+
+    .state-banner[data-state="PAUSED"] .state-spinner,
+    .state-banner[data-state="IDLE"] .state-spinner,
+    .state-banner[data-state="ERROR"] .state-spinner {
+      display: none;
+    }
+
+    .state-banner[data-state="ERROR"] {
+      color: #ffc4cf;
+      border-color: rgba(244, 63, 94, 0.28);
+      background: rgba(244, 63, 94, 0.08);
+    }
+
+    .idle-tip {
+      margin-top: 1.4vh;
+      min-height: 2.4vh;
+      color: var(--text-muted);
+      font-size: 1.45vh;
+      line-height: 1.45;
+    }
+
+    .shell[data-player-state="PLAYING"] .idle-tip,
+    .shell[data-player-state="BUFFERING"] .idle-tip,
+    .shell[data-player-state="SEEKING"] .idle-tip {
+      display: none;
+    }
+
     .progress {
       margin-top: 4vh;
     }
@@ -328,6 +410,58 @@
       border-radius: inherit;
       background: linear-gradient(90deg, var(--green), var(--teal), var(--blue));
       box-shadow: 0 0 18px rgba(34, 201, 131, 0.3);
+    }
+
+    .shell[data-player-state="APP_LOADING"] .progress-track::after,
+    .shell[data-player-state="BUFFERING"] .progress-track::after,
+    .shell[data-player-state="LOADING"] .progress-track::after,
+    .shell[data-player-state="SEEKING"] .progress-track::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      width: 34%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, transparent, rgba(45, 212, 191, 0.34), transparent);
+      animation: receiver-shimmer 1.4s ease-in-out infinite;
+    }
+
+    .state-banner[data-state="PAUSED"]::before {
+      content: '||';
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 1.8vh;
+      height: 1.8vh;
+      border-radius: var(--radius-pill);
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.08);
+      font-size: 1.05vh;
+      letter-spacing: -0.08em;
+    }
+
+    .shell.is-dimmed {
+      opacity: 0.62;
+      transform: scale(0.992);
+      transition: opacity 900ms ease, transform 900ms ease;
+    }
+
+    .shell.is-paused-muted .topbar {
+      opacity: 0.36;
+      transition: opacity 900ms ease;
+    }
+
+    .shell.is-paused-muted .queue-strip {
+      opacity: 0;
+      transform: translateY(8px);
+      transition: opacity 900ms ease, transform 900ms ease;
+    }
+
+    .shell[data-burnin-phase="1"] .stage {
+      transform: translate3d(0.4vw, -0.35vh, 0);
+    }
+
+    .shell[data-burnin-phase="2"] .stage {
+      transform: translate3d(-0.35vw, 0.4vh, 0);
     }
 
     .queue-strip {
@@ -457,6 +591,42 @@
     .debug-panel .warn { color: #f9dc7b; }
     .debug-panel .ok { color: #9ce5bd; }
 
+    @keyframes receiver-spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @keyframes receiver-pulse {
+      0%, 100% {
+        opacity: 0.65;
+      }
+
+      50% {
+        opacity: 1;
+      }
+    }
+
+    @keyframes receiver-shimmer {
+      0% {
+        transform: translateX(-110%);
+      }
+
+      100% {
+        transform: translateX(310%);
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+      }
+    }
+
     @media (max-aspect-ratio: 16/10) {
       .shell {
         padding: 4vh 4vw;
@@ -492,7 +662,7 @@
 <body>
   <cast-media-player></cast-media-player>
 
-  <div class="shell">
+  <div class="shell" id="receiver-shell" data-player-state="APP_LOADING" data-burnin-phase="0">
     <header class="topbar">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true"></div>
@@ -522,8 +692,14 @@
           <span id="meta-kicker">Ready for playback</span>
         </div>
         <h1 id="track-title">Aurora Receiver</h1>
-        <p id="track-artist">Waiting for media</p>
-        <p id="track-album">Start casting from Aurora.</p>
+        <p id="track-artist">Starting Cast session</p>
+        <p id="track-album">Preparing the NorthernLights receiver.</p>
+
+        <div class="state-banner is-visible" id="state-banner" data-state="APP_LOADING" aria-live="polite">
+          <span class="state-spinner" aria-hidden="true"></span>
+          <span id="state-banner-text">Starting receiver</span>
+        </div>
+        <div class="idle-tip" id="idle-tip">Connect from Aurora to start playback.</div>
 
         <div class="progress">
           <div class="progress-times">
@@ -572,6 +748,7 @@
       var queueManager = playerManager.getQueueManager();
 
       var ui = {
+        shell: document.getElementById('receiver-shell'),
         title: document.getElementById('track-title'),
         artist: document.getElementById('track-artist'),
         album: document.getElementById('track-album'),
@@ -581,6 +758,9 @@
         durationTime: document.getElementById('duration-time'),
         progressBar: document.getElementById('progress-bar'),
         statusChip: document.getElementById('status-chip'),
+        stateBanner: document.getElementById('state-banner'),
+        stateBannerText: document.getElementById('state-banner-text'),
+        idleTip: document.getElementById('idle-tip'),
         metaKicker: document.getElementById('meta-kicker'),
         upNextList: document.getElementById('up-next-list'),
         debugPanel: document.getElementById('debug-panel'),
@@ -589,9 +769,31 @@
 
       var MAX_LINES = 80;
       var VERBOSE_NETWORK_LOGS = false;
+      var receiverDiagnosticsVerbose = false;
       var UI_PROGRESS_INTERVAL_MS = 2000;
+      var BUFFERING_BANNER_DELAY_MS = 900;
+      var PAUSED_FADE_MS = 5 * 1000;
+      var IDLE_STOP_MS = 5 * 60 * 1000;
+      var PAUSED_STOP_MS = 20 * 60 * 1000;
+      var BURNIN_SHIFT_MS = 60 * 1000;
+      var IDLE_TIP_MS = 45 * 1000;
+      var IDLE_TIPS = [
+        'Connect from Aurora to start playback.',
+        'Open Aurora on your phone to control this receiver.',
+        'Queue changes appear here without interrupting playback.',
+        'Aurora streams your own library over HLS.'
+      ];
       var currentAuthToken = '';
-      var currentPlayerState = 'IDLE';
+      var currentPlayerState = 'APP_LOADING';
+      var stateEnteredAt = Date.now();
+      var lastBurninShiftAt = Date.now();
+      var lastTipAt = Date.now();
+      var burninPhase = 0;
+      var currentTipIndex = 0;
+      var pendingMediaInfo = null;
+      var receiverStopReason = '';
+      var lastPlaybackActivityAt = Date.now();
+      var dimmedLogged = false;
       var lastRender = {
         title: '',
         artist: '',
@@ -601,6 +803,9 @@
         durationSecond: -1,
         progressBucket: -1,
         statusCopy: '',
+        bannerCopy: '',
+        idleTip: '',
+        burninPhase: -1,
         queueKey: ''
       };
 
@@ -688,6 +893,11 @@
         }
       }
 
+      function postDiagnosticMarker(marker, detail) {
+        log('ok', LOG_TAG, marker + (detail ? ': ' + detail : ''));
+        postServerLog('ok', '[' + LOG_TAG + '] ' + marker, detail || '');
+      }
+
       function suppressDefaultCastUi() {
         var defaultPlayer = document.querySelector('cast-media-player');
         if (!defaultPlayer) return;
@@ -740,8 +950,29 @@
         return Math.min(Math.max(value, min), max);
       }
 
+      function setPlayerState(nextState) {
+        if (!nextState) return;
+        if (currentPlayerState !== nextState) {
+          var previousState = currentPlayerState;
+          currentPlayerState = nextState;
+          stateEnteredAt = Date.now();
+          lastPlaybackActivityAt = stateEnteredAt;
+          dimmedLogged = false;
+          if (nextState === 'PLAYING' || nextState === 'LOADING') {
+            receiverStopReason = '';
+          }
+          postDiagnosticMarker('receiver-state', 'from=' + previousState + ' to=' + nextState);
+        }
+      }
+
       function getMetadata(mediaInfo) {
         return (mediaInfo && mediaInfo.metadata) || {};
+      }
+
+      function getActiveMediaInfo() {
+        var mediaInfo = playerManager.getMediaInformation();
+        if (mediaInfo) return mediaInfo;
+        return pendingMediaInfo;
       }
 
       function getImageUrl(mediaInfo) {
@@ -784,11 +1015,35 @@
       }
 
       function getStatusCopy() {
+        if (currentPlayerState === 'APP_LOADING') return 'Starting';
+        if (currentPlayerState === 'ERROR') return 'Needs attention';
+        if (currentPlayerState === 'SEEKING') return 'Seeking';
         if (currentPlayerState === 'BUFFERING') return 'Buffering';
         if (currentPlayerState === 'PLAYING') return 'Playing';
         if (currentPlayerState === 'PAUSED') return 'Paused';
         if (currentPlayerState === 'LOADING') return 'Loading';
         return 'Idle';
+      }
+
+      function getBannerCopy(statusCopy) {
+        if (statusCopy === 'Starting') return 'Starting receiver';
+        if (statusCopy === 'Needs attention') return 'Playback problem. Check Cast logs.';
+        if (statusCopy === 'Loading') return 'Loading HLS stream';
+        if (statusCopy === 'Buffering') return 'Buffering audio';
+        if (statusCopy === 'Seeking') return 'Seeking';
+        if (statusCopy === 'Paused') return 'Paused on receiver';
+        if (statusCopy === 'Idle') return 'Ready for playback';
+        return '';
+      }
+
+      function getMetaKickerCopy(statusCopy) {
+        if (statusCopy === 'Playing') return 'Now streaming';
+        if (statusCopy === 'Buffering') return 'Buffering';
+        if (statusCopy === 'Seeking') return 'Seeking';
+        if (statusCopy === 'Paused') return 'Paused';
+        if (statusCopy === 'Starting') return 'Starting';
+        if (statusCopy === 'Needs attention') return 'Error';
+        return 'Ready';
       }
 
       function buildQueueKey(items, currentIndex) {
@@ -844,11 +1099,13 @@
       }
 
       function syncUi(force) {
-        var mediaInfo = playerManager.getMediaInformation();
-        var title = getDisplayTitle(mediaInfo);
-        var artist = getDisplayArtist(mediaInfo);
-        var album = getDisplayAlbum(mediaInfo);
-        var imageUrl = getImageUrl(mediaInfo);
+        var now = Date.now();
+        var mediaInfo = getActiveMediaInfo();
+        var hasMedia = Boolean(mediaInfo);
+        var title = hasMedia ? getDisplayTitle(mediaInfo) : 'Aurora Receiver';
+        var artist = hasMedia ? getDisplayArtist(mediaInfo) : 'Waiting for media';
+        var album = hasMedia ? getDisplayAlbum(mediaInfo) : 'Start casting from Aurora.';
+        var imageUrl = hasMedia ? getImageUrl(mediaInfo) : '';
         var currentTime = playerManager.getCurrentTimeSec ? playerManager.getCurrentTimeSec() : 0;
         var duration = playerManager.getDurationSec ? playerManager.getDurationSec() : NaN;
         var progress = (!isFinite(duration) || duration <= 0) ? 0 : clamp((currentTime / duration) * 100, 0, 100);
@@ -856,6 +1113,53 @@
         var currentSecond = Math.floor(currentTime || 0);
         var durationSecond = Math.floor(duration || 0);
         var progressBucket = Math.floor(progress * 4); // quarter-percent buckets
+        var bannerCopy = getBannerCopy(statusCopy);
+        var stateAge = now - stateEnteredAt;
+        var isIdle = currentPlayerState === 'IDLE';
+        var isPaused = currentPlayerState === 'PAUSED';
+        var showBufferingBanner = currentPlayerState !== 'BUFFERING' || stateAge >= BUFFERING_BANNER_DELAY_MS;
+        var shouldPausedMute = isPaused && stateAge >= PAUSED_FADE_MS;
+        var shouldDim = (isIdle || isPaused) && stateAge >= Math.min(IDLE_STOP_MS, PAUSED_STOP_MS);
+
+        if (currentPlayerState === 'BUFFERING' && !showBufferingBanner) {
+          bannerCopy = '';
+        }
+
+        if ((isIdle || isPaused) && now - lastBurninShiftAt >= BURNIN_SHIFT_MS) {
+          lastBurninShiftAt = now;
+          burninPhase = (burninPhase + 1) % 3;
+        }
+
+        if (isIdle && now - lastTipAt >= IDLE_TIP_MS) {
+          lastTipAt = now;
+          currentTipIndex = (currentTipIndex + 1) % IDLE_TIPS.length;
+        }
+
+        if (!receiverStopReason && isIdle && stateAge >= IDLE_STOP_MS) {
+          receiverStopReason = 'idle-timeout';
+          postDiagnosticMarker('receiver-idle-timeout', 'state=IDLE timeoutMs=' + IDLE_STOP_MS);
+          context.stop();
+          return;
+        }
+
+        if (!receiverStopReason && isPaused && stateAge >= PAUSED_STOP_MS) {
+          receiverStopReason = 'paused-timeout';
+          postDiagnosticMarker(
+            'receiver-paused-timeout',
+            'state=PAUSED timeoutMs=' + PAUSED_STOP_MS + ' position=' + Math.floor(currentTime || 0)
+          );
+          context.stop();
+          return;
+        }
+
+        ui.shell.dataset.playerState = currentPlayerState;
+        ui.shell.dataset.burninPhase = String((isIdle || isPaused) ? burninPhase : 0);
+        ui.shell.classList.toggle('is-dimmed', shouldDim);
+        ui.shell.classList.toggle('is-paused-muted', shouldPausedMute);
+        if (shouldDim && !dimmedLogged) {
+          dimmedLogged = true;
+          postServerLog('ok', '[' + LOG_TAG + '] Receiver idle dim enabled', 'state=' + currentPlayerState);
+        }
 
         if (force || lastRender.title !== title) {
           ui.title.textContent = title || 'Aurora Receiver';
@@ -883,15 +1187,22 @@
           lastRender.progressBucket = progressBucket;
         }
         if (force || lastRender.statusCopy !== statusCopy) {
+          lastPlaybackActivityAt = Date.now();
+          dimmedLogged = false;
+          ui.shell.classList.remove('is-dimmed');
           ui.statusChip.textContent = statusCopy;
-          ui.metaKicker.textContent = statusCopy === 'Playing'
-            ? 'Now streaming'
-            : statusCopy === 'Buffering'
-              ? 'Buffering'
-              : statusCopy === 'Paused'
-                ? 'Paused'
-                : 'Ready';
+          ui.metaKicker.textContent = getMetaKickerCopy(statusCopy);
           lastRender.statusCopy = statusCopy;
+        }
+        if (force || lastRender.bannerCopy !== bannerCopy) {
+          ui.stateBannerText.textContent = bannerCopy || '';
+          ui.stateBanner.dataset.state = currentPlayerState;
+          ui.stateBanner.classList.toggle('is-visible', Boolean(bannerCopy));
+          lastRender.bannerCopy = bannerCopy;
+        }
+        if (force || lastRender.idleTip !== IDLE_TIPS[currentTipIndex]) {
+          ui.idleTip.textContent = IDLE_TIPS[currentTipIndex];
+          lastRender.idleTip = IDLE_TIPS[currentTipIndex];
         }
 
         setArtwork(imageUrl, title);
@@ -944,13 +1255,16 @@
       context.addEventListener(cast.framework.system.EventType.READY, function() {
         suppressDefaultCastUi();
         logAndPost('ok', LOG_TAG, 'Receiver started — forced codec: ' + FORCED_CAST_CODEC);
+        setPlayerState('IDLE');
         syncUi(true);
       });
 
       context.addEventListener(cast.framework.system.EventType.ERROR, function(e) {
         setDebugVisible(true);
         suppressDefaultCastUi();
+        setPlayerState('ERROR');
         logAndPost('error', LOG_TAG, 'Receiver error: ' + safeStringify(e));
+        syncUi(true);
       });
 
       playerManager.setMessageInterceptor(
@@ -959,6 +1273,14 @@
           function normalizeMedia(media) {
             if (!media) return;
             currentAuthToken = (media.customData && media.customData.token) || currentAuthToken || '';
+            if (media.customData && typeof media.customData.diagnosticsVerbose === 'boolean') {
+              var nextDiagnosticsVerbose = media.customData.diagnosticsVerbose;
+              if (receiverDiagnosticsVerbose !== nextDiagnosticsVerbose || VERBOSE_NETWORK_LOGS !== nextDiagnosticsVerbose) {
+                receiverDiagnosticsVerbose = nextDiagnosticsVerbose;
+                VERBOSE_NETWORK_LOGS = nextDiagnosticsVerbose;
+                postDiagnosticMarker('receiver-diagnostics-verbosity', 'enabled=' + receiverDiagnosticsVerbose);
+              }
+            }
 
             if (media.contentId) {
               try {
@@ -978,6 +1300,7 @@
 
           if (loadRequestData.media) {
             normalizeMedia(loadRequestData.media);
+            pendingMediaInfo = loadRequestData.media;
             logAndPost('ok', LOG_TAG, 'Prepared HLS URL for forced AAC playback');
             logAndPost('ok', LOG_TAG, 'LOAD contentId: ' + loadRequestData.media.contentId);
             logAndPost('ok', LOG_TAG, 'LOAD contentType: ' + loadRequestData.media.contentType);
@@ -990,7 +1313,7 @@
             logAndPost('ok', LOG_TAG, 'LOAD queue items: ' + loadRequestData.queueData.items.length);
           }
 
-          currentPlayerState = 'LOADING';
+          setPlayerState('LOADING');
           lastRender.queueKey = '';
           suppressDefaultCastUi();
           postReceiverHeartbeat('load');
@@ -1025,7 +1348,7 @@
       playerManager.addEventListener(
         cast.framework.events.EventType.ERROR,
         function(e) {
-          currentPlayerState = 'IDLE';
+          setPlayerState('ERROR');
           setDebugVisible(true);
           suppressDefaultCastUi();
           logAndPost('error', LOG_TAG, 'Player error: ' + decodeError(e));
@@ -1036,18 +1359,36 @@
       playerManager.addEventListener(
         cast.framework.events.EventType.BUFFERING,
         function(e) {
-          currentPlayerState = e.isBuffering ? 'BUFFERING' : currentPlayerState;
+          if (e.isBuffering) {
+            setPlayerState('BUFFERING');
+          } else {
+            var resumedState = playerManager.getPlayerState ? playerManager.getPlayerState() : 'PLAYING';
+            setPlayerState(resumedState || 'PLAYING');
+          }
           suppressDefaultCastUi();
           logAndPost('ok', LOG_TAG, 'Buffering: ' + e.isBuffering);
           syncUi(true);
         }
       );
 
+      if (cast.framework.events.EventType.SEEKING) {
+        playerManager.addEventListener(
+          cast.framework.events.EventType.SEEKING,
+          function() {
+            setPlayerState('SEEKING');
+            suppressDefaultCastUi();
+            logAndPost('ok', LOG_TAG, 'Seeking');
+            syncUi(true);
+          }
+        );
+      }
+
       playerManager.addEventListener(
         cast.framework.events.EventType.MEDIA_STATUS,
         function(e) {
           if (e.mediaStatus) {
-            currentPlayerState = e.mediaStatus.playerState || currentPlayerState;
+            setPlayerState(e.mediaStatus.playerState || currentPlayerState);
+            pendingMediaInfo = e.mediaStatus.media || pendingMediaInfo;
             logAndPost('ok', LOG_TAG, 'State: ' + e.mediaStatus.playerState +
               (e.mediaStatus.idleReason ? ' (' + e.mediaStatus.idleReason + ')' : ''));
             lastRender.queueKey = '';

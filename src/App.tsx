@@ -5,6 +5,9 @@ import PlayerControls from './components/PlayerControls';
 import ProgressBar from './components/ProgressBar';
 import MobileMiniPlayer from './components/MobileMiniPlayer';
 import MobileBottomTabs from './components/MobileBottomTabs';
+import CastStatusBanner from './components/cast/CastStatusBanner';
+import CastMiniController from './components/cast/CastMiniController';
+import CastExpandedController from './components/cast/CastExpandedController';
 import KeyboardHint from './components/KeyboardHint';
 import { usePlayerStore } from './store/index';
 import { UserMenu } from './components/UserMenu';
@@ -77,6 +80,7 @@ const GlobalSearchSlot: React.FC = () => (
 
 const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
+  const [isCastControllerOpen, setIsCastControllerOpen] = React.useState(false);
   const [dbConnected, _setDbConnected] = React.useState<boolean | null>(null);
   const dbConnectedRef = React.useRef<boolean | null>(null);
   
@@ -233,6 +237,13 @@ const App: React.FC = () => {
   const prevOnlineRef = React.useRef(isOnline);
   const pendingUpdate = usePlayerStore(state => state.pendingUpdate);
   const playbackState = usePlayerStore(state => state.playbackState);
+  const castConnected = usePlayerStore(state => state.castConnected);
+
+  React.useEffect(() => {
+    const openCastController = () => setIsCastControllerOpen(true);
+    window.addEventListener('aurora:open-cast-controller', openCastController);
+    return () => window.removeEventListener('aurora:open-cast-controller', openCastController);
+  }, []);
 
   React.useEffect(() => {
     if (prevOnlineRef.current !== isOnline) {
@@ -631,6 +642,9 @@ const App: React.FC = () => {
             </div>
           </div>
 
+          <CastStatusBanner />
+          <CastMiniController onOpen={() => setIsCastControllerOpen(true)} />
+
           {/* Floating Playback Controls Footer — Desktop Only */}
           {playlist.length > 0 && (
             <div className="hidden md:block absolute bottom-6 left-1/2 -translate-x-1/2 w-11/12 max-w-4xl z-40 bg-[var(--glass-bg)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-[2rem] p-4 pb-5 shadow-2xl">
@@ -650,6 +664,10 @@ const App: React.FC = () => {
           {/* Keyboard Hint Overlay */}
           <KeyboardHint />
         </main>
+
+        {castConnected && isCastControllerOpen && (
+          <CastExpandedController onClose={() => setIsCastControllerOpen(false)} />
+        )}
 
         {isSettingsOpen && (
           <React.Suspense fallback={null}>

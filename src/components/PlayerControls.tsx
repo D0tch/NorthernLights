@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { usePlayerStore } from '../store/index';
 import { useVolumeSync } from '../hooks/useVolumeSync';
-import { Infinity, Cast, FileText } from 'lucide-react';
-import { castManager } from '../utils/CastManager';
+import { Infinity, FileText } from 'lucide-react';
 import { LyricsPanel } from './LyricsPanel';
 import { LoveButton } from './LoveButton';
+import { CastButton } from './cast/CastButton';
 import {
   IconPrev,
   IconPlay,
@@ -97,38 +97,7 @@ export const PlayerControls: React.FC = () => {
 
   useVolumeSync();
 
-  const [castAvailable, setCastAvailable] = useState(false);
-  const castConnected = usePlayerStore((s) => s.castConnected);
-  const [castDeviceName, setCastDeviceName] = useState('');
   const [showLyrics, setShowLyrics] = useState(false);
-
-  useEffect(() => {
-    const handleCastReady = () => {
-      setCastAvailable(true);
-      if (castManager.isConnected()) {
-        setCastDeviceName(castManager.getCastDeviceName());
-      }
-    };
-    if ((window as any).cast?.framework) {
-      handleCastReady();
-    } else {
-      window.addEventListener('castApiAvailable', handleCastReady);
-    }
-
-    // Update device name when cast state changes
-    const unsubscribe = castManager.addStateChangeListener((state) => {
-      if (state === 'CONNECTED') {
-        setCastDeviceName(castManager.getCastDeviceName());
-      } else {
-        setCastDeviceName('');
-      }
-    });
-
-    return () => {
-      window.removeEventListener('castApiAvailable', handleCastReady);
-      unsubscribe();
-    };
-  }, []);
 
   const volumePercent = Math.round(volume * 100);
 
@@ -136,24 +105,7 @@ export const PlayerControls: React.FC = () => {
     <div className="w-full flex items-center justify-between gap-6 px-2">
       {/* Left Column: Aux Controls */}
       <div className="flex-1 flex justify-start items-center pl-2 gap-2 relative">
-        {castAvailable && (
-          <div className="flex items-center gap-1.5">
-            <button
-              onClick={() => castConnected ? castManager.disconnect() : castManager.requestSession()}
-              className="transition-colors hover:scale-105"
-              style={{ color: castConnected ? 'var(--color-primary)' : 'var(--color-text-muted)', filter: castConnected ? 'drop-shadow(0 0 4px var(--color-primary))' : 'none' }}
-              title={castConnected ? 'Disconnect from cast' : 'Cast to device'}
-              aria-label={castConnected ? 'Disconnect from cast' : 'Cast to device'}
-            >
-              <Cast size={20} />
-            </button>
-            {castConnected && castDeviceName && (
-              <span className="text-xs text-[var(--color-primary)] font-medium truncate max-w-[120px]">
-                {castDeviceName}
-              </span>
-            )}
-          </div>
-        )}
+        <CastButton showDeviceName showIntro showStopAction />
         {currentTrack && (
           <button
             onClick={() => setShowLyrics(!showLyrics)}
@@ -237,7 +189,7 @@ export const PlayerControls: React.FC = () => {
             ) : isPlaying ? <IconPause /> : <IconPlay />}
           </button>
 
-          <button onClick={nextTrackAction} aria-label="Next track" className={baseBtnClass}>
+          <button onClick={() => void nextTrackAction()} aria-label="Next track" className={baseBtnClass}>
             <IconNext />
           </button>
 

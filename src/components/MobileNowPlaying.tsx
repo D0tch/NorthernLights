@@ -6,6 +6,7 @@ import { useSwipe } from '../hooks/useSwipe';
 import { castManager } from '../utils/CastManager';
 import { LyricsPanel } from './LyricsPanel';
 import { LoveButton } from './LoveButton';
+import { CastButton } from './cast/CastButton';
 
 interface MobileNowPlayingProps {
   onClose: () => void;
@@ -32,6 +33,8 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
   const audioOutputDeviceLabel = usePlayerStore((s) => s.audioOutputDeviceLabel);
   const audioOutputSelecting = usePlayerStore((s) => s.audioOutputSelecting);
   const selectAudioOutput = usePlayerStore((s) => s.selectAudioOutput);
+  const volume = usePlayerStore((s) => s.volume);
+  const setVolume = usePlayerStore((s) => s.setVolume);
 
   const [castConnected, setCastConnected] = useState(castManager.isConnected());
   const [castDeviceName, setCastDeviceName] = useState('');
@@ -151,6 +154,25 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
           <ProgressBar />
         </div>
 
+        {castConnected && (
+          <div className="w-full max-w-sm mt-5 rounded-2xl border border-[var(--glass-border)] bg-white/[0.035] dark:bg-white/[0.045] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+            <div className="flex items-center justify-between text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-[var(--color-text-muted)]">
+              <span>Cast volume</span>
+              <span className="text-[var(--color-primary)]">{Math.round(volume * 100)}%</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="1"
+              step="0.01"
+              value={volume}
+              onChange={(event) => setVolume(parseFloat(event.target.value))}
+              className="mt-3 w-full h-1.5 appearance-none rounded-full bg-black/10 outline-none accent-[var(--color-primary)] dark:bg-white/10"
+              aria-label="Cast volume"
+            />
+          </div>
+        )}
+
         {/* Transport Controls */}
         <div className="flex items-center justify-center gap-6 mt-6">
           <button
@@ -190,7 +212,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
           </button>
 
           <button
-            onClick={nextTrack}
+            onClick={() => void nextTrack()}
             aria-label="Next track"
             className="w-12 h-12 flex items-center justify-center rounded-full text-[var(--color-text-primary)] active:scale-90 transition-transform"
           >
@@ -260,17 +282,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
             </button>
           )}
 
-          <button
-            onClick={() => castConnected ? castManager.disconnect() : castManager.requestSession()}
-            className="w-10 h-10 flex items-center justify-center rounded-full active:scale-90 transition-ui"
-            style={{
-              color: castConnected ? 'var(--color-primary)' : 'var(--color-text-muted)',
-              filter: castConnected ? 'drop-shadow(0 0 4px var(--color-primary))' : 'none',
-            }}
-            title={castConnected ? 'Disconnect from cast' : 'Cast to device'}
-          >
-            <Cast size={22} />
-          </button>
+          <CastButton showIntro={false} />
         </div>
       </div>
 

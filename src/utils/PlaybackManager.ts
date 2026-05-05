@@ -20,6 +20,7 @@ import { getPlaybackTimeSnapshot, setPlaybackCurrentTime } from '../store/playba
 import { applyStreamingQualityToHlsUrl } from './streaming';
 import { logPlaybackInfo } from './playbackDebug';
 import { audioOutputManager } from './AudioOutputManager';
+import type { TrackInfo } from './fileSystem';
 import {
     isRecentContinuitySnapshot,
     readPlaybackContinuitySnapshot,
@@ -252,12 +253,16 @@ class PlaybackManager {
             nexttrack: () => { void usePlayerStore.getState().nextTrack(); },
             seekbackward: (details) => {
                 const offset = details.seekOffset || 10;
-                this.seek(Math.max(0, this.getCurrentTime() - offset));
+                const { currentTime } = getPlaybackTimeSnapshot();
+                const current = castManager.isConnected() ? currentTime : this.getCurrentTime();
+                this.seek(Math.max(0, current - offset));
             },
             seekforward: (details) => {
                 const offset = details.seekOffset || 10;
-                const duration = this.getDuration();
-                this.seek(duration > 0 ? Math.min(duration, this.getCurrentTime() + offset) : this.getCurrentTime() + offset);
+                const { currentTime, duration: remoteDuration } = getPlaybackTimeSnapshot();
+                const current = castManager.isConnected() ? currentTime : this.getCurrentTime();
+                const duration = castManager.isConnected() ? remoteDuration : this.getDuration();
+                this.seek(duration > 0 ? Math.min(duration, current + offset) : current + offset);
             },
             seekto: (details) => {
                 if (typeof details.seekTime === 'number') {
@@ -278,12 +283,13 @@ class PlaybackManager {
     private updateMediaSessionMetadata(): void {
         if (!('mediaSession' in navigator)) return;
 
+        const artworkType = this.inferArtworkMimeType(this.currentArtUrl);
         const artwork = this.currentArtUrl
             ? [
-                { src: this.currentArtUrl, sizes: '96x96', type: 'image/png' },
-                { src: this.currentArtUrl, sizes: '128x128', type: 'image/png' },
-                { src: this.currentArtUrl, sizes: '192x192', type: 'image/png' },
-                { src: this.currentArtUrl, sizes: '512x512', type: 'image/png' },
+                { src: this.currentArtUrl, sizes: '96x96', type: artworkType },
+                { src: this.currentArtUrl, sizes: '128x128', type: artworkType },
+                { src: this.currentArtUrl, sizes: '192x192', type: artworkType },
+                { src: this.currentArtUrl, sizes: '512x512', type: artworkType },
             ]
             : [
                 { src: '/icon-192.png', sizes: '192x192', type: 'image/png' },
@@ -303,30 +309,75 @@ class PlaybackManager {
         }
     }
 
+    private inferArtworkMimeType(url: string | null): string {
+        if (!url) return 'image/png';
+        try {
+            const pathname = new URL(url, window.location.origin).pathname.toLowerCase();
+            if (pathname.endsWith('.jpg') || pathname.endsWith('.jpeg')) return 'image/jpeg';
+            if (pathname.endsWith('.webp')) return 'image/webp';
+            if (pathname.endsWith('.gif')) return 'image/gif';
+        } catch {
+            const lower = url.toLowerCase();
+            if (lower.includes('.jpg') || lower.includes('.jpeg')) return 'image/jpeg';
+            if (lower.includes('.webp')) return 'image/webp';
+            if (lower.includes('.gif')) return 'image/gif';
+        }
+        return 'image/png';
+    }
+
     private updateMediaSessionPlaybackState(state: MediaSessionPlaybackState): void {
         if (!('mediaSession' in navigator)) return;
         navigator.mediaSession.playbackState = state;
     }
 
     private updateMediaSessionPosition(force = false): void {
-        if (!('mediaSession' in navigator) || typeof navigator.mediaSession.setPositionState !== 'function') return;
-        const now = Date.now();
-        if (!force && now - this.lastMediaSessionPositionUpdate < this.mediaSessionPositionIntervalMs) return;
-        this.lastMediaSessionPositionUpdate = now;
-
         const timeState = getPlaybackTimeSnapshot();
         const duration = timeState.duration || this.getDuration();
         const position = castManager.isConnected() ? timeState.currentTime : this.getCurrentTime();
-        if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(position)) return;
+        this.updateMediaSessionPositionState(position, duration, force);
+    }
 
-        try {
-            navigator.mediaSession.setPositionState({
-                duration,
-                playbackRate: this.audio.playbackRate || 1,
-                position: Math.min(position, duration),
-            });
-        } catch {
-            // Ignore invalid transient duration/position combinations.
+    public syncMediaSessionFromTrack(
+        track: Partial<TrackInfo> & {
+            title?: string;
+            artist?: string;
+            album?: string;
+            artUrl?: string;
+            duration?: number;
+        },
+        options?: {
+            playbackState?: PlaybackState;
+            position?: number;
+            duration?: number;
+            forcePosition?: boolean;
+        }
+    ): void {
+        const artist =
+            track.artist ||
+            (Array.isArray(track.artists) ? track.artists.join(', ') : typeof track.artists === 'string' ? track.artists : '') ||
+            'Unknown Artist';
+
+        this.currentTitle = track.title || 'Unknown Title';
+        this.currentArtist = artist;
+        this.currentArtUrl = track.artUrl || null;
+        this.currentAlbum = track.album || null;
+        this.currentFormat = track.format || null;
+        this.updateMediaSessionMetadata();
+
+        if (options?.playbackState) {
+            this.updateMediaSessionPlaybackState(
+                options.playbackState === 'playing'
+                    ? 'playing'
+                    : options.playbackState === 'paused'
+                        ? 'paused'
+                        : 'none'
+            );
+        }
+
+        if (typeof options?.position === 'number' || typeof options?.duration === 'number') {
+            const duration = options.duration || track.duration || 0;
+            const position = options.position || 0;
+            this.updateMediaSessionPositionState(position, duration, options.forcePosition ?? true);
         }
     }
 
@@ -334,7 +385,10 @@ class PlaybackManager {
         const saveSnapshot = () => this.persistContinuitySnapshot();
         const reconcile = () => {
             this.updateMediaSessionMetadata();
-            this.updateMediaSessionPlaybackState(this.audio.paused ? 'paused' : 'playing');
+            const storeState = usePlayerStore.getState().playbackState;
+            this.updateMediaSessionPlaybackState(
+                storeState === 'playing' ? 'playing' : storeState === 'paused' ? 'paused' : 'none'
+            );
             this.updateMediaSessionPosition(true);
         };
 
@@ -350,6 +404,24 @@ class PlaybackManager {
         window.addEventListener('pageshow', reconcile);
         document.addEventListener('freeze', saveSnapshot);
         document.addEventListener('resume', reconcile);
+    }
+
+    private updateMediaSessionPositionState(position: number, duration: number, force = false): void {
+        if (!('mediaSession' in navigator) || typeof navigator.mediaSession.setPositionState !== 'function') return;
+        const now = Date.now();
+        if (!force && now - this.lastMediaSessionPositionUpdate < this.mediaSessionPositionIntervalMs) return;
+        if (!Number.isFinite(duration) || duration <= 0 || !Number.isFinite(position)) return;
+        this.lastMediaSessionPositionUpdate = now;
+
+        try {
+            navigator.mediaSession.setPositionState({
+                duration,
+                playbackRate: this.audio.playbackRate || 1,
+                position: Math.min(Math.max(0, position), duration),
+            });
+        } catch {
+            // Ignore invalid transient duration/position combinations.
+        }
     }
 
     public persistContinuitySnapshot(): void {

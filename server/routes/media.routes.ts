@@ -208,12 +208,20 @@ async function ensureHlsSessionForRequest(trackId: string, quality: string, targ
   };
 }
 
+function sanitizeCastLogValue(value: string): string {
+  return value
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/([?&]token=)[^&\s]+/g, '$1[redacted]')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, 'Bearer [redacted]')
+    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[jwt-redacted]');
+}
+
 router.post('/cast/log', (req, res) => {
-  const source = typeof req.body?.source === 'string' ? req.body.source : 'receiver';
-  const level = typeof req.body?.level === 'string' ? req.body.level : 'info';
-  const message = typeof req.body?.message === 'string' ? req.body.message : '';
-  const detail = typeof req.body?.detail === 'string' ? req.body.detail : '';
-  const session = typeof req.body?.session === 'string' ? req.body.session : '';
+  const source = sanitizeCastLogValue(typeof req.body?.source === 'string' ? req.body.source : 'receiver');
+  const level = sanitizeCastLogValue(typeof req.body?.level === 'string' ? req.body.level : 'info');
+  const message = sanitizeCastLogValue(typeof req.body?.message === 'string' ? req.body.message : '');
+  const detail = sanitizeCastLogValue(typeof req.body?.detail === 'string' ? req.body.detail : '');
+  const session = sanitizeCastLogValue(typeof req.body?.session === 'string' ? req.body.session : '');
 
   writeCastReceiverLog(`[${level}] [${source}]${session ? ` [${session}]` : ''} ${message}${detail ? ` :: ${detail}` : ''}`);
   res.sendStatus(204);

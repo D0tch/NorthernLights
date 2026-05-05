@@ -2,6 +2,7 @@ import { playbackManager } from './PlaybackManager';
 import { usePlayerStore } from '../store';
 import { applyCastStreamingQualityToHlsUrl, applyStreamingQualityToHlsUrl } from './streaming';
 import { createQueueEntryId, ensureQueueEntryIds } from './queue';
+import type { TrackInfo } from './fileSystem';
 declare const chrome: any;
 declare const cast: any;
 
@@ -12,6 +13,14 @@ const toast = {
 };
 
 export type CastState = 'NO_DEVICES_AVAILABLE' | 'NOT_CONNECTED' | 'CONNECTING' | 'CONNECTED';
+export type CastHealthPhase = 'idle' | 'connected' | 'rejoining' | 'recovering' | 'recovered' | 'warning' | 'error';
+
+export interface CastHealthStatus {
+    phase: CastHealthPhase;
+    message: string;
+    detail?: string;
+    updatedAt: number;
+}
 
 const SESSION_STORAGE_KEY = 'cast_session_id';
 const CUSTOM_RECEIVER_HLS_CODEC = 'aac';
@@ -89,12 +98,25 @@ export class CastManager {
     private lastStoredSessionRejoinAt = 0;
     private lastUnmappedSessionLogAt = 0;
     private readonly storedSessionRejoinThrottleMs = 5000;
+    private staleTransportRecoveryPromise: Promise<boolean> | null = null;
+    private preserveSessionOnNextEnd = false;
+    private lifecycleReconcileBurstActive = false;
+    private diagnosticsVerbose = false;
+    private lastCastButtonStateKey = '';
+    private lastMiniVisibleLogAt = 0;
+    private lastMiniVisibleKey = '';
 
     // Serializes concurrent loadMedia calls to prevent session_error on rapid clicks
     private currentLoadPromise: Promise<void> = Promise.resolve();
 
     // Listener pattern for state changes (multiple subscribers)
     private stateChangeListeners: Set<(state: CastState) => void> = new Set();
+    private healthChangeListeners: Set<(status: CastHealthStatus) => void> = new Set();
+    private healthStatus: CastHealthStatus = {
+        phase: 'idle',
+        message: '',
+        updatedAt: Date.now(),
+    };
 
     // Proxies for the player events so PlaybackManager can route them
     public onTimeUpdate?: (time: number) => void;
@@ -139,6 +161,16 @@ export class CastManager {
         this.stateChangeListeners.delete(listener);
     }
 
+    public addHealthChangeListener(listener: (status: CastHealthStatus) => void): () => void {
+        this.healthChangeListeners.add(listener);
+        listener(this.healthStatus);
+        return () => this.healthChangeListeners.delete(listener);
+    }
+
+    public getHealthStatus(): CastHealthStatus {
+        return this.healthStatus;
+    }
+
     // Keep the old single-callback property as a setter that adds to the set
     set onStateChange(listener: ((state: CastState) => void) | undefined) {
         // Remove the old one if it was set via this setter
@@ -158,6 +190,23 @@ export class CastManager {
                 listener(this.state);
             } catch (e) {
                 console.error('[Cast] State change listener error:', e);
+            }
+        }
+    }
+
+    private setHealthStatus(phase: CastHealthPhase, message: string, detail?: string) {
+        this.healthStatus = {
+            phase,
+            message,
+            detail,
+            updatedAt: Date.now(),
+        };
+
+        for (const listener of this.healthChangeListeners) {
+            try {
+                listener(this.healthStatus);
+            } catch (e) {
+                console.error('[Cast] Health listener error:', e);
             }
         }
     }
@@ -197,8 +246,20 @@ export class CastManager {
         }
     }
 
+    private delay(ms: number): Promise<void> {
+        return new Promise((resolve) => window.setTimeout(resolve, ms));
+    }
+
+    private isDisconnectedPresentationError(error: unknown): boolean {
+        const detail = this.describeError(error);
+        return /PresentationConnection.*disconnected/i.test(detail)
+            || /InvalidStateError/i.test(detail)
+            || /session_error/i.test(detail);
+    }
+
     private sanitizeLogDetail(value: string): string {
         return value
+            .replace(/[\r\n]+/g, ' ')
             .replace(/([?&]token=)[^&\s]+/g, '$1[redacted]')
             .replace(/Bearer\s+[A-Za-z0-9._-]+/g, 'Bearer [redacted]')
             .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[jwt-redacted]');
@@ -233,6 +294,34 @@ export class CastManager {
         }
     }
 
+    public setDiagnosticsVerbose(enabled: boolean) {
+        if (this.diagnosticsVerbose === enabled) return;
+        this.diagnosticsVerbose = enabled;
+        this.logCast('ok', 'cast-diagnostics-verbosity', `enabled=${enabled}`);
+    }
+
+    public isDiagnosticsVerbose(): boolean {
+        return this.diagnosticsVerbose;
+    }
+
+    public logCastButtonState(detail: string) {
+        if (this.lastCastButtonStateKey === detail) return;
+        this.lastCastButtonStateKey = detail;
+        this.logCast('ok', 'cast-button-state', detail);
+    }
+
+    public logSenderExpandedOpened(detail = '') {
+        this.logCast('ok', 'sender-expanded-opened', detail);
+    }
+
+    public logSenderMiniVisible(detail = '') {
+        const now = Date.now();
+        if (this.lastMiniVisibleKey === detail && now - this.lastMiniVisibleLogAt < 15000) return;
+        this.lastMiniVisibleKey = detail;
+        this.lastMiniVisibleLogAt = now;
+        this.logCast('ok', 'sender-mini-visible', detail);
+    }
+
     private attachLifecycleReconcileHandlers() {
         const schedule = (reason: string) => this.scheduleSessionReconcile(reason);
 
@@ -246,11 +335,110 @@ export class CastManager {
     }
 
     private scheduleSessionReconcile(reason: string) {
+        if (this.lifecycleReconcileBurstActive) return;
+        this.lifecycleReconcileBurstActive = true;
         [0, 750, 2500].forEach((delay) => {
             window.setTimeout(() => {
                 void this.reconcileActiveSession(`${reason}+${delay}ms`);
+                if (delay === 2500) {
+                    this.lifecycleReconcileBurstActive = false;
+                }
             }, delay);
         });
+    }
+
+    private async recoverStaleTransport(reason: string, error?: unknown): Promise<boolean> {
+        if (this.staleTransportRecoveryPromise) return this.staleTransportRecoveryPromise;
+
+        this.staleTransportRecoveryPromise = (async () => {
+            const sessionId = this.getCurrentSessionId() || localStorage.getItem(SESSION_STORAGE_KEY) || '';
+            if (!sessionId) {
+                this.logCast('error', `Cannot recover stale Cast transport: ${reason}`, 'missing-session-id');
+                this.setHealthStatus('error', 'Cast control needs reconnecting.', 'Missing session id');
+                this.state = this.castContext?.getCastState?.() || 'NOT_CONNECTED';
+                this.notifyStateChange();
+                return false;
+            }
+
+            this.logCast('warn', `Recovering stale Cast transport: ${reason}`, this.describeError(error));
+            this.setHealthStatus('recovering', 'Reconnecting Cast control...', reason);
+            localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+
+            try {
+                this.preserveSessionOnNextEnd = true;
+                this.castContext?.endCurrentSession?.(false);
+            } catch (endError) {
+                this.logCast('warn', `Failed to detach stale Cast session: ${reason}`, this.describeError(endError));
+            } finally {
+                localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+            }
+
+            await this.delay(350);
+
+            try {
+                this.rejoinSessionPending = true;
+                chrome.cast.requestSessionById(sessionId);
+            } catch (rejoinError) {
+                this.rejoinSessionPending = false;
+                this.logCast('error', `Stale Cast transport rejoin failed: ${reason}`, this.describeError(rejoinError));
+                this.setHealthStatus('error', 'Could not reconnect Cast control.', this.describeError(rejoinError));
+                return false;
+            }
+
+            for (let attempt = 0; attempt < 16; attempt += 1) {
+                await this.delay(250);
+                const session = this.castContext?.getCurrentSession?.() || null;
+                if (!session) continue;
+
+                this.rejoinSessionPending = false;
+                this.state = 'CONNECTED';
+                this.notifyStateChange();
+                localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+
+                const mediaSession = session.getMediaSession?.() || null;
+                if (this.hasActiveRemoteMediaSession(mediaSession)) {
+                    await this.hydrateSenderFromRemoteSession(mediaSession, `stale-transport:${reason}`);
+                } else {
+                    this.logCast('warn', `Rejoined Cast session without active media: ${reason}`);
+                }
+                this.logCast('ok', `Recovered stale Cast transport: ${reason}`);
+                this.logCast('ok', 'stale-transport-recovered', `reason=${reason}`);
+                this.setHealthStatus('recovered', 'Cast control reconnected.', this.getCastDeviceName());
+                return true;
+            }
+
+            this.logCast('error', `Timed out recovering stale Cast transport: ${reason}`);
+            this.setHealthStatus('error', 'Cast control timed out while reconnecting.', reason);
+            return false;
+        })().finally(() => {
+            this.staleTransportRecoveryPromise = null;
+        });
+
+        return this.staleTransportRecoveryPromise;
+    }
+
+    private async runCastCommand<T>(label: string, command: () => Promise<T>): Promise<T> {
+        try {
+            return await command();
+        } catch (error) {
+            if (!this.isDisconnectedPresentationError(error)) {
+                throw error;
+            }
+
+            const recovered = await this.recoverStaleTransport(label, error);
+            if (!recovered) throw error;
+
+            this.logCast('ok', `Retrying Cast command after transport recovery: ${label}`);
+            return await command();
+        }
+    }
+
+    private handleControlError(label: string, error: unknown) {
+        console.error(`[Cast] ${label} failed:`, error);
+        this.logCast('error', `${label} failed`, this.describeError(error));
+        if (this.isDisconnectedPresentationError(error)) {
+            void this.recoverStaleTransport(label, error);
+        }
     }
 
     public hasStoredSession(): boolean {
@@ -271,6 +459,7 @@ export class CastManager {
         this.rejoinHydrationAttempts = 0;
         this.clearRejoinHydrationTimer();
         this.logCast('ok', `Begin Cast hydration: ${reason}`);
+        this.setHealthStatus('rejoining', 'Syncing with Cast session...', reason);
         void this.waitForRemoteSessionHydration(reason);
     }
 
@@ -283,6 +472,7 @@ export class CastManager {
             this.clearRejoinHydrationTimer();
             this.logCast('ok', `Remote media available during hydration: ${reason}`);
             await this.hydrateSenderFromRemoteSession(mediaSession, reason);
+            this.setHealthStatus('recovered', 'Synced with Cast session.', this.getCastDeviceName());
             return;
         }
 
@@ -294,8 +484,11 @@ export class CastManager {
             console.warn('[Cast] Remote session hydration timed out; not auto-casting stale local state');
             if (!hasSession) {
                 localStorage.removeItem(SESSION_STORAGE_KEY);
+                this.setHealthStatus('error', 'Cast session is no longer reachable.', reason);
                 this.state = this.castContext?.getCastState?.() || 'NOT_CONNECTED';
                 this.notifyStateChange();
+            } else {
+                this.setHealthStatus('warning', 'Cast session connected without active media.', reason);
             }
             return;
         }
@@ -320,6 +513,7 @@ export class CastManager {
                 if (sessionId) localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
                 this.state = 'CONNECTED';
                 this.notifyStateChange();
+                this.setHealthStatus('connected', `Casting to ${this.getCastDeviceName() || 'device'}.`, reason);
 
                 if (this.hasActiveRemoteMediaSession(mediaSession)) {
                     this.logCast('ok', `Reconciled active Cast session: ${reason}`);
@@ -328,6 +522,7 @@ export class CastManager {
                 }
 
                 this.logCast('warn', `Cast session exists without active media: ${reason}`);
+                this.setHealthStatus('warning', 'Cast session connected without active media.', reason);
                 return false;
             }
 
@@ -421,6 +616,13 @@ export class CastManager {
                     this.state = event.castState;
                     this.notifyStateChange();
                     this.logCast('ok', `CAST_STATE_CHANGED: ${prevState} -> ${this.state}`);
+                    if (this.state === 'CONNECTED') {
+                        this.setHealthStatus('connected', `Casting to ${this.getCastDeviceName() || 'device'}.`);
+                    } else if (this.state === 'CONNECTING') {
+                        this.setHealthStatus('rejoining', 'Connecting to Cast device...');
+                    } else if (this.state === 'NOT_CONNECTED') {
+                        this.setHealthStatus('idle', '');
+                    }
 
                     // Fresh connection with no existing remote media: auto-cast local playback.
                     // Existing/resumed remote media must win over stale local sender state.
@@ -448,6 +650,7 @@ export class CastManager {
                 (event: any) => {
                     switch (event.sessionState) {
                         case cast.framework.SessionState.SESSION_STARTED:
+                            this.setHealthStatus('connected', `Casting to ${this.getCastDeviceName() || 'device'}.`);
                             // Store session ID for rejoin
                             const session = this.castContext.getCurrentSession();
                             if (session) {
@@ -471,6 +674,7 @@ export class CastManager {
                             this.state = this.castContext.getCastState();
                             this.notifyStateChange();
                             this.logCast('ok', 'SESSION_RESUMED');
+                            this.setHealthStatus('rejoining', 'Resuming Cast session...');
                             // Re-store the session ID
                             const resumedSession = this.castContext.getCurrentSession();
                             if (resumedSession) {
@@ -482,14 +686,20 @@ export class CastManager {
 
                         case cast.framework.SessionState.SESSION_ENDING:
                             this.logCast('ok', 'SESSION_ENDING');
+                            this.setHealthStatus('rejoining', 'Stopping Cast session...');
                             break;
                         case cast.framework.SessionState.SESSION_ENDED:
                             console.log('[Cast] Session ended');
                             this.logCast('ok', 'SESSION_ENDED');
-                            localStorage.removeItem(SESSION_STORAGE_KEY);
+                            if (this.preserveSessionOnNextEnd) {
+                                this.preserveSessionOnNextEnd = false;
+                            } else {
+                                localStorage.removeItem(SESSION_STORAGE_KEY);
+                            }
                             this.rejoinSessionPending = false;
                             this.clearRejoinHydrationTimer();
                             this.state = 'NOT_CONNECTED';
+                            this.setHealthStatus('idle', '');
                             this.notifyStateChange();
                             break;
                     }
@@ -507,6 +717,7 @@ export class CastManager {
                         this.rejoinSessionPending = false;
                         this.clearRejoinHydrationTimer();
                         this.state = 'NOT_CONNECTED';
+                        this.setHealthStatus('error', 'Cast device disconnected.');
                         this.notifyStateChange();
                     }
                 }
@@ -673,6 +884,7 @@ export class CastManager {
             if (includeAuthTokenInCustomData && authToken) customData.token = authToken;
             customData.codec = CUSTOM_RECEIVER_HLS_CODEC;
         }
+        customData.diagnosticsVerbose = this.diagnosticsVerbose;
         if (Object.keys(customData).length > 0) {
             mediaInfo.customData = customData;
         }
@@ -754,6 +966,71 @@ export class CastManager {
         return null;
     }
 
+    private mapCastPlayerState(playerState: any): 'playing' | 'paused' | 'stopped' {
+        if (playerState === chrome.cast.media.PlayerState.PLAYING) return 'playing';
+        if (playerState === chrome.cast.media.PlayerState.PAUSED) return 'paused';
+        return 'stopped';
+    }
+
+    private getImageUrlFromMediaSession(mediaSession: any | null): string | undefined {
+        const image = mediaSession?.media?.metadata?.images?.[0];
+        return image?.url || image;
+    }
+
+    private getCastMediaSessionSnapshot(
+        mediaSession: any | null = this.getMediaSession(),
+        playlist = usePlayerStore.getState().playlist,
+        sessionIndex: number | null = this.resolveTrackIndexFromSession(mediaSession, playlist)
+    ): {
+        track: Partial<TrackInfo> & { title?: string; artist?: string; album?: string; artUrl?: string; duration?: number };
+        position: number;
+        duration: number;
+        playbackState: 'playing' | 'paused' | 'stopped';
+    } | null {
+        if (!mediaSession) return null;
+
+        const media = mediaSession.media || {};
+        const metadata = media.metadata || {};
+        const storeTrack = sessionIndex !== null ? playlist[sessionIndex] : null;
+        const duration =
+            (typeof this.player?.duration === 'number' && isFinite(this.player.duration) && this.player.duration > 0
+                ? this.player.duration
+                : metadata.duration || storeTrack?.duration || 0) || 0;
+        const position =
+            (typeof this.player?.currentTime === 'number' && isFinite(this.player.currentTime) && this.player.currentTime >= 0
+                ? this.player.currentTime
+                : mediaSession.currentTime || 0) || 0;
+        const playerState = mediaSession.playerState || this.player?.playerState;
+
+        return {
+            track: {
+                ...storeTrack,
+                title: storeTrack?.title || metadata.title || 'Unknown Title',
+                artist: storeTrack?.artist || metadata.artist || 'Unknown Artist',
+                album: storeTrack?.album || metadata.albumName || '',
+                artUrl: storeTrack?.artUrl || this.getImageUrlFromMediaSession(mediaSession),
+                duration,
+            },
+            position,
+            duration,
+            playbackState: this.mapCastPlayerState(playerState),
+        };
+    }
+
+    private syncBrowserMediaSessionFromCast(
+        mediaSession: any | null = this.getMediaSession(),
+        sessionIndex: number | null = this.resolveTrackIndexFromSession(mediaSession)
+    ): void {
+        const snapshot = this.getCastMediaSessionSnapshot(mediaSession, usePlayerStore.getState().playlist, sessionIndex);
+        if (!snapshot) return;
+        playbackManager.syncMediaSessionFromTrack(snapshot.track, {
+            playbackState: snapshot.playbackState,
+            position: snapshot.position,
+            duration: snapshot.duration,
+            forcePosition: true,
+        });
+    }
+
     public doesSessionTrackMatchStore(): boolean {
         const state = usePlayerStore.getState();
         if (state.currentIndex === null) return false;
@@ -791,6 +1068,8 @@ export class CastManager {
             this.onPlayStateChange?.(false);
         }
 
+        this.syncBrowserMediaSessionFromCast(mediaSession);
+
         console.log(`[Cast] Hydrated sender from remote session (${reason})`);
         this.logCast('ok', `Hydrated sender from remote session: ${reason}`, `trackSynced=${trackSynced} playerState=${playerState || 'unknown'} time=${currentTime} duration=${duration}`);
         return trackSynced;
@@ -820,6 +1099,7 @@ export class CastManager {
 
         const state = usePlayerStore.getState();
         const sessionIndex = this.resolveTrackIndexFromSession(mediaSession, state.playlist);
+        this.syncBrowserMediaSessionFromCast(mediaSession, sessionIndex);
         if (sessionIndex !== null) {
             if (sessionIndex !== state.currentIndex) {
                 this.logCast('ok', 'Syncing sender track index from Cast session', `from=${state.currentIndex} to=${sessionIndex}`);
@@ -960,6 +1240,10 @@ export class CastManager {
         return this.state === 'CONNECTED';
     }
 
+    public getCastState(): CastState {
+        return this.state;
+    }
+
     /**
      * Returns the friendly name of the connected Cast device (e.g. "Living Room TV").
      */
@@ -1032,8 +1316,12 @@ export class CastManager {
         }
 
         // Pass auth token to custom receiver via customData for Bearer header injection
-        if (useHls && authToken) {
-            mediaInfo.customData = { token: authToken, codec: CUSTOM_RECEIVER_HLS_CODEC };
+        if (useHls || this.diagnosticsVerbose) {
+            mediaInfo.customData = {
+                ...(useHls && authToken ? { token: authToken } : {}),
+                ...(useHls ? { codec: CUSTOM_RECEIVER_HLS_CODEC } : {}),
+                diagnosticsVerbose: this.diagnosticsVerbose,
+            };
         }
 
         // Serialize loadMedia calls to prevent concurrent loads from clashing
@@ -1049,7 +1337,11 @@ export class CastManager {
 
         try {
             this.logCast('ok', 'Loading single media on Cast device', `title=${title} useHls=${useHls} url=${mediaUrl}`);
-            await castSession.loadMedia(request);
+            await this.runCastCommand('load-single-media', async () => {
+                const activeSession = this.castContext.getCurrentSession();
+                if (!activeSession) throw new Error('No active Cast session');
+                return activeSession.loadMedia(request);
+            });
             this.queueItemIdByEntryId.clear();
             this.logCast('ok', 'Single media load succeeded', `title=${title}`);
         } catch (e: any) {
@@ -1107,6 +1399,7 @@ export class CastManager {
         startItem.media.customData = {
             ...(startItem.media.customData || {}),
             ...(sharedAuthToken ? { token: sharedAuthToken } : {}),
+            diagnosticsVerbose: this.diagnosticsVerbose,
         };
 
         const request = new chrome.cast.media.LoadRequest(startItem.media);
@@ -1136,7 +1429,11 @@ export class CastManager {
         await previous;
 
         try {
-            await castSession.loadMedia(request);
+            await this.runCastCommand('load-queue', async () => {
+                const activeSession = this.castContext.getCurrentSession();
+                if (!activeSession) throw new Error('No active Cast session');
+                return activeSession.loadMedia(request);
+            });
             this.logCast('ok', 'Queue load succeeded', `items=${queueItems.length} startIndex=${normalizedStartIndex}`);
         } catch (e: any) {
             const errorDetail = e?.code || e?.message || String(e);
@@ -1165,19 +1462,23 @@ export class CastManager {
      */
     public async jumpToQueueIndex(index: number) {
         if (!this.isConnected()) return;
-        const session = this.castContext.getCurrentSession();
-        if (!session) return;
-        const mediaSession = session.getMediaSession();
+        const mediaSession = this.getMediaSession();
         if (!mediaSession) return;
 
         const items = mediaSession.items;
         if (!items || !items[index]) return;
+        const itemId = items[index].itemId;
 
         // Jump to the specified item in the cast queue
         try {
-            await mediaSession.queueJumpToItem(items[index].itemId);
+            await this.runCastCommand('queue-jump', async () => {
+                const activeMediaSession = this.getMediaSession();
+                if (!activeMediaSession) throw new Error('No active Cast media session');
+                return activeMediaSession.queueJumpToItem(itemId);
+            });
         } catch (e) {
             console.error('[Cast] Failed to jump to queue index:', e);
+            this.logCast('error', 'Failed to jump to Cast queue item', this.describeError(e));
         }
     }
 
@@ -1196,10 +1497,15 @@ export class CastManager {
         });
 
         try {
-            await mediaSession.queueAppendItem(item);
-            this.syncQueueItemMapFromSession(mediaSession);
+            await this.runCastCommand('queue-append', async () => {
+                const activeMediaSession = this.getMediaSession();
+                if (!activeMediaSession) throw new Error('No active Cast media session');
+                return activeMediaSession.queueAppendItem(item);
+            });
+            this.syncQueueItemMapFromSession(this.getMediaSession());
         } catch (e) {
             console.error('[Cast] Failed to append track to queue:', e);
+            this.logCast('error', 'Failed to append Cast queue item', this.describeError(e));
         }
     }
 
@@ -1220,10 +1526,15 @@ export class CastManager {
         }
 
         try {
-            await mediaSession.queueInsertItems(request);
-            this.syncQueueItemMapFromSession(mediaSession);
+            await this.runCastCommand('queue-insert', async () => {
+                const activeMediaSession = this.getMediaSession();
+                if (!activeMediaSession) throw new Error('No active Cast media session');
+                return activeMediaSession.queueInsertItems(request);
+            });
+            this.syncQueueItemMapFromSession(this.getMediaSession());
         } catch (e) {
             console.error('[Cast] Failed to insert track after current item:', e);
+            this.logCast('error', 'Failed to insert Cast queue item', this.describeError(e));
         }
     }
 
@@ -1235,10 +1546,15 @@ export class CastManager {
         const itemId = this.getQueueItemId(queueEntryId, mediaSession);
         if (itemId === null) return;
         try {
-            await mediaSession.queueRemoveItem(itemId);
-            this.syncQueueItemMapFromSession(mediaSession);
+            await this.runCastCommand('queue-remove', async () => {
+                const activeMediaSession = this.getMediaSession();
+                if (!activeMediaSession) throw new Error('No active Cast media session');
+                return activeMediaSession.queueRemoveItem(itemId);
+            });
+            this.syncQueueItemMapFromSession(this.getMediaSession());
         } catch (e) {
             console.error('[Cast] Failed to remove track from queue:', e);
+            this.logCast('error', 'Failed to remove Cast queue item', this.describeError(e));
         }
     }
 
@@ -1250,10 +1566,15 @@ export class CastManager {
         const itemId = this.getQueueItemId(queueEntryId, mediaSession);
         if (itemId === null) return;
         try {
-            await mediaSession.queueMoveItemToNewIndex(itemId, newIndex);
-            this.syncQueueItemMapFromSession(mediaSession);
+            await this.runCastCommand('queue-move', async () => {
+                const activeMediaSession = this.getMediaSession();
+                if (!activeMediaSession) throw new Error('No active Cast media session');
+                return activeMediaSession.queueMoveItemToNewIndex(itemId, newIndex);
+            });
+            this.syncQueueItemMapFromSession(this.getMediaSession());
         } catch (e) {
             console.error('[Cast] Failed to reorder Cast queue:', e);
+            this.logCast('error', 'Failed to reorder Cast queue', this.describeError(e));
         }
     }
 
@@ -1262,40 +1583,65 @@ export class CastManager {
         const mediaSession = this.getMediaSession();
         if (!mediaSession) return;
         try {
-            await mediaSession.queueSetRepeatMode(this.getRepeatMode(repeat));
+            await this.runCastCommand('queue-repeat-mode', async () => {
+                const activeMediaSession = this.getMediaSession();
+                if (!activeMediaSession) throw new Error('No active Cast media session');
+                return activeMediaSession.queueSetRepeatMode(this.getRepeatMode(repeat));
+            });
         } catch (e) {
             console.error('[Cast] Failed to update repeat mode:', e);
+            this.logCast('error', 'Failed to update Cast repeat mode', this.describeError(e));
         }
     }
 
     public playOrPause() {
-        if (this.playerController) {
-            this.playerController.playOrPause();
+        try {
+            if (this.playerController) {
+                this.playerController.playOrPause();
+            }
+        } catch (error) {
+            this.handleControlError('play-or-pause', error);
         }
     }
 
     public pause() {
-        if (this.playerController && !this.player.isPaused) {
-            this.playerController.playOrPause();
+        try {
+            if (this.playerController && !this.player.isPaused) {
+                this.playerController.playOrPause();
+            }
+        } catch (error) {
+            this.handleControlError('pause', error);
         }
     }
 
     public resume() {
-        if (this.playerController && this.player.isPaused) {
-            this.playerController.playOrPause();
+        try {
+            if (this.playerController && this.player.isPaused) {
+                this.playerController.playOrPause();
+            }
+        } catch (error) {
+            this.handleControlError('resume', error);
         }
     }
 
     public stop() {
-        if (this.playerController) {
-            this.playerController.stop();
+        try {
+            if (this.playerController) {
+                this.playerController.stop();
+            }
+        } catch (error) {
+            this.handleControlError('stop', error);
         }
     }
 
     public seek(time: number) {
-        if (this.playerController) {
-            this.player.currentTime = time;
-            this.playerController.seek();
+        try {
+            if (this.playerController) {
+                this.player.currentTime = time;
+                this.playerController.seek();
+            }
+        } catch (error) {
+            this.handleControlError('seek', error);
         }
     }
 
@@ -1303,10 +1649,37 @@ export class CastManager {
         return this.player?.currentTime ?? 0;
     }
 
+    public async retryConnectionFromUi(): Promise<boolean> {
+        this.setHealthStatus('rejoining', 'Retrying Cast connection...', 'user-action');
+        this.logCast('ok', 'User requested Cast recovery retry');
+
+        const reconciled = await this.reconcileActiveSession('user-retry');
+        if (reconciled) {
+            this.setHealthStatus('recovered', 'Cast control reconnected.', this.getCastDeviceName());
+            return true;
+        }
+
+        if (this.state === 'CONNECTED' && this.castContext?.getCurrentSession?.()) {
+            this.setHealthStatus('warning', 'Connected, but no active Cast media was found.');
+            return false;
+        }
+
+        try {
+            await this.requestSession();
+            return this.isConnected();
+        } catch {
+            return false;
+        }
+    }
+
     public setVolume(volumeLevel: number) {
-        if (this.playerController) {
-            this.player.volumeLevel = volumeLevel;
-            this.playerController.setVolumeLevel();
+        try {
+            if (this.playerController) {
+                this.player.volumeLevel = volumeLevel;
+                this.playerController.setVolumeLevel();
+            }
+        } catch (error) {
+            this.handleControlError('set-volume', error);
         }
     }
 

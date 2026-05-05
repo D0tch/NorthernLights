@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { usePlayerStore } from '../store/index';
-import { Play, Pause, SkipForward, Cast, Speaker } from 'lucide-react';
+import { Play, Pause, SkipForward, Speaker } from 'lucide-react';
 import { useSwipe } from '../hooks/useSwipe';
 import MobileNowPlaying from './MobileNowPlaying';
+import { CastButton } from './cast/CastButton';
 
 const MobileMiniPlayer = () => {
   const playlist = usePlayerStore((s) => s.playlist);
@@ -101,9 +102,6 @@ const MobileMiniPlayer = () => {
               <span className="text-sm font-medium text-[var(--color-text-primary)] truncate leading-tight">
                 {currentTrack.title || currentTrack.path.split(/[\\/]/).pop()}
               </span>
-              {castConnected && (
-                <Cast size={14} className="flex-shrink-0 text-[var(--color-primary)]" style={{ filter: 'drop-shadow(0 0 3px var(--color-primary))' }} />
-              )}
               {!castConnected && audioOutputSupported && (
                 <button
                   onClick={handleAudioOutput}
@@ -147,6 +145,9 @@ const MobileMiniPlayer = () => {
             >
               <SkipForward size={20} />
             </button>
+            <div onClick={(event) => event.stopPropagation()}>
+              <CastButton size="sm" showIntro={false} />
+            </div>
           </div>
         </div>
       </div>
