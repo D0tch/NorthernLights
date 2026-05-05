@@ -562,18 +562,16 @@ const JumpTileCard: React.FC<JumpTileCardProps> = ({
           </span>
         )}
       </div>
-      {/* Play button — visible on touch, hover-revealed on desktop. JumpTile
-          is the "pick up where you left off" rail; its primary action is
-          play, not browse. Other Hub rails (HubCard, UniqueCard) stay
-          hover-only — touch users get one-tap play via the Hub header
-          resume row instead. */}
+      {/* Play button — hover-only on desktop, hidden entirely on touch.
+          All Hub rails stay navigation-first on touch; the Hub header
+          resume row owns one-tap play for touch users. */}
       <button
         type="button"
         onClick={(e) => {
           e.stopPropagation();
           onPlay(tile);
         }}
-        className="btn-fab inline-flex absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 opacity-100 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover:opacity-100 group-focus-within:opacity-100 z-10"
+        className="btn-fab hidden [@media(hover:hover)]:inline-flex absolute right-3 top-1/2 -translate-y-1/2 w-10 h-10 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 z-10"
         aria-label={`play ${tile.title}`}
       >
         <Play className="w-4 h-4 ml-0.5" fill="currentColor" />
@@ -828,31 +826,30 @@ const HubHeader: React.FC<HubHeaderProps> = ({
   }, [resumeContext, onNavigateToSource]);
 
   return (
-    <header className="relative">
-      {showResumeRow && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 -mx-4 sm:-mx-6 lg:-mx-8 -my-2 rounded-2xl opacity-70"
-          style={{
-            background:
-              'radial-gradient(circle at 12% 50%, rgba(34, 201, 131, 0.18), transparent 55%), radial-gradient(circle at 88% 30%, rgba(14, 165, 233, 0.14), transparent 55%), radial-gradient(circle at 60% 90%, rgba(244, 63, 94, 0.10), transparent 60%)',
-          }}
-        />
-      )}
+    <header className={`hub-header ${showResumeRow ? 'hub-header--active' : 'hub-header--idle'}`}>
+      <div className="hub-header-atmosphere" aria-hidden="true">
+        {showResumeRow && resumeContext?.track.artUrl && (
+          <img
+            src={resumeContext.track.artUrl}
+            alt=""
+            className="hub-header-ambient-art"
+          />
+        )}
+      </div>
 
-      <div className="relative flex flex-col gap-5 sm:gap-6">
-        <div className="flex items-start justify-between gap-3">
-          <h1
-            className="font-bold tracking-tight lowercase text-[var(--color-text-primary)] text-3xl sm:text-4xl lg:text-5xl leading-[1.05]"
-            style={{ fontFamily: 'var(--font-display)' }}
-          >
-            {wordmark}
-          </h1>
+      <div className="hub-header-content">
+        <div className="hub-header-topline">
+          <div className="hub-header-copy">
+            <span className="hub-header-kicker">hub</span>
+            <h1 className="hub-header-title">
+              {wordmark}
+            </h1>
+          </div>
           {onRefresh && (
             <button
               onClick={onRefresh}
               disabled={isRefreshing}
-              className="btn btn-ghost btn-sm shrink-0"
+              className="btn btn-ghost btn-sm hub-header-refresh"
               aria-label="refresh hub"
               title="refresh hub"
             >
@@ -920,14 +917,14 @@ const HubResumeRow: React.FC<HubResumeRowProps> = ({
       tabIndex={0}
       onClick={onNavigate}
       onKeyDown={handleRowKey}
-      className="group flex items-center gap-3 sm:gap-4 rounded-xl p-2 sm:p-3 -m-2 sm:-m-3 transition-colors duration-150 hover:bg-[var(--color-bg-hover)] focus-visible:bg-[var(--color-bg-hover)] active:scale-[0.99] cursor-pointer"
+      className="hub-resume-row group"
     >
-      <div className="relative flex-shrink-0 w-16 h-16 sm:w-20 sm:h-20 rounded-lg overflow-hidden bg-[var(--color-surface-variant)] border border-[var(--glass-border)]">
+      <div className="hub-resume-art">
         {track.artUrl ? (
           <img
             src={track.artUrl}
             alt=""
-            className="absolute inset-0 w-full h-full object-cover"
+            className="absolute inset-0 h-full w-full object-cover"
           />
         ) : (
           <div className="absolute inset-0 flex items-center justify-center">
@@ -936,23 +933,23 @@ const HubResumeRow: React.FC<HubResumeRowProps> = ({
         )}
       </div>
 
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2 mb-1">
+      <div className="hub-resume-copy">
+        <div className="hub-resume-status">
           {isPlaying ? (
             <NowPlayingBadge
               state={playbackState === 'playing' ? 'playing' : 'paused'}
             />
           ) : (
-            <span className="text-[0.65rem] font-medium uppercase tracking-[0.08em] text-[var(--color-text-muted)]">
+            <span className="hub-resume-label">
               resume
             </span>
           )}
         </div>
-        <div className="font-semibold text-[var(--color-text-primary)] text-base sm:text-lg truncate">
-          {title}
-          <span className="font-normal text-[var(--color-text-secondary)]"> · {artist}</span>
+        <div className="hub-resume-title">
+          <span>{title}</span>
+          <span className="hub-resume-artist">{artist}</span>
         </div>
-        <div className="text-xs sm:text-sm text-[var(--color-text-muted)] mt-0.5 truncate tabular-nums">
+        <div className="hub-resume-meta">
           {album ? `from ${album} · ` : ''}
           {remainingLabel}
         </div>
@@ -967,7 +964,7 @@ const HubResumeRow: React.FC<HubResumeRowProps> = ({
               onPlay(e);
             }
           }}
-          className="play-btn-main shrink-0 group-hover:scale-105 focus-visible:scale-105 transition-transform duration-150"
+          className="play-btn-main hub-resume-play"
           aria-label={`resume ${title} by ${artist}`}
           title="resume"
         >
