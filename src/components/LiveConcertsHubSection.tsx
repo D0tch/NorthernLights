@@ -179,9 +179,13 @@ const TicketCard: React.FC<TicketCardProps> = ({ event }) => {
                             <span className="text-xs font-semibold text-[var(--color-text-secondary)] tabular-nums">
                                 {price}
                             </span>
+                        ) : event.status === 'scheduled' ? (
+                            <span className="text-xs text-[var(--color-text-muted)]">
+                                tickets available
+                            </span>
                         ) : (
                             <span className="text-xs text-[var(--color-text-muted)]">
-                                {event.status === 'scheduled' ? 'Tickets available' : '—'}
+                                {event.status}
                             </span>
                         )}
                         {event.ticket_url ? (
@@ -200,13 +204,13 @@ const TicketCard: React.FC<TicketCardProps> = ({ event }) => {
                                     transition-colors
                                     focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]
                                 "
-                                aria-label={`Get tickets for ${event.artist_name} on ${weekday} ${date}`}
+                                aria-label={`get tickets for ${event.artist_name} on ${weekday} ${date}`}
                             >
-                                Get Tickets
+                                get tickets
                                 <ArrowRight size={12} />
                             </a>
                         ) : (
-                            <span className="text-xs text-[var(--color-text-muted)] italic">No ticket link</span>
+                            <span className="text-xs text-[var(--color-text-muted)] italic">no ticket link</span>
                         )}
                     </div>
                 </div>
@@ -215,57 +219,112 @@ const TicketCard: React.FC<TicketCardProps> = ({ event }) => {
     );
 };
 
+const LiveConcertsSkeleton: React.FC = () => (
+    <section aria-hidden="true">
+        <div className="flex items-center gap-2 mb-4">
+            <Ticket className="w-5 h-5 text-[var(--color-text-muted)] opacity-50" />
+            <div className="h-5 w-44 rounded bg-[var(--color-surface-variant)] animate-pulse" />
+        </div>
+        <div className="flex gap-3 sm:gap-4 overflow-hidden hide-scrollbar pb-2">
+            {Array.from({ length: 3 }).map((_, i) => (
+                <div
+                    key={i}
+                    className="w-[85vw] max-w-[380px] sm:w-[340px] shrink-0 h-44 rounded-[var(--radius)] bg-[var(--color-surface-variant)] animate-pulse"
+                />
+            ))}
+        </div>
+    </section>
+);
+
+const LiveConcertsHeader: React.FC<{ stale?: boolean }> = ({ stale }) => (
+    <div className="flex items-center justify-between gap-2 mb-4">
+        <div className="flex items-center gap-2">
+            <Ticket className="w-5 h-5 text-[var(--color-primary)]" />
+            <h2 id="live-concerts-heading" className="text-lg font-semibold text-[var(--color-text-secondary)] lowercase">
+                favourites live near you
+            </h2>
+        </div>
+        {stale && (
+            <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-[var(--color-warning)]">
+                <AlertTriangle size={12} />
+                may be out of date
+            </span>
+        )}
+    </div>
+);
+
 export const LiveConcertsHubSection: React.FC = () => {
     const getAuthHeader = usePlayerStore(s => s.getAuthHeader);
     const concertsEnabled = usePlayerStore(s => s.concertsEnabled);
     const [data, setData] = useState<HubResponse | null>(null);
     const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
+
+    const load = React.useCallback(async (signal?: { cancelled: boolean }) => {
+        setLoading(true);
+        setError(null);
+        try {
+            const res = await fetch('/api/concerts/hub', { headers: getAuthHeader() });
+            if (!res.ok) throw new Error(`status ${res.status}`);
+            const json: HubResponse = await res.json();
+            if (!signal?.cancelled) setData(json);
+        } catch (e) {
+            console.error('Failed to load live concerts', e);
+            if (!signal?.cancelled) setError('could not load nearby shows. check your connection and try again.');
+        } finally {
+            if (!signal?.cancelled) setLoading(false);
+        }
+    }, [getAuthHeader]);
 
     useEffect(() => {
-        let cancelled = false;
         if (!concertsEnabled) {
             setLoading(false);
             setData({ events: [], disabled: true });
             return;
         }
-        (async () => {
-            try {
-                const res = await fetch('/api/concerts/hub', { headers: getAuthHeader() });
-                if (res.ok) {
-                    const json: HubResponse = await res.json();
-                    if (!cancelled) setData(json);
-                }
-            } catch {} finally {
-                if (!cancelled) setLoading(false);
-            }
-        })();
-        return () => { cancelled = true; };
-    }, [concertsEnabled, getAuthHeader]);
+        const signal = { cancelled: false };
+        void load(signal);
+        return () => { signal.cancelled = true; };
+    }, [concertsEnabled, load]);
 
-    // Hide entirely when concerts are disabled or there's nothing to show.
-    // Empty-state copy here would feel like clutter on the Hub.
+    // Feature disabled → hide entirely (the toggle lives in settings).
     if (!concertsEnabled) return null;
-    if (loading) return null;
-    if (!data || data.events.length === 0) return null;
+
+    if (loading) return <LiveConcertsSkeleton />;
+
+    if (error) {
+        return (
+            <section aria-labelledby="live-concerts-heading">
+                <LiveConcertsHeader />
+                <div
+                    role="alert"
+                    className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-sm font-medium text-[var(--color-error)] flex items-center justify-between gap-3"
+                >
+                    <span>{error}</span>
+                    <button onClick={() => void load()} className="btn btn-ghost btn-sm shrink-0">
+                        retry
+                    </button>
+                </div>
+            </section>
+        );
+    }
+
+    if (!data || data.events.length === 0) {
+        return (
+            <section aria-labelledby="live-concerts-heading">
+                <LiveConcertsHeader />
+                <p className="text-sm text-[var(--color-text-muted)] italic">
+                    no upcoming shows from your favourite artists nearby. set your location in settings → live music to widen the search.
+                </p>
+            </section>
+        );
+    }
 
     return (
         <section aria-labelledby="live-concerts-heading">
-            <div className="flex items-center justify-between gap-2 mb-4">
-                <div className="flex items-center gap-2">
-                    <Ticket className="w-5 h-5 text-[var(--color-primary)]" />
-                    <h2 id="live-concerts-heading" className="text-lg font-semibold text-[var(--color-text-secondary)]">
-                        Favourites live near you
-                    </h2>
-                </div>
-                {data.stale && (
-                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wider text-amber-600 dark:text-amber-400">
-                        <AlertTriangle size={12} />
-                        May be out of date
-                    </span>
-                )}
-            </div>
+            <LiveConcertsHeader stale={data.stale} />
             <HorizontalScrollRail
-                ariaLabel="Favourites live near you"
+                ariaLabel="favourites live near you"
                 role="list"
                 viewportClassName="
                     flex gap-3 sm:gap-4

@@ -6,6 +6,7 @@
     "dev": "concurrently \"vite\" \"tsx watch server/index.ts\"",
     "build": "tsc --noEmit && vite build",
     "generate:pwa-assets": "node scripts/generate-pwa-assets.mjs",
+    "verify:cast": "node scripts/verify-cast-design-checklist.mjs",
     "test": "jest"
   },
   "dependencies": {
