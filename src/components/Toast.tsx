@@ -1,5 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
 import { CheckCircle, AlertCircle, Info, X } from 'lucide-react';
 
 export type ToastType = 'success' | 'error' | 'info';
@@ -55,11 +54,13 @@ export const Toast: React.FC<ToastProps> = ({
     handleDismiss();
   };
 
-  return createPortal(
+  return (
     <div
-      className={`fixed bottom-6 right-6 z-[10001] flex items-center gap-3 px-5 py-3.5 rounded-2xl border shadow-2xl backdrop-blur-xl bg-[var(--glass-bg)] min-w-[280px] max-w-[420px] ${
+      className={`flex items-center gap-3 px-5 py-3.5 rounded-2xl border shadow-2xl backdrop-blur-xl bg-[var(--glass-bg)] min-w-[280px] max-w-[420px] ${
         exiting ? 'animate-toast-exit' : 'animate-toast-enter'
       }`}
+      role="status"
+      aria-live="polite"
     >
       <span className={colors[type]}>{icons[type]}</span>
       <p className="flex-1 text-sm text-[var(--color-text-primary)]">{message}</p>
@@ -77,7 +78,6 @@ export const Toast: React.FC<ToastProps> = ({
       >
         <X size={16} />
       </button>
-    </div>,
-    document.body
+    </div>
   );
 };
