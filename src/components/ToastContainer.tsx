@@ -14,6 +14,9 @@ export const ToastContainer: React.FC = () => {
           key={toast.id}
           message={toast.message}
           type={toast.type}
+          duration={toast.duration}
+          actionLabel={toast.actionLabel}
+          onAction={toast.onAction}
           onDismiss={() => removeToast(toast.id)}
         />
       ))}

@@ -4,16 +4,12 @@ import { CheckCircle, AlertCircle, Info, X } from 'lucide-react';
 
 export type ToastType = 'success' | 'error' | 'info';
 
-interface ToastItem {
-  id: number;
-  message: string;
-  type: ToastType;
-}
-
 interface ToastProps {
   message: string;
   type: ToastType;
   duration?: number;
+  actionLabel?: string;
+  onAction?: () => void;
   onDismiss: () => void;
 }
 
@@ -33,6 +29,8 @@ export const Toast: React.FC<ToastProps> = ({
   message,
   type,
   duration = 4000,
+  actionLabel,
+  onAction,
   onDismiss,
 }) => {
   const [exiting, setExiting] = useState(false);
@@ -42,12 +40,19 @@ export const Toast: React.FC<ToastProps> = ({
       setExiting(true);
       setTimeout(onDismiss, 250);
     }, duration);
-    return () => clearTimeout(timer);
+    return () => {
+      clearTimeout(timer);
+    };
   }, [duration, onDismiss]);
 
   const handleDismiss = () => {
     setExiting(true);
     setTimeout(onDismiss, 250);
+  };
+
+  const handleAction = () => {
+    onAction?.();
+    handleDismiss();
   };
 
   return createPortal(
@@ -58,6 +63,14 @@ export const Toast: React.FC<ToastProps> = ({
     >
       <span className={colors[type]}>{icons[type]}</span>
       <p className="flex-1 text-sm text-[var(--color-text-primary)]">{message}</p>
+      {actionLabel && onAction && (
+        <button
+          onClick={handleAction}
+          className="text-sm font-semibold text-[var(--color-primary)] hover:text-[var(--color-text-primary)] transition-colors shrink-0"
+        >
+          {actionLabel}
+        </button>
+      )}
       <button
         onClick={handleDismiss}
         className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors shrink-0"
