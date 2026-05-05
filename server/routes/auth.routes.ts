@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { hasUsers, createUser, getUserByUsername, updateUser, deleteUser, updateLastLogin, createInvite, getInvite, isInviteValid, incrementInviteUses } from '../database';
+import { hasUsers, createUser, getUserByUsername, getUserById, updateUser, deleteUser, updateLastLogin, createInvite, getInvite, isInviteValid, incrementInviteUses } from '../database';
 import { hashPassword, verifyPassword, generateToken } from '../services/auth.service';
 import { queueLlmHubRefreshForUser } from '../services/hubRefresh.service';
 
@@ -163,13 +163,50 @@ router.delete('/delete-account', async (req, res) => {
   }
 });
 
-// Validate invite token
+// Validate invite token — returns rich metadata for the registration UI
 router.get('/invites/:token/validate', async (req, res) => {
   try {
-    const valid = await isInviteValid(req.params.token as string);
-    res.json({ valid });
+    const token = req.params.token as string;
+    const invite = await getInvite(token);
+
+    if (!invite) {
+      return res.json({ valid: false, reason: 'not_found' });
+    }
+
+    // Check expiry
+    if (invite.expires_at) {
+      const expiresAt = typeof invite.expires_at === 'string'
+        ? parseInt(invite.expires_at, 10)
+        : Number(invite.expires_at);
+      if (Date.now() > expiresAt) {
+        return res.json({ valid: false, reason: 'expired' });
+      }
+    }
+
+    // Check use limit
+    if (Number(invite.uses) >= Number(invite.max_uses)) {
+      return res.json({ valid: false, reason: 'used_up' });
+    }
+
+    // Resolve inviter username
+    let inviterUsername: string | null = null;
+    if (invite.created_by) {
+      try {
+        const inviter = await getUserById(invite.created_by);
+        inviterUsername = inviter?.username ?? null;
+      } catch (_) {
+        // Non-fatal — proceed without inviter name
+      }
+    }
+
+    res.json({
+      valid: true,
+      inviterUsername,
+      expiresAt: invite.expires_at ? Number(invite.expires_at) : null,
+      usesLeft: Number(invite.max_uses) - Number(invite.uses),
+    });
   } catch (error) {
-    res.json({ valid: false });
+    res.json({ valid: false, reason: 'error' });
   }
 });
 

@@ -102,6 +102,56 @@ if (fs.existsSync(distPath)) {
     console.warn('[Server] Failed to pre-cache index.html, will read on each request');
   }
 
+  // ── Invite page: inject OG / Twitter card meta tags for social previews ──
+  // Social crawlers don't execute JS, so we inject the meta tags server-side
+  // for /invite/:token before the generic SPA catch-all handles it.
+  app.get('/invite/:token', async (req, res) => {
+    const token = req.params.token;
+    const origin = `${req.protocol}://${req.get('host')}`;
+
+    // Try to resolve inviter name for a personalised preview
+    let inviterName = 'someone';
+    try {
+      const { getInvite, getUserById, isInviteValid } = await import('./database');
+      const valid = await isInviteValid(token);
+      if (valid) {
+        const invite = await getInvite(token);
+        if (invite?.created_by) {
+          const inviter = await getUserById(invite.created_by);
+          if (inviter?.username) inviterName = inviter.username;
+        }
+      }
+    } catch (_) {
+      // Non-fatal — fall back to generic copy
+    }
+
+    const title = `${inviterName} invited you to Aurora`;
+    const description = `Join ${inviterName}'s Aurora music library — your own private, AI-powered music player.`;
+    const imageUrl = `${origin}/apple-touch-icon.png`;
+    const inviteUrl = `${origin}/invite/${token}`;
+
+    const metaInjection = `
+    <meta property="og:type" content="website" />
+    <meta property="og:url" content="${inviteUrl}" />
+    <meta property="og:title" content="${title}" />
+    <meta property="og:description" content="${description}" />
+    <meta property="og:image" content="${imageUrl}" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="${title}" />
+    <meta name="twitter:description" content="${description}" />
+    <meta name="twitter:image" content="${imageUrl}" />
+    <title>${title}</title>`;
+
+    const baseHtml = cachedIndexHtml || (fs.existsSync(path.join(distPath, 'index.html'))
+      ? fs.readFileSync(path.join(distPath, 'index.html'), 'utf8')
+      : null);
+
+    if (!baseHtml) return res.status(500).send('Server error');
+
+    const html = baseHtml.replace('</head>', `${metaInjection}\n  </head>`);
+    res.type('html').send(html);
+  });
+
   // Catch-all route to serve index.html for React SPA routing
   app.get('/{*splat}', (req, res, next) => {
     if (req.path.startsWith('/api')) {
@@ -114,6 +164,7 @@ if (fs.existsSync(distPath)) {
     }
   });
 }
+
 
 // Public runtime config consumed by the client at boot/runtime.
 // This must stay outside JWT auth so PWA-served or cached shells can still
