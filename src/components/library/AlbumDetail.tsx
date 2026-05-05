@@ -11,6 +11,9 @@ import { useAlbumData } from '../../hooks/useAlbumData';
 import { LoveButton } from '../LoveButton';
 import { ContextMenuFrame, ContextMenuHeader, ContextMenuLink, ContextMenuList, ContextMenuPortal } from '../ContextMenu';
 import type { TrackInfo } from '../../utils/fileSystem';
+import { useIsCurrentCollection, useIsCurrentTrack, useNowPlayingState } from '../../hooks/useNowPlaying';
+import { NowPlayingBadge } from '../now-playing/NowPlayingBadge';
+import { NowPlayingBars } from '../now-playing/NowPlayingBars';
 
 import { MoreHorizontal, Play, Clock, ExternalLink, Headphones, BarChart2, Link2, Music2, Calendar, Gauge } from 'lucide-react';
 
@@ -114,6 +117,7 @@ interface AlbumTrackRowProps {
     getArtistLink: (artistName: string) => string | null;
     onPlay: (index: number) => void;
     onContextMenu: (track: TrackInfo, x: number, y: number) => void;
+    playbackState: 'playing' | 'paused' | 'stopped';
 }
 
 const AlbumDiscHeader = memo(({ disc }: { disc: number }) => (
@@ -131,8 +135,10 @@ const AlbumTrackRow = memo(({
     getArtistLink,
     onPlay,
     onContextMenu,
+    playbackState,
 }: AlbumTrackRowProps) => {
     const knownArtistKeys = useKnownArtistKeys();
+    const isCurrent = useIsCurrentTrack(track.id);
     const artistNames = useMemo(() => {
         const raw = Array.isArray(track.artists) && track.artists.length > 0
             ? track.artists
@@ -154,10 +160,14 @@ const AlbumTrackRow = memo(({
                     onPlay(index);
                 }
             }}
-            className="grid grid-cols-[30px_1fr_40px] md:grid-cols-[40px_1fr_100px] gap-2 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 focus-visible:bg-black/5 dark:focus-visible:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-primary)] rounded-lg my-0.5 group"
+            className={`grid grid-cols-[30px_1fr_40px] md:grid-cols-[40px_1fr_100px] gap-2 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 focus-visible:bg-black/5 dark:focus-visible:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-primary)] rounded-lg my-0.5 group ${isCurrent ? 'bg-[var(--color-primary)]/5' : ''}`}
         >
-            <div className="text-center md:text-left text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums">
-                {displayNumber}
+            <div className="flex items-center justify-center md:justify-start text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums">
+                {isCurrent && playbackState !== 'stopped' ? (
+                    <NowPlayingBars state={playbackState === 'playing' ? 'playing' : 'paused'} />
+                ) : (
+                    displayNumber
+                )}
             </div>
             <div className="font-medium truncate text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)] transition-colors min-w-0">
                 <span className="block truncate text-sm md:text-base">{track.title || track.path.split(/[\/\\]/).pop()}</span>
@@ -224,6 +234,8 @@ export const AlbumDetail: React.FC = () => {
     const openContextMenu = usePlayerStore(state => state.openContextMenu);
     const knownArtistKeys = useKnownArtistKeys();
     const [linksMenuOpen, setLinksMenuOpen] = useState(false);
+    const isAlbumPlaying = useIsCurrentCollection({ albumId: albumId ?? undefined });
+    const playbackState = useNowPlayingState();
     const linksButtonRef = useRef<HTMLButtonElement>(null);
     const trackListRef = useRef<HTMLDivElement>(null);
 
@@ -418,7 +430,12 @@ export const AlbumDetail: React.FC = () => {
                     {/* Release type label — dynamic */}
                     <div className="font-semibold text-sm tracking-wider uppercase text-[var(--color-primary)]">{releaseType}</div>
 
-                    <h1 className="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight my-2 leading-tight text-[var(--color-text-primary)] line-clamp-2" title={albumTitle}>{albumTitle}</h1>
+                    <div className="flex flex-wrap items-center gap-3 my-2">
+                        <h1 className="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight leading-tight text-[var(--color-text-primary)] line-clamp-2" title={albumTitle}>{albumTitle}</h1>
+                        {isAlbumPlaying && playbackState !== 'stopped' && (
+                            <NowPlayingBadge state={playbackState === 'playing' ? 'playing' : 'paused'} className="self-center shrink-0" />
+                        )}
+                    </div>
 
                     <div className="text-base md:text-xl text-[var(--color-text-secondary)] flex flex-wrap justify-center md:justify-start items-center gap-2 mb-3 w-full">
                         {headerArtists.map((a, i) => {
@@ -608,6 +625,7 @@ export const AlbumDetail: React.FC = () => {
                                                 getArtistLink={getArtistLink}
                                                 onPlay={handlePlayTrack}
                                                 onContextMenu={handleTrackContextMenu}
+                                                playbackState={playbackState}
                                             />
                                         )}
                                     </div>
@@ -626,6 +644,7 @@ export const AlbumDetail: React.FC = () => {
                                 getArtistLink={getArtistLink}
                                 onPlay={handlePlayTrack}
                                 onContextMenu={handleTrackContextMenu}
+                                playbackState={playbackState}
                             />
                         ))
                     )}

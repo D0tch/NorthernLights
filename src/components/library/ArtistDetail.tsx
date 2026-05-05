@@ -15,6 +15,9 @@ import { formatTime } from '../../utils/formatTime';
 import { ExternalLink, Globe, Users, Mic2, Calendar, Sparkles, Music2, Clock, BookOpen, Play, Headphones, Link2, Disc3, Radio } from 'lucide-react';
 import { ContextMenuFrame, ContextMenuHeader, ContextMenuLink, ContextMenuList, ContextMenuPortal } from '../ContextMenu';
 import { useArtistConcerts, OnTourSticker, UpcomingShows } from './ArtistConcerts';
+import { useIsCurrentCollection, useNowPlayingState } from '../../hooks/useNowPlaying';
+import { NowPlayingBadge } from '../now-playing/NowPlayingBadge';
+import { NowPlayingBars } from '../now-playing/NowPlayingBars';
 
 // ─── Link label helpers ───────────────────────────────────────────────────────
 
@@ -245,6 +248,9 @@ export const ArtistDetail: React.FC = () => {
     const [similarArtistsLoading, setSimilarArtistsLoading] = useState(false);
     const [radioLoading, setRadioLoading] = useState(false);
     const linksButtonRef = useRef<HTMLButtonElement>(null);
+    const isArtistPlaying = useIsCurrentCollection({ artistId: artistId ?? undefined });
+    const playbackState = useNowPlayingState();
+    const currentTrackId = usePlayerStore((s) => s.currentIndex !== null ? s.playlist[s.currentIndex]?.id ?? null : null);
 
     const handlePlayArtistRadio = async () => {
         if (!artistId || radioLoading) return;
@@ -567,6 +573,9 @@ export const ArtistDetail: React.FC = () => {
                                 {artistName}
                             </h1>
                             <OnTourSticker visible={onTour} />
+                            {isArtistPlaying && playbackState !== 'stopped' && (
+                                <NowPlayingBadge state={playbackState === 'playing' ? 'playing' : 'paused'} className="self-end mb-1.5 shrink-0" />
+                            )}
                         </div>
 
                         {/* Band members */}
@@ -782,15 +791,21 @@ export const ArtistDetail: React.FC = () => {
                         </div>
 
                         <div className="space-y-0.5">
-                            {popularLibraryTracks.slice(0, popularExpanded ? 10 : 5).map(({ track, rank, playcount, listeners }, index) => (
+                            {popularLibraryTracks.slice(0, popularExpanded ? 10 : 5).map(({ track, rank, playcount, listeners }, index) => {
+                                const isCurrentPopular = track.id === currentTrackId;
+                                return (
                                 <div
                                     key={track.id}
                                     onClick={() => handlePlayPopularTracks(index)}
-                                    className="grid grid-cols-[24px_40px_minmax(0,1fr)] md:grid-cols-[34px_52px_minmax(0,1.7fr)_minmax(160px,1fr)_120px_56px] gap-2 md:gap-3 px-1.5 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
+                                    className={`grid grid-cols-[24px_40px_minmax(0,1fr)] md:grid-cols-[34px_52px_minmax(0,1.7fr)_minmax(160px,1fr)_120px_56px] gap-2 md:gap-3 px-1.5 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group ${isCurrentPopular ? 'bg-[var(--color-primary)]/5' : ''}`}
                                 >
                                     {/* Rank */}
-                                    <div className="text-center md:text-left text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums">
-                                        {rank}
+                                    <div className="flex items-center justify-center md:justify-start text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums">
+                                        {isCurrentPopular && playbackState !== 'stopped' ? (
+                                            <NowPlayingBars state={playbackState === 'playing' ? 'playing' : 'paused'} />
+                                        ) : (
+                                            rank
+                                        )}
                                     </div>
 
                                     {/* Art */}
@@ -837,7 +852,8 @@ export const ArtistDetail: React.FC = () => {
                                         {formatTime(track.duration, '--:--')}
                                     </div>
                                 </div>
-                            ))}
+                                );
+                            })}
                         </div>
 
                         {popularLibraryTracks.length > 5 && (

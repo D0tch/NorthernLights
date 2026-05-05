@@ -41,6 +41,9 @@ import { parseArtistsForDisplay } from '../../utils/artistUtils';
 import { useKnownArtistKeys } from '../../hooks/useKnownArtistKeys';
 import type { TrackInfo } from '../../utils/fileSystem';
 import { getSuggestedPlaylistTracks } from '../../utils/playlistSuggestions';
+import { useNowPlayingState } from '../../hooks/useNowPlaying';
+import { NowPlayingBadge } from '../now-playing/NowPlayingBadge';
+import { NowPlayingBars } from '../now-playing/NowPlayingBars';
 
 function formatDuration(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
@@ -132,6 +135,8 @@ interface PlaylistTrackRowProps {
   onContextMenu: (track: TrackInfo, x: number, y: number, playlistId: string, playlistTrackIndex: number) => void;
   playlistId: string;
   readOnly?: boolean;
+  currentTrackId: string | null;
+  playbackState: 'playing' | 'paused' | 'stopped';
 }
 
 const PlaylistTrackRow = memo(({
@@ -145,9 +150,12 @@ const PlaylistTrackRow = memo(({
   onContextMenu,
   playlistId,
   readOnly = false,
+  currentTrackId,
+  playbackState,
 }: PlaylistTrackRowProps) => {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id, disabled: readOnly });
   const knownArtistKeys = useKnownArtistKeys();
+  const isCurrent = track.id === currentTrackId;
   const artistNames = useMemo(() => {
     const raw = Array.isArray(track.artists) && track.artists.length > 0
       ? track.artists
@@ -164,13 +172,17 @@ const PlaylistTrackRow = memo(({
         opacity: isDragging ? 0.55 : 1,
         zIndex: isDragging ? 10 : 1,
       }}
-      className="grid grid-cols-[30px_44px_minmax(0,1fr)_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group"
+      className={`grid grid-cols-[30px_44px_minmax(0,1fr)_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group ${isCurrent ? 'bg-[var(--color-primary)]/5' : ''}`}
     >
       <div
-        className="text-center md:text-left text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums"
+        className="flex items-center justify-center md:justify-start text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums"
         onClick={() => onPlay(index)}
       >
-        {index + 1}
+        {isCurrent && playbackState !== 'stopped' ? (
+          <NowPlayingBars state={playbackState === 'playing' ? 'playing' : 'paused'} />
+        ) : (
+          index + 1
+        )}
       </div>
 
       <div className="w-11 h-11 md:w-13 md:h-13 shrink-0 overflow-hidden rounded-lg md:rounded-xl border border-black/10 dark:border-white/10 bg-black/10 dark:bg-white/10">
@@ -310,6 +322,8 @@ export const PlaylistDetail: React.FC = () => {
   const fetchPlaylistsFromServer = usePlayerStore((state) => state.fetchPlaylistsFromServer);
   const isPlaylistsLoading = usePlayerStore((state) => state.isPlaylistsLoading);
   const getAuthHeader = usePlayerStore((state) => state.getAuthHeader);
+  const currentTrackId = usePlayerStore((state) => state.currentIndex !== null ? state.playlist[state.currentIndex]?.id ?? null : null);
+  const playbackState = useNowPlayingState();
 
   const playlist = useMemo(
     () => playlists.find((entry) => entry.id === playlistId),
@@ -520,14 +534,18 @@ export const PlaylistDetail: React.FC = () => {
         onContextMenu={openContextMenu}
         playlistId={playlist.id}
         readOnly={readOnly}
+        currentTrackId={currentTrackId}
+        playbackState={playbackState}
       />
     );
   }, [
+    currentTrackId,
     getArtistLink,
     handleMoveTrack,
     handlePlayFromIndex,
     isSystemPlaylist,
     openContextMenu,
+    playbackState,
     playlist,
     playlistTracks.length,
     sortableItems,
@@ -617,9 +635,14 @@ export const PlaylistDetail: React.FC = () => {
                   : `Playlist by ${currentUser?.username || 'You'}`}
             </div>
 
-            <h1 className="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight my-2 leading-tight text-[var(--color-text-primary)] line-clamp-2" title={playlist.title}>
-              {playlist.title}
-            </h1>
+            <div className="flex flex-wrap items-center gap-3 my-2">
+              <h1 className="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight leading-tight text-[var(--color-text-primary)] line-clamp-2" title={playlist.title}>
+                {playlist.title}
+              </h1>
+              {currentTrackId && playlistTracks.some(t => t.id === currentTrackId) && playbackState !== 'stopped' && (
+                <NowPlayingBadge state={playbackState === 'playing' ? 'playing' : 'paused'} className="self-center shrink-0" />
+              )}
+            </div>
 
             <h2 className="text-xl text-[var(--color-text-secondary)] flex flex-wrap justify-center md:justify-start items-center gap-2 mb-2 w-full truncate">
               <span className="shrink-0 text-sm md:text-xl text-[var(--color-text-muted)]">
