@@ -1,12 +1,14 @@
 import { usePlayerStore } from '../store/index';
-import { useState, useEffect } from 'react';
-import { X, Play, Pause, SkipBack, SkipForward, Shuffle, Repeat, Repeat1, Infinity as InfinityIcon, ListMusic, Cast, FileText, Speaker } from 'lucide-react';
+import { useState, useEffect, useMemo, type CSSProperties } from 'react';
+import { X, Infinity as InfinityIcon, ListMusic, FileText, Speaker } from 'lucide-react';
 import ProgressBar from './ProgressBar';
 import { useSwipe } from '../hooks/useSwipe';
 import { castManager } from '../utils/CastManager';
 import { LyricsPanel } from './LyricsPanel';
 import { LoveButton } from './LoveButton';
 import { CastButton } from './cast/CastButton';
+import { IconNext, IconPause, IconPlay, IconPrev, IconRepeatAll, IconRepeatOne, IconShuffle } from './icons/PlayerIcons';
+import { useDominantColor } from '../hooks/useDominantColor';
 
 interface MobileNowPlayingProps {
   onClose: () => void;
@@ -37,8 +39,12 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
   const setVolume = usePlayerStore((s) => s.setVolume);
 
   const [castConnected, setCastConnected] = useState(castManager.isConnected());
-  const [castDeviceName, setCastDeviceName] = useState('');
+  const [castDeviceName, setCastDeviceName] = useState(() => castManager.isConnected() ? castManager.getCastDeviceName() : '');
   const [showLyrics, setShowLyrics] = useState(false);
+  const currentTrack = currentIndex !== null ? playlist[currentIndex] : null;
+  const colorSeedTracks = useMemo(() => currentTrack ? [currentTrack] : [], [currentTrack]);
+  const { bgColor } = useDominantColor(colorSeedTracks, { quality: 12 });
+
   useEffect(() => {
     const unsubscribe = castManager.addStateChangeListener((state) => {
       const connected = state === 'CONNECTED';
@@ -52,8 +58,11 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
     return unsubscribe;
   }, []);
 
-  const currentTrack = currentIndex !== null ? playlist[currentIndex] : null;
   const isPlaying = playbackState === 'playing';
+  const trackIdentity = currentTrack?.queueEntryId || currentTrack?.id || currentTrack?.path || 'current-track';
+  const mobileNowStyle = {
+    '--mobile-now-art-color': bgColor,
+  } as CSSProperties;
 
   const handlePlayPause = () => {
     if (playlist.length === 0) return;
@@ -70,31 +79,50 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
   if (!currentTrack) return null;
 
   return (
-    <div className="md:hidden fixed inset-0 z-50 flex flex-col bg-[var(--color-bg-primary)] animate-slide-up">
+    <div
+      className="mobile-now-playing-shell md:hidden animate-slide-up"
+      data-playing={isPlaying}
+      data-buffering={isBuffering}
+      style={mobileNowStyle}
+    >
+      {currentTrack.artUrl && (
+        <img
+          src={currentTrack.artUrl}
+          alt=""
+          aria-hidden="true"
+          className="mobile-now-playing-ambient"
+        />
+      )}
+
       {/* Safe area top spacer */}
       <div style={{ height: 'var(--safe-area-top)' }} />
 
       {/* Header */}
-      <div className="flex items-center justify-between px-5 py-3">
+      <div className="mobile-now-playing-header">
         <button
+          type="button"
           onClick={onClose}
-          className="w-9 h-9 flex items-center justify-center rounded-full bg-white/10 text-[var(--color-text-secondary)] active:scale-90 transition-transform"
+          className="mobile-player-control-btn mobile-player-control-btn-sm"
+          aria-label="Close now playing"
         >
           <X size={18} />
         </button>
-        <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Now Playing</span>
+        <div className="mobile-now-playing-heading">
+          <span className="mobile-now-playing-grabber" aria-hidden="true" />
+          <span>Now Playing</span>
+        </div>
         {currentTrack ? (
-          <LoveButton track={currentTrack} size={20} className="w-9 h-9 bg-white/10" />
+          <LoveButton track={currentTrack} size={18} className="mobile-player-control-btn mobile-player-control-btn-sm mobile-player-love-btn" />
         ) : (
           <div className="w-9" />
         )}
       </div>
 
       {/* Scrollable content */}
-      <div ref={swipeRef} className="flex-1 flex flex-col items-center justify-center px-8 overflow-hidden">
+      <div ref={swipeRef} className="mobile-now-playing-content">
         {/* Album Art or Lyrics */}
         {showLyrics ? (
-          <div className="w-full max-w-sm flex-shrink-0 bg-[var(--glass-bg)] border border-[var(--glass-border)] rounded-2xl p-5">
+          <div className="mobile-now-lyrics-card" key={`lyrics-${trackIdentity}`}>
             <LyricsPanel
               trackName={currentTrack.title || currentTrack.path.split(/[\\/]/).pop() || ''}
               artistName={currentTrack.artist || ''}
@@ -103,7 +131,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
             />
           </div>
         ) : (
-          <div className="w-56 h-56 sm:w-64 sm:h-64 rounded-2xl overflow-hidden bg-[var(--color-surface)] border border-[var(--glass-border)] shadow-2xl flex-shrink-0">
+          <div className="mobile-now-art" key={`art-${trackIdentity}`}>
             {currentTrack.artUrl ? (
               <img
                 src={currentTrack.artUrl}
@@ -112,37 +140,37 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
               />
             ) : (
               <div className="w-full h-full flex items-center justify-center text-[var(--color-text-muted)]">
-                <Play size={48} />
+                <IconPlay />
               </div>
             )}
           </div>
         )}
 
         {/* Track Info */}
-        <div className="mt-8 text-center w-full max-w-sm">
-          <h2 className="text-xl font-bold text-[var(--color-text-primary)] truncate">
+        <div className="mobile-now-track-info" key={`info-${trackIdentity}`}>
+          <h2 className="mobile-now-title">
             {currentTrack.title || currentTrack.path.split(/[\\/]/).pop()}
           </h2>
-          <p className="text-sm text-[var(--color-text-muted)] mt-1 truncate">
+          <p className="mobile-now-artist">
             {currentTrack.artist || 'Unknown Artist'}
           </p>
           {currentTrack.album && (
-            <p className="text-xs text-[var(--aurora-extra-glow)] mt-0.5 truncate">
+            <p className="mobile-now-album">
               {currentTrack.album}
             </p>
           )}
           {castConnected && (
-            <div className="flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-full bg-[var(--color-primary)]/10 border border-[var(--color-primary)]/20">
-              <Cast size={14} className="text-[var(--color-primary)]" style={{ filter: 'drop-shadow(0 0 3px var(--color-primary))' }} />
-              <span className="text-xs text-[var(--color-primary)] font-medium">
+            <div className="mobile-now-state-chip mobile-now-state-chip-active">
+              <span className="mobile-now-state-dot" aria-hidden="true" />
+              <span>
                 Casting{castDeviceName ? ` to ${castDeviceName}` : ''}
               </span>
             </div>
           )}
           {!castConnected && audioOutputActive && (
-            <div className="inline-flex items-center gap-1.5 mt-3 px-3 py-1.5 rounded-full bg-[var(--color-primary)]/10 border border-[var(--color-primary)]/20 max-w-full">
-              <Speaker size={14} className="text-[var(--color-primary)]" style={{ filter: 'drop-shadow(0 0 3px var(--color-primary))' }} />
-              <span className="text-xs text-[var(--color-primary)] font-medium truncate">
+            <div className="mobile-now-state-chip mobile-now-state-chip-active">
+              <Speaker size={14} aria-hidden="true" />
+              <span className="truncate">
                 Playing on {audioOutputDeviceLabel || 'selected output'}
               </span>
             </div>
@@ -150,13 +178,13 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
         </div>
 
         {/* Progress Bar */}
-        <div className="w-full max-w-sm mt-8">
+        <div className="mobile-now-progress">
           <ProgressBar />
         </div>
 
         {castConnected && (
-          <div className="w-full max-w-sm mt-5 rounded-2xl border border-[var(--glass-border)] bg-white/[0.035] dark:bg-white/[0.045] px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
-            <div className="flex items-center justify-between text-[0.7rem] font-semibold uppercase tracking-[0.16em] text-[var(--color-text-muted)]">
+          <div className="mobile-now-volume">
+            <div className="mobile-now-volume-label">
               <span>Cast volume</span>
               <span className="text-[var(--color-primary)]">{Math.round(volume * 100)}%</span>
             </div>
@@ -167,100 +195,96 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
               step="0.01"
               value={volume}
               onChange={(event) => setVolume(parseFloat(event.target.value))}
-              className="mt-3 w-full h-1.5 appearance-none rounded-full bg-black/10 outline-none accent-[var(--color-primary)] dark:bg-white/10"
+              className="mobile-now-volume-slider"
               aria-label="Cast volume"
             />
           </div>
         )}
 
         {/* Transport Controls */}
-        <div className="flex items-center justify-center gap-6 mt-6">
+        <div className="mobile-now-transport">
           <button
+            type="button"
             onClick={toggleShuffle}
-            aria-label="Toggle shuffle"
-            className="w-10 h-10 flex items-center justify-center rounded-full text-[var(--color-text-muted)] active:scale-90 transition-ui"
-            style={{ opacity: shuffle ? 1 : 0.4 }}
+            aria-label={shuffle ? 'Turn shuffle off' : 'Turn shuffle on'}
+            aria-pressed={shuffle}
+            className={`mobile-player-control-btn mobile-player-control-btn-md ${shuffle ? 'is-active' : ''}`}
           >
-            <Shuffle size={20} />
+            <IconShuffle />
           </button>
 
           <button
+            type="button"
             onClick={prevTrack}
             aria-label="Previous track"
-            className="w-12 h-12 flex items-center justify-center rounded-full text-[var(--color-text-primary)] active:scale-90 transition-transform"
+            className="mobile-player-control-btn mobile-player-control-btn-lg"
           >
-            <SkipBack size={24} fill="currentColor" />
+            <IconPrev />
           </button>
 
           <button
+            type="button"
             onClick={handlePlayPause}
             aria-label={isBuffering ? 'Loading' : isPlaying ? 'Pause' : 'Play'}
-            className="w-16 h-16 flex items-center justify-center rounded-full bg-[var(--color-primary)] text-white shadow-lg active:scale-90 transition-transform"
-            style={{
-              background: 'var(--aurora-play-gradient)',
-              border: 'var(--aurora-play-border)',
-              boxShadow: 'var(--aurora-play-glow)',
-            }}
+            className="mobile-player-play-btn mobile-player-play-btn-lg"
             disabled={isBuffering}
           >
             {isBuffering ? (
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" style={{ animation: 'spin 0.8s linear infinite' }}>
+              <svg className="mobile-player-spinner" width="28" height="28" viewBox="0 0 24 24" fill="none">
                 <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" opacity="0.25" />
                 <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
               </svg>
-            ) : isPlaying ? <Pause size={28} /> : <Play size={28} fill="currentColor" />}
+            ) : isPlaying ? <IconPause /> : <IconPlay />}
           </button>
 
           <button
+            type="button"
             onClick={() => void nextTrack()}
             aria-label="Next track"
-            className="w-12 h-12 flex items-center justify-center rounded-full text-[var(--color-text-primary)] active:scale-90 transition-transform"
+            className="mobile-player-control-btn mobile-player-control-btn-lg"
           >
-            <SkipForward size={24} fill="currentColor" />
+            <IconNext />
           </button>
 
           <button
+            type="button"
             onClick={cycleRepeat}
-            aria-label="Cycle repeat"
-            className="w-10 h-10 flex items-center justify-center rounded-full text-[var(--color-text-muted)] active:scale-90 transition-ui"
-            style={{ opacity: repeat === 'none' ? 0.4 : 1 }}
+            aria-label={repeat === 'one' ? 'Repeat one is on. Cycle repeat' : repeat === 'all' ? 'Repeat all is on. Cycle repeat' : 'Repeat is off. Cycle repeat'}
+            aria-pressed={repeat !== 'none'}
+            className={`mobile-player-control-btn mobile-player-control-btn-md ${repeat !== 'none' ? 'is-active' : ''}`}
           >
-            {repeat === 'one' ? <Repeat1 size={20} /> : <Repeat size={20} />}
+            {repeat === 'one' ? <IconRepeatOne /> : <IconRepeatAll />}
           </button>
         </div>
 
         {/* Secondary controls row */}
-        <div className="flex items-center justify-center gap-4 mt-6">
+        <div className="mobile-now-secondary-controls">
           <button
+            type="button"
             onClick={() => { setIsSidebarOpen(true); }}
             aria-label="Open play queue"
-            className="w-9 h-9 flex items-center justify-center rounded-full text-[var(--color-text-muted)] active:scale-90 transition-transform"
+            className="mobile-player-control-btn mobile-player-control-btn-sm"
           >
             <ListMusic size={20} />
           </button>
 
           <button
+            type="button"
             onClick={() => setShowLyrics(!showLyrics)}
-            aria-label="Toggle lyrics"
-            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border border-[var(--glass-border)] transition-ui"
-            style={{
-              opacity: showLyrics ? 1 : 0.4,
-              color: showLyrics ? 'var(--color-primary)' : 'var(--color-text-muted)',
-            }}
+            aria-label={showLyrics ? 'Hide lyrics' : 'Show lyrics'}
+            aria-pressed={showLyrics}
+            className={`mobile-player-pill-btn ${showLyrics ? 'is-active' : ''}`}
           >
             <FileText size={16} />
             Lyrics
           </button>
 
           <button
+            type="button"
             onClick={toggleInfinityMode}
-            aria-label="Toggle Infinity Mode"
-            className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-full border border-[var(--glass-border)] transition-ui"
-            style={{
-              opacity: isInfinityMode ? 1 : 0.4,
-              color: isInfinityMode ? 'var(--color-primary)' : 'var(--color-text-muted)',
-              filter: isInfinityMode ? 'drop-shadow(0 0 4px var(--color-primary))' : 'none',
-            }}
+            aria-label={isInfinityMode ? 'Turn Infinity Mode off' : 'Turn Infinity Mode on'}
+            aria-pressed={isInfinityMode}
+            className={`mobile-player-pill-btn ${isInfinityMode ? 'is-active' : ''}`}
           >
             <InfinityIcon size={16} />
             Infinity
@@ -268,21 +292,18 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
 
           {audioOutputSupported && (
             <button
+              type="button"
               onClick={() => { void selectAudioOutput(); }}
               disabled={castConnected || audioOutputSelecting}
               aria-label={audioOutputActive ? `Playing on ${audioOutputDeviceLabel || 'selected output'}` : 'Choose audio output'}
-              className="w-10 h-10 flex items-center justify-center rounded-full active:scale-90 transition-ui disabled:opacity-40"
-              style={{
-                color: audioOutputActive ? 'var(--color-primary)' : 'var(--color-text-muted)',
-                filter: audioOutputActive ? 'drop-shadow(0 0 4px var(--color-primary))' : 'none',
-              }}
+              className={`mobile-player-control-btn mobile-player-control-btn-sm ${audioOutputActive ? 'is-active' : ''}`}
               title={audioOutputActive ? `Playing on ${audioOutputDeviceLabel || 'selected output'}` : 'Choose audio output'}
             >
               <Speaker size={22} />
             </button>
           )}
 
-          <CastButton showIntro={false} />
+          <CastButton size="sm" showIntro={false} className="mobile-now-cast-control" />
         </div>
       </div>
 

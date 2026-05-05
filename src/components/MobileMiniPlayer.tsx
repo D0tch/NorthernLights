@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { usePlayerStore } from '../store/index';
-import { Play, Pause, SkipForward, Speaker } from 'lucide-react';
+import { Play, Speaker } from 'lucide-react';
 import { useSwipe } from '../hooks/useSwipe';
 import MobileNowPlaying from './MobileNowPlaying';
 import { CastButton } from './cast/CastButton';
+import { castManager } from '../utils/CastManager';
+import { IconNext, IconPause, IconPlay } from './icons/PlayerIcons';
 
 const MobileMiniPlayer = () => {
   const playlist = usePlayerStore((s) => s.playlist);
@@ -26,6 +28,15 @@ const MobileMiniPlayer = () => {
 
   const [expanded, setExpanded] = useState(false);
   const [swipeDir, setSwipeDir] = useState<'left' | 'right' | null>(null);
+  const [castDeviceName, setCastDeviceName] = useState(castManager.getCastDeviceName());
+
+  useEffect(() => {
+    const unsubscribe = castManager.addStateChangeListener((state) => {
+      setCastDeviceName(state === 'CONNECTED' ? castManager.getCastDeviceName() : '');
+    });
+
+    return unsubscribe;
+  }, []);
 
   const handlePlayPause = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -43,6 +54,13 @@ const MobileMiniPlayer = () => {
   const handleAudioOutput = (e: React.MouseEvent) => {
     e.stopPropagation();
     void selectAudioOutput();
+  };
+
+  const handleExpandKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    event.preventDefault();
+    setExpanded(true);
   };
 
   const flashSwipe = (dir: 'left' | 'right') => {
@@ -64,6 +82,8 @@ const MobileMiniPlayer = () => {
 
   if (!currentTrack) return null;
 
+  const secondaryLabel = castConnected ? (castDeviceName || 'Cast device') : (currentTrack.artist || 'Unknown Artist');
+
   return (
     <>
       {expanded && <MobileNowPlaying onClose={() => setExpanded(false)} />}
@@ -77,11 +97,15 @@ const MobileMiniPlayer = () => {
       >
         {/* Tap area to expand — everything except the control buttons */}
         <div
-          className="flex items-center gap-3 px-4 py-2.5 active:bg-white/5 transition-colors"
+          className="mobile-mini-player-row"
           onClick={() => setExpanded(true)}
+          onKeyDown={handleExpandKeyDown}
+          role="button"
+          tabIndex={0}
+          aria-label={`Open now playing for ${currentTrack.title || 'current track'}`}
         >
           {/* Album Art */}
-          <div className="w-10 h-10 rounded-lg flex-shrink-0 overflow-hidden bg-[var(--color-surface)] border border-[var(--glass-border)]">
+          <div className="mobile-mini-art">
             {currentTrack.artUrl ? (
               <img
                 src={currentTrack.artUrl}
@@ -99,7 +123,7 @@ const MobileMiniPlayer = () => {
           {/* Artist + Title */}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-1.5">
-              <span className="text-sm font-medium text-[var(--color-text-primary)] truncate leading-tight">
+              <span className="mobile-mini-title">
                 {currentTrack.title || currentTrack.path.split(/[\\/]/).pop()}
               </span>
               {!castConnected && audioOutputSupported && (
@@ -118,36 +142,42 @@ const MobileMiniPlayer = () => {
                 </button>
               )}
             </div>
-            <div className="text-xs text-[var(--color-text-muted)] truncate leading-tight mt-0.5">
-              {currentTrack.artist || 'Unknown Artist'}
+            <div
+              className={`text-xs truncate leading-tight mt-0.5 ${
+                castConnected ? 'text-[var(--color-primary)]' : 'text-[var(--color-text-muted)]'
+              }`}
+            >
+              {secondaryLabel}
             </div>
           </div>
 
           {/* Controls — stop propagation so they don't trigger expand */}
-          <div className="flex items-center gap-1 flex-shrink-0">
+          <div className="flex items-center gap-1.5 flex-shrink-0">
+            <div onClick={(event) => event.stopPropagation()}>
+              <CastButton size="sm" showIntro={false} className="mobile-mini-cast-control" />
+            </div>
             <button
+              type="button"
               onClick={handlePlayPause}
               aria-label={isBuffering ? 'Loading' : isPlaying ? 'Pause' : 'Play'}
-              className="w-10 h-10 flex items-center justify-center rounded-full text-[var(--color-text-primary)] active:scale-90 transition-transform"
+              className="mobile-player-play-btn mobile-player-play-btn-sm"
               disabled={isBuffering}
             >
               {isBuffering ? (
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" style={{ animation: 'spin 0.8s linear infinite' }}>
+                <svg className="mobile-player-spinner" width="22" height="22" viewBox="0 0 24 24" fill="none">
                   <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" opacity="0.25" />
                   <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
                 </svg>
-              ) : isPlaying ? <Pause size={22} /> : <Play size={22} fill="currentColor" />}
+              ) : isPlaying ? <IconPause /> : <IconPlay />}
             </button>
             <button
+              type="button"
               onClick={handleNext}
               aria-label="Next track"
-              className="w-10 h-10 flex items-center justify-center rounded-full text-[var(--color-text-secondary)] active:scale-90 transition-transform"
+              className="mobile-player-control-btn mobile-player-control-btn-sm"
             >
-              <SkipForward size={20} />
+              <IconNext />
             </button>
-            <div onClick={(event) => event.stopPropagation()}>
-              <CastButton size="sm" showIntro={false} />
-            </div>
           </div>
         </div>
       </div>
