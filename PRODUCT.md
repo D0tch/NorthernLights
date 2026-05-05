@@ -1,219 +1,119 @@
-# Product.md — Aurora Player
+# Product
 
-Companion to [design.md](./design.md). Where `design.md` describes *how Aurora looks*, this document describes *what Aurora is, who it's for, and what we will and won't build*. Feature inventory lives in [README.md](./README.md), [docs/core_features.md](./docs/core_features.md), and [docs/nice_to_have.md](./docs/nice_to_have.md) — this doc explains the reasoning that lets us decide which features ship.
+## Register
 
----
+product
 
-## 1. One-line Product Definition
+## Users
 
-**Aurora is a self-hosted music player that treats your local library as the canon and uses AI to make it endlessly listenable.**
+Aurora is built for people who own their music library and want it to feel alive again.
 
-Every word is load-bearing:
+The canonical user owns thousands to hundreds of thousands of local tracks across mixed formats, runs or understands a home server, and listens across desktop, phone, Chromecast, speakers, and TV. They may have tried Plexamp, Navidrome, Jellyfin, Subsonic-style apps, or Roon, but want stronger library-native discovery and a more premium daily listening surface.
 
-- **Self-hosted** — the user runs the server. We never host their music.
-- **Music player** — not a media server (no video), not a streaming service (no remote catalog), not an audiophile DSP suite.
-- **Local library as the canon** — every recommendation, playlist, search, and similarity result is computed *against the user's files*. The library is not a seed for external APIs; it is the universe.
-- **AI to make it endlessly listenable** — the differentiator. Plex/Jellyfin/Subsonic browse a library; Aurora *animates* one.
+Secondary users are household members or invited listeners. They should get a clean music app, not an admin console. They benefit from the same playback, queue, Cast, and discovery work, but the product is not optimized around multi-tenant operations.
 
-If a feature proposal contradicts that sentence, it's out of scope.
+Aurora is not for users who primarily want a cloud streaming catalog, social music feeds, DJ tooling, generic media-server browsing, native mobile apps, or deep audiophile DSP.
 
----
+## Product Purpose
 
-## 2. Audience
+Aurora is a self-hosted music player for owned files. It scans and enriches a local library, streams it reliably through browser and Cast-compatible HLS, and uses local metadata, audio analysis, genre intelligence, and optional AI to make the user's own collection feel endless.
 
-Aurora is built for one user shape. Designing for everyone produces a worse product than designing for someone.
+The product exists to combine ownership with flow. Streaming apps made listening feel contextual and immediate; self-hosted music apps preserved ownership but often shipped file-browser UX. Aurora should make a large owned library feel as easy to start, continue, and rediscover as a premium streaming app, without giving up control of files or data.
 
-### The canonical user
+Success looks like this:
 
-- Owns 5,000–500,000 tracks across mixed formats (FLAC, MP3, OGG, WMA legacy).
-- Has run a home server before — Plex, Jellyfin, Nextcloud, Home Assistant, NAS.
-- Has tried Navidrome, Airsonic, Plexamp, or Roon, and was either bored by the UI or constrained by the recommendation quality.
-- Listens daily, across desktop, phone, and Chromecast/TV.
-- Wants ownership: no streaming-service algorithm deciding what they hear.
-- Cares about how the app *feels*, not just what it does. Will judge a music player on typography.
+- The Hub becomes the natural starting point for listening, not just a library index.
+- The user can move between desktop, mobile, Chromecast, and TV without losing playback control.
+- Queue, Cast, and preloading behavior feel stable enough that the user stops thinking about transport.
+- Recommendations only surface music the user owns, unless an enrichment surface clearly says otherwise.
+- The interface feels intentionally designed, not like a generic self-hosted admin tool.
 
-### Secondary users (covered, not designed for)
+## Brand Personality
 
-- Family members of the canonical user, accessing via invite-issued accounts.
-- Audio collectors with very large hi-res libraries (FLAC/ALAC/WAV) who need format breadth more than ML.
-- Friends of the canonical user, listening via shared link or invite, on phone PWAs.
+Aurora is premium, calm, and luminous.
 
-### Explicitly not the audience
+The product voice is factual and quiet. It should feel confident without hype, technical without leaking implementation detail, and polished without becoming decorative. Copy should use direct music language: track, album, artist, genre, queue, playlist, Hub, Cast, receiver.
 
-- **Streaming-service users** who don't own files. They have Spotify; we won't out-feature it.
-- **Audiophiles seeking DSP / room correction / parametric EQ.** That's Roon's lane.
-- **Enterprises / multi-tenant deployments.** Aurora is single-server, single-household.
-- **Mobile-only DJs / mixers.** Different product entirely.
-- **People who want a generic "media server".** Aurora is music, not movies. Use Jellyfin alongside it.
+The brand metaphor is the Northern Lights: dark space, soft glow, controlled color, and motion that feels atmospheric rather than flashy. Album art and playback state should carry emotional weight. Chrome should support listening, not compete with it.
 
----
+Reference traits:
 
-## 3. The Bet (Positioning)
+- Apple Music for editorial hierarchy and confidence.
+- iOS Air glass for frosted light-mode material.
+- Roon and Sonos S2 for premium playback trust.
+- High-end TV music UIs for the Cast receiver.
 
-The streaming era taught two generations that listening is *flow* — endless, contextual, mood-driven. The self-hosted era preserved *ownership* but mostly delivered file-browser UX: artists, albums, folders, play. Aurora is the bet that **flow and ownership are not opposed** — that you can have Spotify-quality listening over your own files, with no telemetry, no algorithmic agenda, no rented catalog.
+## Anti-references
 
-**The wager:** A user with 50,000 tracks, given the right recommendation engine, has a richer listening universe than the average Spotify subscriber has access to. They just need an interface that surfaces it.
+Aurora must not look or behave like:
 
-That bet drives every architectural decision:
+- A Spotify clone with flat green buttons and generic streaming-app layout.
+- A Plex, Jellyfin, or file-server admin panel with media thumbnails attached.
+- A Material UI dashboard with dense cards, hard dividers, and default controls.
+- A neon cyberpunk interface where glow becomes noise.
+- A theming playground where every color, font, and density choice is exposed.
+- A default Google Cast receiver or a Cast-only parallel player.
+- A stack of duplicate playback surfaces, mini players, status banners, and modals that all describe the same session.
 
-- **21-dimensional similarity** (8D acoustic + 13D MFCC) — because shallow tag matching produces the same five albums.
-- **MusicBrainz hierarchical genre ontology** — because flat genre lists treat "death metal" and "ambient" as siblings of "rock".
-- **Library-relative LLM compilation** — because asking an LLM for "songs like X" is useless if it returns songs the user doesn't own.
-- **Hub playlists** — because the home screen should always have a reason to start playing *right now*.
-- **Glassmorphism + aurora aesthetic** — because the felt experience of opening the app matters as much as the feature checklist.
+## Design Principles
 
-We are not competing on feature parity with Plex Music or Navidrome. We are competing on whether opening Aurora at 9pm on a Tuesday makes you want to listen for two hours.
+### 1. The Library Is The Canon
 
----
+Every recommendation, search result, queue action, and Hub playlist starts from music the user owns. External providers enrich the owned library; they do not redefine it.
 
-## 4. Product Principles
+### 2. Listening Flow Beats File Management
 
-Decisions get made against these. When two principles conflict (and they will), the higher-numbered one yields.
+The product should always make it easy to start or continue a session. Browsing artists and albums matters, but the primary job is listening, not catalog administration.
 
-### 1. The library is the canon
+### 3. Playback Has One Owner Per Surface
 
-Every surface answers the question: *what's in this user's library?* External providers (Last.fm, Genius, MusicBrainz, JamBase) enrich library entities — they never replace them. We do not show "you might like this artist (who isn't in your library)" as a primary affordance. Discovery happens *within* the owned collection.
+Desktop player controls own desktop playback. The mobile mini player and mobile now-playing screen own mobile playback. The Cast receiver owns TV playback. Cast state is reflected inside those existing surfaces, never by adding a second mini player, a Cast control modal, or a persistent Cast status banner.
 
-**Consequence:** `Hub` recommendations resolve concept paths against the local library before generating; Up Next/Vault never recommend tracks the user doesn't own; "similar artists" prefers locally-owned artists, with external as a tertiary slot.
+### 4. Reliability Is Product Design
 
-### 2. The user owns their data, period
+HLS preloading, Cast reconnection, stale-session recovery, queue sync, and receiver logging are user experience work. Failures should be visible, recoverable, and quiet: global toasts for actionable issues, animated icon state for connecting or recovering, durable logs for diagnosis.
 
-No telemetry. No phoning home. No cloud account required for core features. `.env` and PostgreSQL are the entire surface area of "user data." If a feature requires a cloud account, it is opt-in, marked, and strictly enrichment.
+### 5. Premium Feel Is A Feature
 
-**Consequence:** Cloud LLMs (OpenAI) are supported but local LLMs (LM Studio, Ollama) are first-class. AI Hub works offline if the user runs a local model. Authentication is JWT-local; we do not federate.
+A feature that works but feels generic is not done. Typography, spacing, motion, empty states, loading states, and Cast receiver presentation are part of the shipped behavior.
 
-### 3. Premium feel is a feature, not a polish step
+### 6. Fast Enough To Feel Free
 
-Self-hosted music software has historically looked like 2010 file managers. Aurora's aesthetic — Aurora Northern Lights brand, glassmorphism, Syne + DM Sans, the emerald play disc — is core product, not chrome. A new feature that ships with utilitarian UI is *not done*. This principle is what `design.md` exists to enforce.
+Playback transitions, queue actions, Hub generation, and Cast commands should feel immediate. Background work should be prewarmed, cached, streamed, or deferred so the listening flow is not interrupted.
 
-**Consequence:** The custom CAF Cast receiver is Aurora-branded, not the default media receiver. The setup wizard is glassmorphic. Settings is Discord-style centered, not a sidebar list of checkboxes. Loading states are designed.
+### 7. Ownership Stays Visible
 
-### 4. Fast enough to feel free
+No telemetry by default. No required cloud account for core use. Open standards and inspectable local services are preferred over proprietary black boxes.
 
-If a recommendation takes 8 seconds, users stop trusting it. Performance is a product property, not an engineering concern. Targets:
+## Accessibility & Inclusion
 
-- **Library scan:** thousands of tracks per minute in metadata phase.
-- **Hub generation:** under 5s for 5 playlists.
-- **Up Next / similarity queries:** under 200ms (HNSW vector index).
-- **Track-to-track transition:** prewarmed HLS sessions, sub-second audible start.
-- **Cold app open:** under 1.5s to interactive on broadband.
+Aurora targets accessible product UI, not decorative showpieces. Primary text and controls should meet WCAG AA expectations. Critical state must never rely on color alone. Keyboard navigation, focus-visible rings, screen-reader labels, reduced motion handling, and tabular numerics are required across playback and settings surfaces.
 
-**Consequence:** pgvector HNSW is non-negotiable. Worker threads for analysis. Three-phase scanner so tracks appear before they're fully analyzed. Prewarming the next track. Cache headers on cover art.
+Mobile touch targets should be at least 44px, with safe-area handling on pinned controls. TV and Cast UI must remain legible at living-room distance and lightweight enough for older Chromecast hardware.
 
-### 5. Opinionated, not configurable
+Reduced motion should preserve comprehension. If motion communicates connecting, buffering, loading, or playback state, provide a non-motion text or state equivalent.
 
-Configuration is a tax on every user paid to satisfy a few. We pick defaults that work for the canonical user and expose tuning only when a real listening experience demands it (Hub diversity, recovery strength, genre cohesion). We do *not* expose font choice, layout density, theme accent, or every server knob.
+## Voice And Copy
 
-**Consequence:** Two themes (light, dark). One font pair. One layout. Settings are domain-organized, not power-user-organized. The Aurora aesthetic is fixed — users don't theme it.
+- No exclamation marks.
+- No AI magic language. Say what the system is doing.
+- Prefer lowercase operational states: scanning, analyzing, connecting, recovering.
+- Avoid blame. Use "No tracks found" instead of "You have not added tracks".
+- Keep technical terms out of user-facing copy unless the user chose an advanced setting.
+- Use direct action labels: Play, Pause, Retry, Stop Cast, Add to Queue, Play Next.
 
-### 6. Local-first, network-resilient
+## Non-goals
 
-Aurora is a single-machine product that must keep working when the network has a bad day. PWA installable. Service worker caches the shell. Offline guards on external metadata calls (rate-limit + retry). Database disconnects render a graceful recovery page, not a crash.
+- Cloud streaming catalog integrations as a primary library source.
+- Video, podcasts, audiobooks, or generic media-server scope.
+- Native iOS or Android apps while the PWA can carry the experience.
+- Generic plugin systems that fragment product quality.
+- Full DJ tooling, room correction, upsampling, or audiophile DSP suites.
+- Social feeds, public profiles, telemetry, analytics, or usage tracking.
+- User-supplied skins or arbitrary visual theming.
 
-**Consequence:** External metadata is wrapped in `RateLimitError` / `ProviderError` and a semaphore. Cover art is cached locally. The app boots even if PostgreSQL is unreachable, polling for recovery.
+## Quality Bar
 
-### 7. Open standards over proprietary
+A feature is not shipped until it works across the relevant playback routes, preserves the existing design system, handles loading and error states, respects reduced motion and keyboard access, and does not introduce a parallel UI pattern for an existing job.
 
-HLS for streaming. PostgreSQL + pgvector for storage. MusicBrainz for genre ontology. ID3/Vorbis/ASF for tags. JWT for auth. We do not invent file formats, we do not invent audio codecs, we do not lock data into Aurora-only structures. A user who wants to leave can walk away with their files and their PostgreSQL dump.
-
-**Consequence:** No proprietary "Aurora library file." No DRM. Library state is reconstructable from the filesystem.
-
----
-
-## 5. Non-Goals (the doors we keep closed)
-
-A product is also defined by its refusals. These have all been considered and declined. Reopening them requires an explicit principle override.
-
-| Non-goal | Why not |
-|---|---|
-| **Streaming-service catalog access** (Spotify / Apple Music / Tidal integration) | Violates Principle 1. The library is the canon, not a seed. |
-| **Video / generic media server** | Aurora is music. Jellyfin and Plex own video; we will not split focus. |
-| **Subsonic / Airsonic API compatibility** | Locks us into a 2007 API. Navidrome owns that lane; we'd inherit constraints with no upside. |
-| **Audiophile DSP** (parametric EQ, room correction, upsampling, MQA) | Roon's lane. Different audience, different price point, different software architecture. |
-| **DJ / mixing tools** (BPM sync, crossfade DJ mode, cue points) | Different product. Crossfade may exist as a small playback affordance; full DJ tooling will not. |
-| **Federated / multi-server / multi-tenant SaaS** | Aurora is one server, one household. Multi-tenant changes auth, billing, ops, and the entire product shape. |
-| **Mobile native apps (iOS/Android)** | The PWA is the mobile experience. Native apps double the surface area without a corresponding product gain. |
-| **Generic plugin architecture** | Plugins fragment quality and aesthetic. Integrations are first-party (Last.fm, Genius, JamBase) or not at all. |
-| **Telemetry, analytics, "anonymous usage data"** | Violates Principle 2. Even opt-in, it sets a norm we don't want. |
-| **Theming / user-supplied skins** | Violates Principle 5. Aurora *is* the aesthetic. |
-| **Built-in podcast / audiobook support** | Different metadata models, different listening behaviors, different player UX. Not a music player concern. |
-| **Social features** (followers, shared listening, public profiles) | Self-hosted product; the social graph belongs elsewhere. |
-
----
-
-## 6. Roadmap Heuristic
-
-We do not maintain a fixed roadmap. We maintain a *judgment* about what to do next. A feature is a candidate when:
-
-1. It is **central to the bet** (§3) — it makes the listening flow richer, smoother, or more contextual.
-2. It is **library-relative** — it works on what the user owns, not what the cloud knows.
-3. It **honors the principles** — especially feel, performance, and ownership.
-4. It is **architecturally cheap** — it composes with existing primitives (recommendation service, three-phase scanner, glass design system) rather than introducing a parallel stack.
-
-A feature is *not* a candidate just because:
-
-- A user requested it.
-- A competitor ships it.
-- It's technically interesting.
-- It would close a feature-parity gap with Spotify / Plex / Roon.
-
-For specific upcoming work, see [docs/nice_to_have.md](./docs/nice_to_have.md). For shipped milestones, see [MEMORY.md](./MEMORY.md). For implementation plans, see [TASKS.md](./TASKS.md).
-
----
-
-## 7. Quality Bars (definition of "shipped")
-
-A feature is shipped when *all* are true:
-
-- [ ] Works on Chrome desktop, Safari iOS PWA, and Chromecast (if playback-related).
-- [ ] Light mode and dark mode both audited.
-- [ ] Mobile layout designed, not just "responsive enough."
-- [ ] No new telemetry, no new third-party JS bundles without justification.
-- [ ] Empty state, loading state, and error state are designed — not stub text.
-- [ ] Performance targets (§4 Principle 4) met or exempted with reason.
-- [ ] Honors `prefers-reduced-motion`, focus-visible, keyboard navigation.
-- [ ] Reads natural to a user who has never seen the feature before — no jargon leaked from internals.
-- [ ] `npx tsc --noEmit` clean. `npx vite build` clean.
-
-If a feature ships missing any of these, it ships marked beta in the UI, not silently.
-
----
-
-## 8. Voice & Copy
-
-Product copy reinforces brand. A few rules:
-
-- **No exclamation marks.** Aurora is calm. "Library scanned" not "Library scanned!"
-- **Lowercase status verbs.** "scanning…", "analyzing…", "compiling concepts…"
-- **Title-case only for proper nouns and headlines.** Section headers are uppercase short labels (`LIBRARY`, `PLAYBACK`).
-- **No "AI magic" hype.** Say what it does. "Generates 5 playlists from your library" beats "AI-powered intelligent playlist creation."
-- **No second-person scolding.** "No tracks found" not "You haven't added any music yet."
-- **Numerics tabular.** Always.
-- **Don't say "songs" or "playlist" when you mean "tracks" or "queue."** The lexicon: *track, album, artist, genre, queue, playlist, hub, vault*.
-
----
-
-## 9. Success Signals
-
-We don't currently collect telemetry (Principle 2), so success is judged qualitatively. We are succeeding when:
-
-- A canonical user replaces Spotify with Aurora as their primary listening app, not just their archive viewer.
-- Time spent listening per session climbs after the first week (the recommendation engine is doing its job).
-- The Hub home screen becomes the default entry point, not the artist/album browser.
-- Self-hosting friends install it after one demo, without needing a sales pitch.
-- The aesthetic gets screenshotted.
-
-We are failing when:
-
-- Users open Aurora, browse to an album they already know, play it, and leave.
-- The Hub feels random, repetitive, or stale.
-- Setup is the most-mentioned topic in issues.
-- Users describe Aurora as "like Plex but for music."
-
----
-
-## 10. Strategic North Star
-
-**Make a music player a person would choose over Spotify, on a library they already own, without ever describing it as a tradeoff.**
-
-Every other decision is downstream of that.
+For playback-related work, browser local playback, HLS quality behavior, Cast sender control, and custom receiver behavior all count as part of the same feature.

@@ -1,347 +1,205 @@
-# Design.md — Aurora Player
+# DESIGN.md
 
-Single source of truth for design direction. Tokens live in `src/index.css` (`:root` and `.dark`); this document explains the *intent* behind them so future work stays coherent.
+## Overview
 
----
+Aurora is a product UI for listening to an owned music library. The physical scene is a listener moving between a desktop browser, a phone PWA, and a living-room TV in the evening. The interface should feel quiet, premium, and immediate, with album art and playback state doing most of the emotional work.
 
-## 1. Brand Identity
+The visual world is Northern Lights over glass: matte translucent surfaces, soft green and teal glow, dark space, frosted daylight, and precise controls. Use the existing implementation tokens in `src/index.css` as the source of truth.
 
-**Name:** Aurora Player.
-**Metaphor:** Northern Lights over a deep night sky. Music as a luminous, drifting field of color.
-**Personality:** Editorial, premium, calm. Restrained chrome that lets album art and motion carry the energy. Never neon, never toy-like.
-**Reference points:** Apple Music's editorial typography, iOS Air glass, premium hi-fi UIs (Roon, Sonos S2). Avoid Spotify-flat, avoid Material density.
+## Register
 
-The two modes are not equal-and-opposite — they are different *atmospheres* of the same world:
+product
 
-- **Dark (canonical):** Aurora over void. Saturated greens, teals, sky-blues and rose pinks bloom against `#030208`. This is the hero state — the app's screenshots, marketing, and TV/Cast receiver should always render dark.
-- **Light:** Frosted iOS Air. Same palette, but reduced to gentle blooms behind white glass on a soft blue-grey (`#F2F5F8`). Reads as "daylight aurora."
+## Theme
 
-When in doubt, design dark first, then verify light parity.
+Dark mode is the canonical atmosphere: deep night, luminous album art, emerald playback controls, and restrained aurora bloom. It is the default mental model for screenshots, TV, Cast receiver, and immersive playback.
 
----
+Light mode is frosted daylight: pale blue-grey air, white glass, low-contrast bloom, and the same emerald playback anchor. It should feel like the same product in a brighter room, not a separate theme.
 
-## 2. Color System
+Design dark first, then verify light parity.
 
-### Aurora Spectrum (the palette)
+## Color
 
-The palette is scientifically themed on auroral emission lines. Use these names — not raw hex — when discussing color in PRs and reviews.
+Use CSS custom properties from `src/index.css`. Do not hard-code raw colors inside components.
 
-| Token | Dark | Light | Role |
-|---|---|---|---|
-| `--aurora-green` (Oxygen) | `#22c983` | `rgba(34,197,94,0.3)` | Primary brand, play actions |
-| `--aurora-extra-glow` (Emerald high-altitude) | `#10b981` | `rgba(5,150,105,0.3)` | Hover/active glow on green |
-| `--aurora-teal` | `#2dd4bf` | `rgba(20,184,166,0.3)` | Mid-spectrum, progress mid-fill |
-| `--aurora-blue` (Sky) | `#0ea5e9` | `rgba(6,182,212,0.2)` | Secondary accent |
-| `--aurora-pink` (Nitrogen rose) | `#f43f5e` | `rgba(225,29,72,0.2)` | Rare accent — destructive, "off-spectrum" highlight |
+Core brand roles:
 
-The signature **aurora gradient** is the spectrum traversed in order:
+- `--aurora-green`: primary brand and playback action.
+- `--aurora-extra-glow`: active emerald glow and high-energy accents.
+- `--aurora-teal`: secondary aurora spectrum and progress blend.
+- `--aurora-blue`: cool atmospheric support.
+- `--aurora-pink`: rare red-shift accent for destructive or error states.
+- `--aurora-play-gradient`: the play button signature.
+- `--glass-bg`, `--glass-border`, `--glass-blur`, `--glass-shadow`: material system.
 
-```
-linear-gradient(135deg,
-  aurora-green 0% → aurora-blue 35% → aurora-extra-glow 70% → aurora-pink 100%)
-```
+Color strategy is restrained. Emerald is the active state, not a paint bucket. Most surfaces should be tinted neutrals, album-art color, or glass. The aurora spectrum should appear in progress fills, subtle page atmosphere, receiver backgrounds, and selected hero moments.
 
-Used on the empty-state hero and the playback progress bar fill (animated). It is the brand mark — use sparingly. Never on buttons, never on icons, never as a background panel.
+Do not introduce new semantic colors casually. If a warning state is needed, prefer text, icon, and global toast behavior before adding another color role.
 
-### Surface & Text
+## Typography
 
-Surfaces are *translucent over the aurora field* — never opaque blocks. Always pair with `backdrop-filter: blur(var(--glass-blur))` (24px) on light, or the dark equivalent. If you need an opaque panel, you are probably building the wrong primitive.
+Use two families:
 
-| Role | Dark | Light |
-|---|---|---|
-| Background | `#030208` | `#F2F5F8` |
-| Surface (panels) | `rgba(6,4,18,0.72)` | `rgba(255,255,255,0.6)` |
-| Surface variant (nested) | `rgba(14,11,32,0.5)` | `rgba(255,255,255,0.8)` |
-| Text primary | `#d8d8e8` | `#1C1C1E` |
-| Text secondary | `#8e8ea0` | `#3A3A3C` |
-| Text muted | `#55556a` | `#8E8E93` |
-| Border | `rgba(34,201,131,0.08)` | `rgba(0,0,0,0.05)` |
+- `Syne` for display, section emphasis, player labels, compact button labels, and editorial headings.
+- `DM Sans` for body, metadata, settings, lists, controls, and dense product UI.
 
-**Dark mode is intentionally low-contrast on muted text** (~3:1). This is a design choice — secondary metadata recedes so album art and now-playing dominate. Do not "fix" it with brighter greys; if a label needs more weight, promote it to `text-secondary` or `text-primary`.
+Rules:
 
-### Semantic Color
+- Page and modal titles should use strong scale contrast and tight tracking.
+- Metadata should recede until active or hovered.
+- Time, bitrate, queue position, duration, and progress numerics must use tabular figures.
+- Do not add a third font.
+- Do not use decorative gradient text for normal UI.
 
-- `--color-primary` = aurora-green. Filled CTAs, active states, focus rings.
-- `--color-error` = aurora-pink (red shift). Destructive only — never warnings, never "different mode" hints.
-- `--color-success` = green. Reserved for completed scans/imports.
+## Material And Surfaces
 
-Never invent new semantic colors. If you need a new role (e.g. "warning"), ask first.
+Aurora glass is matte, not shiny. It should feel like frosted audio equipment, not floating plastic.
 
----
+Use glass only when it supports hierarchy:
 
-## 3. Typography
+- Player controls, mini players, modals, drawers, settings surfaces, queue surfaces, and receiver panels can use glass.
+- Avoid glass as decorative card filler.
+- Avoid stacking glass more than two levels deep.
+- Borders are hairline and low-alpha.
+- Shadows are soft lift or emerald glow, never hard separators.
 
-Two families. No exceptions.
+If a panel needs high readability, use the existing surface variant instead of increasing blur and opacity until the glass becomes muddy.
 
-```
---font-display: 'Syne', sans-serif;   /* Editorial, sharp, slightly geometric */
---font-body:    'DM Sans', sans-serif; /* Neutral, readable, tight rhythm */
-```
+## Core Components
 
-| Use | Family | Weight | Notes |
-|---|---|---|---|
-| Page titles, hero, modal headers, button labels | Syne | 600–800 | Negative letter-spacing (-0.03 to -0.04em) at large sizes |
-| Body, metadata, settings rows | DM Sans | 300–500 | 300 for muted secondary metadata |
-| Numerics (timestamps, durations, indices) | DM Sans | 400–500 | `font-variant-numeric: tabular-nums` is required |
+### Buttons
 
-### Hierarchy
+General app actions use the global button system in `src/index.css`: `.btn` plus `.btn-primary`, `.btn-ghost`, `.btn-danger`, `.btn-danger-fill`, `.btn-tab`, `.btn-dashed`, `.btn-icon`, `.btn-sm`, and `.btn-lg`.
 
-- **Hero (empty state, page titles):** Syne 700-800, 2.2rem-2.8rem, tight tracking, the aurora gradient text-clip is reserved for the empty-state hero only.
-- **Section headers (settings, sidebar group labels):** Uppercase, 0.7-0.9rem, weight 500-700, `letter-spacing: 0.02-0.05em`. This is the secondary brand cue after color.
-- **Body:** 0.85-0.95rem. Generous line-height (1.5-1.8) on prose blocks.
-- **Metadata (artist, album under a track):** 300 weight, muted color, 0.7-0.85rem. Should *almost disappear* until the row is hovered or active.
+Playback controls are their own primitives, not generic buttons:
 
-Never use Syne for body copy. Never use DM Sans for hero titles. Never bring in a third font.
+- Secondary controls use small circular glass buttons.
+- The primary play button is an emerald disc with `--aurora-play-gradient` and glow.
+- Desktop and mobile should share the same visual language, with mobile sized down or up only for touch comfort.
 
----
+### Cast Button
 
-## 4. Glassmorphism
+The Cast button must live inside existing playback control surfaces.
 
-The defining surface treatment. Three rules:
+Rules:
 
-1. **Always blurred.** A glass surface without `backdrop-filter` is just a flat panel — that's a bug. Default blur: `24px`.
-2. **Border is a hairline.** Glass edges are `1px` borders at 4-10% alpha. Heavy borders break the illusion.
-3. **Never stacked more than 2 deep.** Glass-on-glass-on-glass becomes opaque mud. If you need a third level, switch to `surface-variant` (more opaque) or solid.
+- The Cast icon is proportionally sized and visually aligned with adjacent lyrics, favorite, and playback buttons.
+- Do not render duplicate Cast icons in the same control.
+- Do not add a separate Cast mini player, Cast modal, or persistent Cast banner.
+- Connecting, rejoining, and recovering states appear as an animated icon in the Cast button slot.
+- Actionable Cast failures use the global toast system with Retry when available.
 
-```
---glass-bg:     rgba(255,255,255,0.65);  /* light */ | rgba(4,2,14,0.6)  /* dark */
---glass-border: rgba(0,0,0,0.1)          /* light */ | rgba(255,255,255,0.04) /* dark */
---glass-blur:   24px;
---glass-shadow: 0 8px 32px rgba(0,0,0,0.05)  /* light */
-              | 0 8px 40px rgba(0,0,0,0.6)    /* dark */
-```
+### Player Controls
 
-The signature **play button** breaks glass conventions on purpose — it is the *only* element that uses the emerald gradient (`--aurora-play-gradient`) plus an emerald glow (`--aurora-play-glow`). Treat it as a sacred element. No other button gets that treatment.
+Desktop `PlayerControls` is the only desktop footer playback surface. It owns progress, current track, Cast device label, quality readout, and the main playback controls.
 
----
+Mobile uses the existing `MobileMiniPlayer` plus full `MobileNowPlaying`. Do not add a parallel mini player or Cast-specific overlay. When casting, the mobile mini player should show remote context in place, not create another layer.
 
-## 5. Geometry
+### Toasts
 
-### Radius
+Use one global toast system. Toasts are for transient actionable messages and recovery notices.
 
-| Token | Light | Dark | Use |
-|---|---|---|---|
-| `--radius` | 20px | 14px | Default for cards, modals, large surfaces |
-| `--radius-sm` | 12px | 8px | Inputs, list rows, small cards |
-| `--radius-lg` | 28px | — | Hero panels, settings layout |
-| `--radius-pill` | 9999px | 100px | Progress, sliders, badges |
+Do not create feature-specific banners for Cast health, preload status, or playback warnings. If a state needs persistent presence, it belongs in the relevant control surface.
 
-Light mode uses larger radii — the iOS Air feel. Dark mode tightens up — the void feels sharper.
+### Progress And Sliders
 
-### Spacing
+Progress is calm at rest and more tactile on hover or drag:
 
-8-point scale, with a 4-point exception for `xs`:
+- Thin rail.
+- Aurora fill.
+- Tabular time labels.
+- Thumb revealed on interaction where pointer input exists.
+- Touch controls must remain usable without hover.
 
-```
-xs:  4px    sm:  8px    md: 16px    lg: 24px    xl: 32px    2xl: 48px
-```
+### Album Art
 
-Compose, don't invent. If you find yourself reaching for `13px` or `22px`, you're solving the wrong problem.
+Album art is always rounded, clipped, and treated as a first-class visual object. Never show raw square art. Art can seed ambient gradients, but do not let extracted colors break text contrast.
 
-### Shadow
+### Queue
 
-Three jobs only: **lift** (sm/md/lg), **glow** (`--shadow-glow` — green halo, used on focus and hover of primary surfaces), and **glass** (combined inset + drop, on translucent panels).
+Queue UI should feel like session control, not file management. Use clear current, next, and recently played states. Queue editing should not interrupt playback unless the user explicitly starts a new context.
 
-Never use shadow as a hard divider — that's what hairline borders are for.
+## Layout
 
----
+Aurora should not collapse into identical card grids. Use cards when the item benefits from cover art, click target, and quick action together. Use rows when scanning, ordering, or managing.
 
-## 6. Motion
+Patterns:
 
-Motion is *easing-driven*, not duration-driven. Two curves do almost everything:
+- `page-container` for detail-view spacing.
+- Existing album and library grids for cover collections.
+- Hub should lead with listening context and then offer jump-back-in choices.
+- Settings should remain a product settings surface, not a preferences dump.
+- Mobile shell is bottom tabs, mini player, and optional full now-playing. Respect safe areas.
 
-```
---ease-out:    cubic-bezier(0.16, 1, 0.3, 1);  /* organic, settles softly */
---ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);   /* symmetric, mechanical */
-```
+Spacing should follow the existing 8-point rhythm with purposeful variation. Avoid hard dividers where glass borders and whitespace already provide separation.
 
-| Token | Duration | Curve | Use |
-|---|---|---|---|
-| `--transition-fast` | 150ms | in-out | Hovers, color shifts, focus rings |
-| `--transition-normal` | 250ms | out | Modals, drawers, content swaps |
-| `--transition-slow` | 400ms | out | Page transitions, hero entries |
+## Cast Receiver
 
-### Signature animations
+The custom receiver in `public/receiver.html` is Aurora dark, always.
 
-- **Aurora text shimmer** (empty-state h1): 8s infinite background-position pan. Disabled under `prefers-reduced-motion`.
-- **Track transition**: `transform: scale(0.97)` on `:active`, `1.06` on play-button hover. Confidence-inducing micro-motion.
-- **Modal entrance**: `scale(0.95) translateY(20px) → 1.0 0` over 300ms ease-out.
-- **Drawer**: full-translate slide-in from left, 300ms.
+It should be minimal, TV-legible, and lightweight:
 
-Always honor `prefers-reduced-motion`. The aurora text animation is already gated; new infinite/looping animations must be too.
+- Blurred album-art atmosphere.
+- Large current track metadata.
+- Clear playback and queue context.
+- TV-safe margins.
+- No default CAF chrome visible as the primary experience.
+- No heavy DOM, expensive animation, or frequent layout work that can stall older Chromecast devices.
 
----
+The receiver is a living-room surface, not a debug panel. Logs belong in `logs/cast-receiver.log`, not on-screen.
 
-## 7. Component System
+## Motion
 
-### Buttons (canonical — see also AGENTS.md §Button System)
+Motion should communicate state and tactility.
 
-Compose `.btn` + variant + size:
+Use short transitions around 150ms to 250ms for hover, focus, player state, and drawer or modal entrance. Avoid animating layout properties. Do not use bounce or elastic motion. Infinite motion must be rare and gated by `prefers-reduced-motion`.
 
-| Class | Purpose |
-|---|---|
-| `.btn` | Base — Syne 600, glass surface, 8/16 padding |
-| `.btn-primary` | Filled emerald. The single "go" action. |
-| `.btn-danger` | Outlined rose. Confirmable destructive. |
-| `.btn-danger-fill` | Filled rose. Final-step destructive. |
-| `.btn-ghost` | Glass/neutral. Default for tertiary actions. |
-| `.btn-tab` | Sub-tab toggle. `.active` swaps to filled emerald. |
-| `.btn-dashed` | Full-width add/create. |
-| `.btn-icon` | Icon-only. Combine with `.btn-danger` for destructive icon. |
-| `.btn-lg` / `.btn-sm` | Size modifiers. |
+Allowed recurring motion:
 
-**Never write inline Tailwind button strings.** If a new button shape is needed, add it as a variant class.
+- Loading or connecting spinner inside a control slot.
+- Subtle progress or playback affordance.
+- Receiver ambient motion only if it stays lightweight.
 
-### Player controls
+## Accessibility
 
-Two tiers:
+Accessibility is part of the component contract.
 
-- **Secondary (`.player-control-btn`):** 40px circle, glass. Dark-on-light glass in light mode; white-on-dark in dark. Used for prev/next/shuffle/repeat.
-- **Primary (`.play-btn-main`):** 56px circle, emerald gradient, glow. Same in both modes — this is the brand anchor on every screen.
+- Controls must have accessible names.
+- Non-button interactive elements are not acceptable.
+- Focus-visible must remain visible.
+- Keyboard playback and settings navigation must keep working.
+- Critical state cannot be color-only.
+- Touch targets should be at least 44px.
+- Reduced motion users should get equivalent state feedback.
+- Primary text must meet WCAG AA expectations in both themes.
 
-Mobile: 48px / 64px respectively. Touch targets must hit ≥44px.
+Muted metadata may recede visually, but never use muted styling for required instructions, errors, or current critical state.
 
-### Album art
+## Implementation Map
 
-Always `border-radius: var(--radius)`, always `1px` glass border, always a soft drop shadow. Never raw square. Aspect ratio is locked 1:1 (`object-fit: cover`).
+Primary design files:
 
-`useDominantColor(tracks)` extracts the dominant color from current art and seeds page hero gradients. This is how album art pulls the surrounding chrome into its mood — keep it. Never hard-code page-level color.
+- `src/index.css`: tokens, global button system, shared player and Cast control styling.
+- `src/components/PlayerControls.tsx`: desktop playback surface.
+- `src/components/MobileMiniPlayer.tsx`: mobile compact playback surface.
+- `src/components/MobileNowPlaying.tsx`: mobile expanded playback surface.
+- `src/components/cast/CastButton.tsx`: Cast launcher and Cast state icon behavior.
+- `src/components/cast/CastHealthToasts.tsx`: Cast health bridge into global toasts.
+- `src/components/Toast.tsx`: toast item behavior.
+- `src/components/ToastContainer.tsx`: global toast stack.
+- `public/receiver.html`: custom Cast receiver.
 
-### Lists & rows
+When adding UI, extend these systems before inventing new primitives.
 
-Rows are *quiet by default*: transparent border, muted text. Hover lifts opacity (`rgba(255,255,255,0.03)` dark, `rgba(255,255,255,0.4)` light) and a subtle border. Active state shifts text to `--color-primary` and bumps weight to 600. **No backgrounds on rest state** — the playlist sidebar is one of the few places where the absence of chrome is the design.
+## Non-negotiables
 
-### Progress & sliders
-
-3px rail, hover expands to 5px. Fill uses the aurora gradient (the one place besides the empty-state hero). Thumb is a 11px white dot, scale-0 by default, scale-1 on hover. Tabular-nums on the time labels.
-
-### Modals & drawers
-
-- **Modal:** centered, max-width 500px (or 1200px for the Discord-style settings layout), `slide-up` 300ms. Backdrop is blurred at 8px.
-- **Drawer:** left side, max-width 380px, `slide-in-left` 300ms. Used for mobile nav and side panels.
-- **Settings:** full-screen layout with a 260px sidebar and a centered 740px content column. On mobile the sidebar collapses to top tabs.
-
-Backdrop click and Escape both dismiss. Always.
-
----
-
-## 8. Layout Patterns
-
-### Grids
-
-`.album-grid` is the canonical responsive cover grid:
-
-```
-<640:  2 col    <768:  3 col    <1024: 4 col    <1280: 5 col    ≥1280: 6 col
-gap:   1rem  →  1.5rem at md
-```
-
-Use it everywhere covers tile (LibraryHome, ArtistDetail, GenreDetail). Don't invent new grid breakpoints.
-
-### Page container
-
-`.page-container` standardizes detail-view padding: `1rem` mobile, `2rem` tablet, `3rem` desktop. Scrollable, flex child.
-
-### Hero pattern
-
-For ArtistDetail, GenreDetail, AlbumDetail:
-
-1. `FadedHeroImage` — full-bleed art with a vertical mask fade to background.
-2. Title in Syne 700+, large, negative tracking.
-3. Metadata row in DM Sans 300, muted, uppercase tags.
-4. Primary action (Play) using `.btn-primary` or the emerald play disc.
-
-Do not stack two hero images. If a sub-page needs its own hero, it gets its own route.
-
----
-
-## 9. Iconography
-
-`lucide-react` only. Reasons:
-
-- Consistent stroke weight (1.5px) across the app.
-- Tree-shakeable — no bundling all icons.
-- Visual language is geometric, slightly editorial — matches Syne.
-
-Inline SVGs are allowed *only* when no Lucide equivalent exists (e.g. brand logos, the custom waveform). Don't ship Material icons, Font Awesome, or Heroicons.
-
-Icon sizes follow text sizes: `0.85rem` text → `16px` icon. In buttons, icons inherit `currentColor`.
-
----
-
-## 10. Mobile & Touch
-
-Mobile is not a degraded desktop — it has explicit affordances:
-
-- **Touch targets ≥44px.** `.player-control-btn` becomes 48px, `.play-btn-main` 64px.
-- **Volume slider, keyboard hints hidden.** Volume is a system control on touch; keyboard hints are noise.
-- **Bottom tabs + mini-player + full-screen NowPlaying** is the canonical mobile shell. Sidebar drawer for nav.
-- **Safe area insets are mandatory** on any pinned-edge UI. Use `.safe-area-top`, `.safe-area-bottom`, or `env(safe-area-inset-*)` directly. This includes the Cast receiver overlay (TV-safe).
-- **Swipe gestures** via `useSwipe(ref, ...)`. Prefer it to ad-hoc touch handlers.
-
-Settings on mobile drops the sidebar entirely and switches to top tabs (`.settings-mobile-tabs`).
-
----
-
-## 11. Cast / Receiver UI
-
-The Chromecast custom receiver (`public/receiver.html`) is *Aurora dark, always*. It must:
-
-- Render a blurred album-art background (heavy blur, low opacity).
-- Show now-playing metadata in Syne 700+ at TV-readable sizes (≥3rem title).
-- Render a glass `Up Next` queue panel — same glass tokens as the app.
-- Honor TV-safe margins (5% inset minimum).
-- Use the emerald play disc for the active state chip.
-
-The receiver is the brand on a 65" screen — treat it as a hero surface, not a debug overlay.
-
----
-
-## 12. Accessibility
-
-- **Focus visible** is a hairline emerald outline (`outline: 1px solid rgba(34,201,131,0.4)`) with `outline-offset: 2px`. Never remove it.
-- **Selection color** is emerald at 25% alpha. Don't override per-component.
-- **Contrast:** Primary text passes WCAG AA on both modes. Muted text intentionally does not — see §2 caveat. If you need to communicate critical info, don't use muted.
-- **`prefers-reduced-motion`** disables looping animations (aurora text, scan indicators). New looping motion must be gated.
-- **ARIA tabs** in settings nav are mandatory — `role="tab"`, `aria-selected`, `role="tabpanel"`. Established pattern, don't break it.
-- **Keyboard** controls: Space (play/pause), arrows (seek/volume), `?` (help) are global. Don't shadow them in modals without restoring on close.
-
----
-
-## 13. Authoring Rules
-
-A short list of things that come up in PR review:
-
-1. **Never use raw hex in a component.** Pull from CSS variables. If a needed color doesn't exist, propose a token, don't inline.
-2. **Never write inline Tailwind button strings.** Use `.btn` variants.
-3. **Never opaque-fill a glass surface.** If you need opacity, use `surface-variant`.
-4. **Never invent a third font, a fourth radius token, a new spacing value.** Compose existing tokens.
-5. **Never use the aurora gradient outside the two sanctioned places** (progress fill, empty-state hero text). It is a brand mark.
-6. **Never break the play-disc.** Same emerald gradient + glow on every screen, every mode.
-7. **Always test light mode parity** — at minimum, modals, hero gradients, and any new glass surfaces.
-8. **Always blur a glass surface.** A non-blurred glass panel is broken.
-9. **Always honor reduced-motion** on new animations.
-10. **Always use `lucide-react`** for new iconography.
-
----
-
-## 14. Anti-patterns (seen and rejected)
-
-- Inline gradients on buttons → flattens the brand mark, makes everything a CTA. Buttons get solid fills only.
-- Heavier glass borders (>1px or >15% alpha) → breaks the iOS Air illusion, looks like a Material card.
-- Material elevation shadows (multiple offset dropshadows) → not the language. We have one shadow per element.
-- "Toast"-bright greens or saturated UI accents on small elements → kills the editorial feel. The aurora is in the *background*, not in the toolbar.
-- Typing the hex `#22c983` into a component → use `var(--color-primary)`.
-- Three nested glass panels → switch the innermost to `surface-variant` or solid.
-- Shadow-as-divider → use a hairline border on `--glass-border`.
-
----
-
-## 15. References
-
-- Tokens: `src/index.css` (`:root`, `.dark`)
-- Theme objects (legacy, still consumed by some components): `src/theme.tsx`
-- Button system reference: `AGENTS.md` §Button System
-- Tailwind config: `tailwind.config.js` (intentionally minimal — most styling is via CSS vars and global classes)
-- Live-color extraction: `src/hooks/useDominantColor.ts`
-- Cast receiver: `public/receiver.html`
+- No duplicate mini players.
+- No Cast-only playback modal.
+- No persistent Cast status banner.
+- No default receiver UI as the intended experience.
+- No raw color literals in components.
+- No new font family.
+- No nested glass cards beyond two levels.
+- No generic Material dashboard density.
+- No decorative glass just to fill space.
+- No playback feature without loading, error, reduced-motion, and keyboard behavior.
