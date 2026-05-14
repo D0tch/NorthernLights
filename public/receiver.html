@@ -854,6 +854,14 @@
         } catch (e) {}
       }
 
+      function safeLogValue(value) {
+        return String(value || '')
+          .replace(/([?&]token=)[^&\s]+/gi, '$1[redacted]')
+          .replace(/Bearer\s+[A-Za-z0-9._-]+/g, 'Bearer [redacted]')
+          .replace(/"token"\s*:\s*"[^"]+"/g, '"token":"[redacted]"')
+          .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[jwt-redacted]');
+      }
+
       function safeStringify(value) {
         var seen = [];
         try {
@@ -1306,7 +1314,7 @@
             normalizeMedia(loadRequestData.media);
             pendingMediaInfo = loadRequestData.media;
             logAndPost('ok', LOG_TAG, 'Prepared HLS URL for forced AAC playback');
-            logAndPost('ok', LOG_TAG, 'LOAD contentId: ' + loadRequestData.media.contentId);
+            logAndPost('ok', LOG_TAG, 'LOAD contentId: ' + safeLogValue(loadRequestData.media.contentId));
             logAndPost('ok', LOG_TAG, 'LOAD contentType: ' + loadRequestData.media.contentType);
           }
 

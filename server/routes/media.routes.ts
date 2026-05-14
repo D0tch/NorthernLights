@@ -213,6 +213,7 @@ function sanitizeCastLogValue(value: string): string {
     .replace(/[\r\n]+/g, ' ')
     .replace(/([?&]token=)[^&\s]+/g, '$1[redacted]')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/g, 'Bearer [redacted]')
+    .replace(/"token"\s*:\s*"[^"]+"/g, '"token":"[redacted]"')
     .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[jwt-redacted]')
     .slice(0, 2000);
 }
