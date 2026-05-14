@@ -2246,6 +2246,7 @@ body {
   flex-direction: column;
   isolation: isolate;
   overflow: hidden;
+  background-color: var(--color-bg-primary);
   background:
     radial-gradient(circle at 18% 12%, color-mix(in srgb, var(--mobile-now-art-color) 26%, transparent), transparent 22rem),
     radial-gradient(circle at 82% 18%, color-mix(in srgb, var(--aurora-teal) 15%, transparent), transparent 20rem),
@@ -2256,7 +2257,7 @@ body {
 .mobile-now-playing-ambient {
   position: absolute;
   inset: -18%;
-  z-index: -1;
+  z-index: 0;
   inline-size: 136%;
   block-size: 136%;
   object-fit: cover;
@@ -2264,6 +2265,7 @@ body {
   filter: blur(58px) saturate(1.18);
   transform: scale(1.05);
   will-change: transform, opacity;
+  pointer-events: none;
 }
 
 .mobile-now-playing-shell[data-playing="true"] .mobile-now-playing-ambient {
@@ -2274,13 +2276,19 @@ body {
   content: "";
   position: absolute;
   inset: 0;
-  z-index: -1;
+  z-index: 1;
+  pointer-events: none;
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--color-bg-primary) 82%, var(--mobile-now-art-color) 18%) 0%,
-    color-mix(in srgb, var(--color-bg-primary) 88%, var(--mobile-now-art-color) 12%) 42%,
-    var(--color-bg-primary) 100%
+    color-mix(in srgb, var(--color-bg-primary) 78%, transparent) 0%,
+    color-mix(in srgb, var(--color-bg-primary) 86%, transparent) 42%,
+    color-mix(in srgb, var(--color-bg-primary) 94%, transparent) 100%
   );
+}
+
+.mobile-now-playing-shell > :not(.mobile-now-playing-ambient) {
+  position: relative;
+  z-index: 2;
 }
 
 .mobile-now-playing-header {
