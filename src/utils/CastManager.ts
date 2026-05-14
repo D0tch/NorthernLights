@@ -105,6 +105,7 @@ export class CastManager {
     private preserveSessionOnNextEnd = false;
     private lifecycleReconcileBurstActive = false;
     private diagnosticsVerbose = false;
+    private suppressRemoteEndedDuringDisconnect = false;
     private lastCastButtonStateKey = '';
     private lastRemotePlayerStateKey = '';
     private lastRemoteMediaStatusKey = '';
@@ -772,6 +773,7 @@ export class CastManager {
                             }
                             this.rejoinSessionPending = false;
                             this.freshSessionStartedAt = 0;
+                            this.suppressRemoteEndedDuringDisconnect = false;
                             this.clearRejoinHydrationTimer();
                             this.state = 'NOT_CONNECTED';
                             this.setHealthStatus('idle', '');
@@ -843,6 +845,7 @@ export class CastManager {
                             const session = this.castContext?.getCurrentSession();
                             const mediaSession = session?.getMediaSession();
                             if (mediaSession?.idleReason === chrome.cast.media.IdleReason.FINISHED) {
+                                if (this.suppressRemoteEndedDuringDisconnect) return;
                                 this.onEnded?.();
                             }
                         } catch { /* ignore */ }
@@ -933,6 +936,7 @@ export class CastManager {
         album?: string;
         format?: string;
         duration?: number;
+        startTime?: number;
     }, options?: {
         includeAuthTokenInCustomData?: boolean;
         includeArtwork?: boolean;
@@ -998,6 +1002,7 @@ export class CastManager {
         album?: string;
         format?: string;
         duration?: number;
+        startTime?: number;
     }, options?: {
         includeAuthTokenInCustomData?: boolean;
         includeArtwork?: boolean;
@@ -1006,6 +1011,9 @@ export class CastManager {
     }) {
         const item = new chrome.cast.media.QueueItem(this.buildMediaInfo(track, options));
         item.autoplay = true;
+        if (typeof track.startTime === 'number' && isFinite(track.startTime) && track.startTime > 0) {
+            item.startTime = track.startTime;
+        }
         item.preloadTime = 30;
         return item;
     }
@@ -1386,15 +1394,9 @@ export class CastManager {
                     duration: item.duration,
                 })),
                 currentIndex,
-                repeat
+                repeat,
+                currentTime
             );
-
-            // Seek to where we left off locally (with a small delay to let the media load)
-            if (currentTime > 1) {
-                setTimeout(() => {
-                    this.seek(currentTime);
-                }, 500);
-            }
         } catch (e) {
             console.error('[Cast] Failed to auto-cast current track:', e);
             this.logCast('error', 'Failed to auto-cast current track', this.describeError(e));
@@ -1543,18 +1545,30 @@ export class CastManager {
      * @param startIndex Which track to start playing (0-based)
      * @param repeat 'none' | 'one' | 'all' — repeat mode
      */
-    public async castQueue(tracks: { queueEntryId?: string; url?: string; rawUrl?: string; title?: string; artist?: string; artUrl?: string; album?: string; format?: string; duration?: number }[], startIndex: number = 0, repeat: 'none' | 'one' | 'all' = 'none') {
+    public async castQueue(
+        tracks: { queueEntryId?: string; url?: string; rawUrl?: string; title?: string; artist?: string; artUrl?: string; album?: string; format?: string; duration?: number }[],
+        startIndex: number = 0,
+        repeat: 'none' | 'one' | 'all' = 'none',
+        startTime: number = 0
+    ) {
         if (!this.isConnected()) return;
 
         const castSession = this.castContext.getCurrentSession();
         if (!castSession) return;
         const normalizedStartIndex = Math.max(0, Math.min(startIndex, tracks.length - 1));
-        const queueItems: any[] = tracks.map((track, index) => this.buildQueueItem(track, {
-            includeAuthTokenInCustomData: false,
-            includeArtwork: index === normalizedStartIndex,
-            includeDuration: index === normalizedStartIndex,
-            compactHlsUrl: true,
-        }));
+        const normalizedStartTime = Number.isFinite(startTime) && startTime > 0 ? startTime : 0;
+        const queueItems: any[] = tracks.map((track, index) => this.buildQueueItem(
+            {
+                ...track,
+                startTime: index === normalizedStartIndex ? normalizedStartTime : 0,
+            },
+            {
+                includeAuthTokenInCustomData: false,
+                includeArtwork: index === normalizedStartIndex,
+                includeDuration: index === normalizedStartIndex,
+                compactHlsUrl: true,
+            }
+        ));
 
         const startItem = queueItems[normalizedStartIndex] || queueItems[0];
         if (!startItem?.media) {
@@ -1576,6 +1590,9 @@ export class CastManager {
 
         const request = new chrome.cast.media.LoadRequest(startItem.media);
         request.autoplay = true;
+        if (normalizedStartTime > 0) {
+            request.currentTime = normalizedStartTime;
+        }
         request.queueData = new chrome.cast.media.QueueData();
         request.queueData.items = queueItems;
         request.queueData.startIndex = normalizedStartIndex;
@@ -1911,6 +1928,7 @@ export class CastManager {
 
         try {
             // Stop the cast media first
+            this.suppressRemoteEndedDuringDisconnect = true;
             this.stop();
 
             // End the cast session — pass true to stop the receiver app
@@ -1923,12 +1941,8 @@ export class CastManager {
         // Resume local playback at the position we left off
         try {
             const trackInfo = playbackManager.getCurrentTrackInfo();
-            if (trackInfo && castTime > 0) {
-                // Seek the local audio to the cast position
-                playbackManager.seek(castTime);
-                if (isPlaying) {
-                    await playbackManager.resume();
-                }
+            if (trackInfo && (castTime > 0 || isPlaying)) {
+                await playbackManager.resumeLocalAt(castTime, Boolean(isPlaying));
             }
         } catch (e) {
             console.error('[Cast] Error resuming local playback after disconnect:', e);

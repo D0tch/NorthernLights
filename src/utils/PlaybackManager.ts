@@ -1028,6 +1028,29 @@ class PlaybackManager {
         }
     }
 
+    public async resumeLocalAt(time: number, shouldPlay: boolean): Promise<void> {
+        if (!this.audio.src) return;
+        if (isFinite(time) && time >= 0) {
+            this.audio.currentTime = time;
+            this.onTimeUpdateCallback?.(time);
+        }
+        this.updateMediaSessionPosition(true);
+        this.persistContinuitySnapshot();
+
+        if (!shouldPlay) {
+            this.audio.pause();
+            this.onPlayStateChangeCallback?.('paused');
+            return;
+        }
+
+        await this.audio.play();
+        if (this.audioContext?.state === 'suspended') {
+            await this.audioContext.resume();
+        }
+        this.onPlayStateChangeCallback?.('playing');
+        this.updateMediaSessionPlaybackState('playing');
+    }
+
     public stop(): void {
         if (castManager.isConnected()) {
             castManager.stop();
