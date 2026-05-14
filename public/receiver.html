@@ -1296,6 +1296,10 @@
             }
 
             media.contentType = media.contentType || 'application/vnd.apple.mpegurl';
+            media.streamType = media.streamType || cast.framework.messages.StreamType.BUFFERED;
+            if (media.contentType.indexOf('mpegurl') >= 0 && cast.framework.messages.HlsSegmentFormat) {
+              media.hlsSegmentFormat = cast.framework.messages.HlsSegmentFormat.TS;
+            }
           }
 
           if (loadRequestData.media) {
@@ -1412,7 +1416,15 @@
 
       suppressDefaultCastUi();
       logAndPost('ok', LOG_TAG, 'Starting receiver...');
-      context.start({ playbackConfig: playbackConfig });
+      var receiverOptions = new cast.framework.CastReceiverOptions();
+      receiverOptions.playbackConfig = playbackConfig;
+      receiverOptions.useShakaForHls = true;
+      receiverOptions.skipMplLoad = true;
+      receiverOptions.supportedCommands =
+        cast.framework.messages.Command.ALL_BASIC_MEDIA |
+        cast.framework.messages.Command.QUEUE_NEXT |
+        cast.framework.messages.Command.QUEUE_PREV;
+      context.start(receiverOptions);
       logAndPost('ok', LOG_TAG, 'context.start() returned OK');
     } catch (initError) {
       _rawLog('[INIT ERROR] ' + initError.message);
