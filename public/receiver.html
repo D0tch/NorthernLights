@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>NorthernLights Cast Receiver</title>
+  <title>Aurora Cast Receiver</title>
   <style>
     :root {
       --bg: #030208;
@@ -18,9 +18,9 @@
       --teal: #2dd4bf;
       --blue: #0ea5e9;
       --rose: #f43f5e;
-      --shadow: 0 18px 44px rgba(0, 0, 0, 0.38);
-      --radius-xl: 38px;
-      --radius-lg: 28px;
+      --shadow: 0 22px 58px rgba(0, 0, 0, 0.42);
+      --radius-xl: 34px;
+      --radius-lg: 24px;
       --radius-pill: 999px;
       --font-display: sans-serif;
       --font-body: sans-serif;
@@ -50,10 +50,11 @@
       content: '';
       position: fixed;
       inset: 0;
+      z-index: 1;
       background:
-        linear-gradient(115deg, transparent 0 20%, rgba(34, 201, 131, 0.035) 30%, transparent 44%),
-        linear-gradient(72deg, transparent 0 48%, rgba(14, 165, 233, 0.03) 60%, transparent 74%);
-      opacity: 0.64;
+        linear-gradient(115deg, rgba(3, 2, 8, 0.14), transparent 28%, rgba(3, 2, 8, 0.36)),
+        linear-gradient(72deg, transparent 0 48%, rgba(14, 165, 233, 0.035) 60%, transparent 74%);
+      opacity: 0.86;
       pointer-events: none;
     }
 
@@ -61,6 +62,7 @@
       display: none;
     }
 
+    #aurora-cast-media,
     cast-media-player {
       position: fixed;
       left: -10000px !important;
@@ -74,16 +76,33 @@
       clip-path: inset(50%) !important;
     }
 
+    .ambient-art {
+      position: fixed;
+      inset: -7%;
+      z-index: 0;
+      width: 114%;
+      height: 114%;
+      object-fit: cover;
+      opacity: 0;
+      transform: scale(1.02);
+      transition: opacity 700ms ease;
+      pointer-events: none;
+    }
+
+    body.has-art .ambient-art {
+      opacity: 0.08;
+    }
+
     .shell {
       position: fixed;
       inset: 0;
       z-index: 10;
       width: 100%;
       height: 100%;
-      padding: 5vh 5vw;
+      padding: clamp(40px, 5vh, 72px) clamp(56px, 5vw, 96px);
       display: grid;
       grid-template-rows: auto 1fr auto;
-      gap: 4vh;
+      gap: clamp(28px, 4vh, 48px);
     }
 
     .topbar {
@@ -143,7 +162,7 @@
       font-family: var(--font-display);
       font-size: 2.35vh;
       line-height: 1;
-      letter-spacing: -0.035em;
+      letter-spacing: 0;
       color: var(--text);
     }
 
@@ -216,7 +235,7 @@
       aspect-ratio: 1;
       justify-self: end;
       border-radius: var(--radius-xl);
-      padding: 10px;
+      padding: 9px;
       background:
         linear-gradient(145deg, rgba(255,255,255,0.09), rgba(255,255,255,0.025)),
         rgba(255, 255, 255, 0.035);
@@ -260,9 +279,9 @@
     .content {
       min-width: 0;
       max-width: 760px;
-      padding: 4.2vh 3.2vw;
+      padding: clamp(34px, 4.2vh, 56px) clamp(34px, 3.2vw, 54px);
       border-radius: var(--radius-xl);
-      background: linear-gradient(145deg, rgba(8, 6, 22, 0.52), rgba(8, 6, 22, 0.34));
+      background: linear-gradient(145deg, rgba(8, 6, 22, 0.58), rgba(8, 6, 22, 0.34));
       border: 1px solid var(--border);
       box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,0.045);
     }
@@ -291,7 +310,7 @@
       font-family: var(--font-display);
       font-size: clamp(40px, 6.2vh, 82px);
       line-height: 0.94;
-      letter-spacing: -0.055em;
+      letter-spacing: 0;
       color: var(--text);
       overflow: hidden;
       display: -webkit-box;
@@ -330,7 +349,7 @@
       border-radius: var(--radius-pill);
       color: var(--text-soft);
       font-size: 1.35vh;
-      background: rgba(255, 255, 255, 0.038);
+      background: rgba(255, 255, 255, 0.045);
       border: 1px solid var(--border);
       box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
       opacity: 0;
@@ -436,7 +455,7 @@
       color: var(--text);
       background: rgba(255, 255, 255, 0.08);
       font-size: 1.05vh;
-      letter-spacing: -0.08em;
+      letter-spacing: 0;
     }
 
     .shell.is-dimmed {
@@ -509,7 +528,7 @@
       color: var(--green);
       font-family: var(--font-display);
       font-size: 1.65vh;
-      letter-spacing: -0.03em;
+      letter-spacing: 0;
       opacity: 0.9;
     }
 
@@ -560,6 +579,22 @@
       font-size: 1.15vh;
       letter-spacing: 0.12em;
       text-transform: uppercase;
+      opacity: 0;
+      transform: translateY(6px);
+      transition: opacity 220ms ease, transform 220ms ease, border-color 220ms ease;
+      pointer-events: none;
+    }
+
+    body.debug-access-visible #debug-toggle,
+    body.debug-panel-open #debug-toggle {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    #debug-toggle:focus-visible {
+      outline: 2px solid rgba(45, 212, 191, 0.72);
+      outline-offset: 4px;
     }
 
     .debug-panel {
@@ -660,7 +695,8 @@
   <script src="//www.gstatic.com/cast/sdk/libs/caf_receiver/v3/cast_receiver_framework.js"></script>
 </head>
 <body>
-  <cast-media-player></cast-media-player>
+  <audio id="aurora-cast-media" preload="auto" aria-hidden="true"></audio>
+  <img id="ambient-art" class="ambient-art" alt="" aria-hidden="true" />
 
   <div class="shell" id="receiver-shell" data-player-state="APP_LOADING" data-burnin-phase="0">
     <header class="topbar">
@@ -668,7 +704,7 @@
         <div class="brand-mark" aria-hidden="true"></div>
         <div class="brand-copy">
           <div class="brand-title">Aurora</div>
-          <div class="brand-subtitle">NorthernLights Receiver</div>
+          <div class="brand-subtitle">Cast Receiver</div>
         </div>
       </div>
 
@@ -693,7 +729,7 @@
         </div>
         <h1 id="track-title">Aurora Receiver</h1>
         <p id="track-artist">Starting Cast session</p>
-        <p id="track-album">Preparing the NorthernLights receiver.</p>
+        <p id="track-album">Preparing the Aurora receiver.</p>
 
         <div class="state-banner is-visible" id="state-banner" data-state="APP_LOADING" aria-live="polite">
           <span class="state-spinner" aria-hidden="true"></span>
@@ -719,13 +755,14 @@
     </aside>
   </div>
 
-  <button id="debug-toggle" type="button">Logs</button>
+  <button id="debug-toggle" type="button">Diagnostics</button>
   <div id="debug-panel" class="debug-panel is-hidden"></div>
 
   <script>
     var _rawPanel = document.getElementById('debug-panel');
     function _rawLog(msg) {
       if (!_rawPanel) return;
+      document.body.classList.add('debug-access-visible', 'debug-panel-open');
       _rawPanel.classList.remove('is-hidden');
       var el = document.createElement('div');
       el.className = 'err';
@@ -764,7 +801,9 @@
         metaKicker: document.getElementById('meta-kicker'),
         upNextList: document.getElementById('up-next-list'),
         debugPanel: document.getElementById('debug-panel'),
-        debugToggle: document.getElementById('debug-toggle')
+        debugToggle: document.getElementById('debug-toggle'),
+        ambientArt: document.getElementById('ambient-art'),
+        mediaElement: document.getElementById('aurora-cast-media')
       };
 
       var MAX_LINES = 80;
@@ -781,7 +820,7 @@
         'Connect from Aurora to start playback.',
         'Open Aurora on your phone to control this receiver.',
         'Queue changes appear here without interrupting playback.',
-        'Aurora streams your own library over HLS.'
+        'Aurora is ready on this screen.'
       ];
       var currentAuthToken = '';
       var currentPlayerState = 'APP_LOADING';
@@ -831,6 +870,17 @@
       function setDebugVisible(visible) {
         if (!ui.debugPanel) return;
         ui.debugPanel.classList.toggle('is-hidden', !visible);
+        document.body.classList.toggle('debug-panel-open', visible);
+        if (visible) {
+          document.body.classList.add('debug-access-visible');
+        }
+      }
+
+      function setDebugAccessVisible(visible) {
+        document.body.classList.toggle('debug-access-visible', Boolean(visible));
+        if (!visible) {
+          setDebugVisible(false);
+        }
       }
 
       ui.debugToggle.addEventListener('click', function() {
@@ -908,17 +958,21 @@
 
       function suppressDefaultCastUi() {
         var defaultPlayer = document.querySelector('cast-media-player');
-        if (!defaultPlayer) return;
-        defaultPlayer.setAttribute('aria-hidden', 'true');
-        defaultPlayer.style.setProperty('left', '-10000px', 'important');
-        defaultPlayer.style.setProperty('top', '-10000px', 'important');
-        defaultPlayer.style.setProperty('width', '1px', 'important');
-        defaultPlayer.style.setProperty('height', '1px', 'important');
-        defaultPlayer.style.setProperty('opacity', '0', 'important');
-        defaultPlayer.style.setProperty('pointer-events', 'none', 'important');
-        defaultPlayer.style.setProperty('z-index', '-1', 'important');
-        defaultPlayer.style.setProperty('overflow', 'hidden', 'important');
-        defaultPlayer.style.setProperty('clip-path', 'inset(50%)', 'important');
+        var mediaElement = ui.mediaElement;
+        [defaultPlayer, mediaElement].forEach(function(element) {
+          if (!element) return;
+          element.setAttribute('aria-hidden', 'true');
+          element.removeAttribute('controls');
+          element.style.setProperty('left', '-10000px', 'important');
+          element.style.setProperty('top', '-10000px', 'important');
+          element.style.setProperty('width', '1px', 'important');
+          element.style.setProperty('height', '1px', 'important');
+          element.style.setProperty('opacity', '0', 'important');
+          element.style.setProperty('pointer-events', 'none', 'important');
+          element.style.setProperty('z-index', '-1', 'important');
+          element.style.setProperty('overflow', 'hidden', 'important');
+          element.style.setProperty('clip-path', 'inset(50%)', 'important');
+        });
       }
 
       function withAuth(url) {
@@ -1012,10 +1066,14 @@
 
         if (imageUrl) {
           ui.coverArt.src = imageUrl;
+          if (ui.ambientArt) ui.ambientArt.src = imageUrl;
+          document.body.classList.add('has-art');
           ui.coverArt.style.display = 'block';
           ui.coverFallback.style.display = 'none';
         } else {
           ui.coverArt.removeAttribute('src');
+          if (ui.ambientArt) ui.ambientArt.removeAttribute('src');
+          document.body.classList.remove('has-art');
           ui.coverArt.style.display = 'none';
           ui.coverFallback.textContent = (title || 'A').trim().charAt(0).toUpperCase() || 'A';
           ui.coverFallback.style.display = 'flex';
@@ -1035,11 +1093,11 @@
 
       function getBannerCopy(statusCopy) {
         if (statusCopy === 'Starting') return 'Starting receiver';
-        if (statusCopy === 'Needs attention') return 'Playback problem. Check Cast logs.';
-        if (statusCopy === 'Loading') return 'Loading HLS stream';
-        if (statusCopy === 'Buffering') return 'Buffering audio';
+        if (statusCopy === 'Needs attention') return 'Playback problem. Check diagnostics.';
+        if (statusCopy === 'Loading') return 'Loading track';
+        if (statusCopy === 'Buffering') return 'Buffering';
         if (statusCopy === 'Seeking') return 'Seeking';
-        if (statusCopy === 'Paused') return 'Paused on receiver';
+        if (statusCopy === 'Paused') return 'Paused';
         if (statusCopy === 'Idle') return 'Ready for playback';
         return '';
       }
@@ -1262,7 +1320,7 @@
 
       context.addEventListener(cast.framework.system.EventType.READY, function() {
         suppressDefaultCastUi();
-        logAndPost('ok', LOG_TAG, 'Receiver started — forced codec: ' + FORCED_CAST_CODEC);
+        logAndPost('ok', LOG_TAG, 'Receiver started, forced codec: ' + FORCED_CAST_CODEC);
         setPlayerState('IDLE');
         syncUi(true);
       });
@@ -1286,6 +1344,7 @@
               if (receiverDiagnosticsVerbose !== nextDiagnosticsVerbose || VERBOSE_NETWORK_LOGS !== nextDiagnosticsVerbose) {
                 receiverDiagnosticsVerbose = nextDiagnosticsVerbose;
                 VERBOSE_NETWORK_LOGS = nextDiagnosticsVerbose;
+                setDebugAccessVisible(receiverDiagnosticsVerbose);
                 postDiagnosticMarker('receiver-diagnostics-verbosity', 'enabled=' + receiverDiagnosticsVerbose);
               }
             }
@@ -1424,10 +1483,16 @@
 
       suppressDefaultCastUi();
       logAndPost('ok', LOG_TAG, 'Starting receiver...');
+      if (ui.mediaElement) {
+        playerManager.setMediaElement(ui.mediaElement);
+      }
       var receiverOptions = new cast.framework.CastReceiverOptions();
       receiverOptions.playbackConfig = playbackConfig;
       receiverOptions.useShakaForHls = true;
       receiverOptions.skipMplLoad = true;
+      if (ui.mediaElement) {
+        receiverOptions.mediaElement = ui.mediaElement;
+      }
       receiverOptions.supportedCommands =
         cast.framework.messages.Command.ALL_BASIC_MEDIA |
         cast.framework.messages.Command.QUEUE_NEXT |
