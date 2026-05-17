@@ -436,11 +436,11 @@ export class CastManager {
                 this.notifyStateChange();
                 localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
 
-                const mediaSession = session.getMediaSession?.() || null;
+                const mediaSession = this.getHydratableMediaSession(session.getMediaSession?.() || null);
                 if (this.hasActiveRemoteMediaSession(mediaSession)) {
                     await this.hydrateSenderFromRemoteSession(mediaSession, `stale-transport:${reason}`);
                 } else {
-                    this.logCast('warn', `Rejoined Cast session without active media: ${reason}`);
+                    this.logCast('warn', `Rejoined Cast session without active media: ${reason}`, this.describeRemotePlayer());
                 }
                 this.logCast('ok', `Recovered stale Cast transport: ${reason}`);
                 this.logCast('ok', 'stale-transport-recovered', `reason=${reason}`);
@@ -495,10 +495,72 @@ export class CastManager {
         return !!mediaSession.media || (Array.isArray(mediaSession.items) && mediaSession.items.length > 0);
     }
 
+    private getRemotePlayerMediaSession(): any | null {
+        if (!this.player) return null;
+
+        const mediaInfo = this.player.mediaInfo || null;
+        const queueData = this.player.queueData || null;
+        const queueItems = Array.isArray(queueData?.items) ? queueData.items : [];
+        const isLoaded = Boolean(this.player.isMediaLoaded || mediaInfo || queueItems.length || this.player.title);
+        if (!isLoaded) return null;
+
+        const startIndex = typeof queueData?.startIndex === 'number' ? queueData.startIndex : 0;
+        const currentItemIndex = Math.max(0, Math.min(startIndex, Math.max(queueItems.length - 1, 0)));
+        const currentItem = queueItems[currentItemIndex] || null;
+        const sourceMedia = mediaInfo || currentItem?.media || null;
+        const metadata = {
+            ...(sourceMedia?.metadata || {}),
+        };
+        if (!metadata.title && this.player.title) metadata.title = this.player.title;
+        if (!metadata.images && this.player.imageUrl) metadata.images = [new chrome.cast.Image(this.player.imageUrl)];
+        if (!metadata.duration && typeof this.player.duration === 'number' && isFinite(this.player.duration) && this.player.duration > 0) {
+            metadata.duration = this.player.duration;
+        }
+
+        const media = sourceMedia
+            ? { ...sourceMedia, metadata }
+            : {
+                contentId: '',
+                contentType: '',
+                customData: currentItem?.media?.customData || undefined,
+                metadata,
+            };
+
+        return {
+            media,
+            items: queueItems,
+            currentItemId: currentItem?.itemId,
+            currentItemIndex: queueItems.length ? currentItemIndex : undefined,
+            currentTime: this.player.currentTime,
+            playerState: this.player.playerState || (this.player.isPaused ? chrome.cast.media.PlayerState.PAUSED : chrome.cast.media.PlayerState.PLAYING),
+            repeatMode: queueData?.repeatMode,
+            __source: 'remote-player',
+        };
+    }
+
+    private getHydratableMediaSession(mediaSession: any | null = this.getMediaSession()): any | null {
+        return mediaSession || this.getRemotePlayerMediaSession();
+    }
+
+    private describeRemotePlayer(): string {
+        if (!this.player) return 'remotePlayer=none';
+        const queueItems = Array.isArray(this.player.queueData?.items) ? this.player.queueData.items.length : 0;
+        return [
+            `remoteConnected=${Boolean(this.player.isConnected)}`,
+            `remoteLoaded=${Boolean(this.player.isMediaLoaded)}`,
+            `remoteState=${this.player.playerState || 'unknown'}`,
+            `remoteTitle=${this.player.title || 'unknown'}`,
+            `remoteMediaInfo=${this.player.mediaInfo ? 'yes' : 'no'}`,
+            `remoteQueueItems=${queueItems}`,
+            `remoteTime=${typeof this.player.currentTime === 'number' ? this.player.currentTime.toFixed(1) : 'unknown'}`,
+            `remoteDuration=${typeof this.player.duration === 'number' ? this.player.duration.toFixed(1) : 'unknown'}`,
+        ].join(' ');
+    }
+
     private async refreshMediaSessionStatus(reason: string): Promise<any | null> {
         const session = this.castContext?.getCurrentSession?.() || null;
         const mediaSession = session?.getMediaSession?.() || null;
-        if (!mediaSession || typeof mediaSession.getStatus !== 'function') return mediaSession;
+        if (!mediaSession || typeof mediaSession.getStatus !== 'function') return this.getHydratableMediaSession(mediaSession);
         if (this.mediaStatusRefreshPromise) return this.mediaStatusRefreshPromise;
 
         this.mediaStatusRefreshPromise = new Promise<any | null>((resolve) => {
@@ -508,7 +570,7 @@ export class CastManager {
                 if (settled) return;
                 settled = true;
                 if (timeout !== undefined) window.clearTimeout(timeout);
-                resolve(nextMediaSession || session?.getMediaSession?.() || mediaSession);
+                resolve(this.getHydratableMediaSession(nextMediaSession || session?.getMediaSession?.() || mediaSession));
             };
             timeout = window.setTimeout(() => {
                 this.logCast('warn', `Timed out refreshing Cast media status: ${reason}`);
@@ -561,7 +623,7 @@ export class CastManager {
 
         const mediaSession =
             await this.refreshMediaSessionStatus(`hydration:${reason}`)
-            || this.castContext?.getCurrentSession?.()?.getMediaSession?.()
+            || this.getHydratableMediaSession(this.castContext?.getCurrentSession?.()?.getMediaSession?.() || null)
             || null;
         if (this.hasActiveRemoteMediaSession(mediaSession)) {
             this.rejoinSessionPending = false;
@@ -604,7 +666,7 @@ export class CastManager {
             const sdkState = this.castContext.getCastState?.();
             const session = this.castContext.getCurrentSession?.() || null;
             const mediaSession = session
-                ? await this.refreshMediaSessionStatus(`reconcile:${reason}`) || session.getMediaSession?.() || null
+                ? await this.refreshMediaSessionStatus(`reconcile:${reason}`) || this.getHydratableMediaSession(session.getMediaSession?.() || null)
                 : null;
 
             if (session) {
@@ -620,7 +682,7 @@ export class CastManager {
                     return true;
                 }
 
-                this.logCast('warn', `Cast session exists without active media: ${reason}`);
+                this.logCast('warn', `Cast session exists without active media: ${reason}`, this.describeRemotePlayer());
                 this.setHealthStatus('warning', 'Cast session connected without active media.', reason);
                 return false;
             }
@@ -742,7 +804,7 @@ export class CastManager {
                         if (this.userSessionRequestPending) {
                             return;
                         }
-                        const mediaSession = this.castContext.getCurrentSession?.()?.getMediaSession?.() || null;
+                        const mediaSession = this.getHydratableMediaSession(this.castContext.getCurrentSession?.()?.getMediaSession?.() || null);
                         if (this.hasActiveRemoteMediaSession(mediaSession)) {
                             void this.hydrateSenderFromRemoteSession(mediaSession, 'cast-connected');
                         } else if (this.shouldHydrateConnectedSessionAsRejoin()) {
@@ -906,16 +968,18 @@ export class CastManager {
             this.playerController.addEventListener(
                 cast.framework.RemotePlayerEventType.PLAYER_STATE_CHANGED,
                 () => {
-                    const stateKey = `state=${this.player.playerState || 'unknown'} idleReason=${this.getMediaSession()?.idleReason || 'none'} paused=${this.player.isPaused}`;
+                    const mediaSession = this.getHydratableMediaSession();
+                    const stateKey = `state=${this.player.playerState || 'unknown'} idleReason=${mediaSession?.idleReason || 'none'} paused=${this.player.isPaused}`;
                     if (stateKey !== this.lastRemotePlayerStateKey) {
                         this.lastRemotePlayerStateKey = stateKey;
                         this.logCast('ok', 'REMOTE_PLAYER_STATE_CHANGED', stateKey);
                     }
+                    if (this.hasActiveRemoteMediaSession(mediaSession)) {
+                        void this.hydrateSenderFromRemoteSession(mediaSession, 'remote-player-state-changed');
+                    }
                     if (this.player.playerState === chrome.cast.media.PlayerState.IDLE) {
                         // idleReason is only available on the media session, not RemotePlayer
                         try {
-                            const session = this.castContext?.getCurrentSession();
-                            const mediaSession = session?.getMediaSession();
                             if (mediaSession?.idleReason === chrome.cast.media.IdleReason.FINISHED) {
                                 if (this.suppressRemoteEndedDuringDisconnect) return;
                                 this.onEnded?.();
@@ -950,7 +1014,7 @@ export class CastManager {
                 () => {
                     if (!this.isConnected()) return;
                     try {
-                        const mediaSession = this.castContext.getCurrentSession()?.getMediaSession();
+                        const mediaSession = this.getHydratableMediaSession(this.castContext.getCurrentSession()?.getMediaSession?.() || null);
                         this.logCast('ok', 'REMOTE_MEDIA_INFO_CHANGED', this.describeMediaSession(mediaSession));
                         this.syncCurrentTrackFromSession(mediaSession);
                     } catch { /* ignore */ }
@@ -961,7 +1025,7 @@ export class CastManager {
                 cast.framework.RemotePlayerEventType.MEDIA_STATUS_CHANGED,
                 () => {
                     try {
-                        const mediaSession = this.castContext.getCurrentSession()?.getMediaSession();
+                        const mediaSession = this.getHydratableMediaSession(this.castContext.getCurrentSession()?.getMediaSession?.() || null);
                         const statusKey = this.describeMediaSession(mediaSession);
                         if (statusKey !== this.lastRemoteMediaStatusKey) {
                             this.lastRemoteMediaStatusKey = statusKey;
@@ -971,6 +1035,32 @@ export class CastManager {
                     } catch { /* ignore */ }
                 }
             );
+
+            if (cast.framework.RemotePlayerEventType.IS_MEDIA_LOADED_CHANGED) {
+                this.playerController.addEventListener(
+                    cast.framework.RemotePlayerEventType.IS_MEDIA_LOADED_CHANGED,
+                    () => {
+                        const mediaSession = this.getHydratableMediaSession();
+                        this.logCast('ok', 'REMOTE_MEDIA_LOADED_CHANGED', `${this.describeRemotePlayer()} ${this.describeMediaSession(mediaSession)}`);
+                        if (this.hasActiveRemoteMediaSession(mediaSession)) {
+                            void this.hydrateSenderFromRemoteSession(mediaSession, 'remote-media-loaded-changed');
+                        }
+                    }
+                );
+            }
+
+            if (cast.framework.RemotePlayerEventType.QUEUE_DATA_CHANGED) {
+                this.playerController.addEventListener(
+                    cast.framework.RemotePlayerEventType.QUEUE_DATA_CHANGED,
+                    () => {
+                        const mediaSession = this.getHydratableMediaSession();
+                        this.logCast('ok', 'REMOTE_QUEUE_DATA_CHANGED', `${this.describeRemotePlayer()} ${this.describeMediaSession(mediaSession)}`);
+                        if (this.hasActiveRemoteMediaSession(mediaSession)) {
+                            void this.hydrateSenderFromRemoteSession(mediaSession, 'remote-queue-data-changed');
+                        }
+                    }
+                );
+            }
 
             // --- Try to rejoin an existing session on init ---
             this.tryRejoinSession();
@@ -1287,11 +1377,12 @@ export class CastManager {
     public doesSessionTrackMatchStore(): boolean {
         const state = usePlayerStore.getState();
         if (state.currentIndex === null) return false;
-        const sessionIndex = this.resolveTrackIndexFromSession(this.getMediaSession(), state.playlist);
+        const sessionIndex = this.resolveTrackIndexFromSession(this.getHydratableMediaSession(), state.playlist);
         return sessionIndex === state.currentIndex;
     }
 
-    private async hydrateSenderFromRemoteSession(mediaSession: any | null = this.getMediaSession(), reason: string = 'remote-session'): Promise<boolean> {
+    private async hydrateSenderFromRemoteSession(mediaSession: any | null = null, reason: string = 'remote-session'): Promise<boolean> {
+        mediaSession = this.getHydratableMediaSession(mediaSession);
         if (!mediaSession || !this.hasActiveRemoteMediaSession(mediaSession)) return false;
 
         // Stop any stale local playback before hydrating sender state from Cast.
@@ -1336,7 +1427,7 @@ export class CastManager {
         }
         if (!this.castContext?.getCurrentSession?.()) return;
 
-        const mediaSession = this.getMediaSession();
+        const mediaSession = this.getHydratableMediaSession();
         if (this.hasActiveRemoteMediaSession(mediaSession)) {
             await this.hydrateSenderFromRemoteSession(mediaSession, reason);
             return;
