@@ -3,10 +3,18 @@ import { Music2, Eye, EyeOff, Loader2, LogIn } from 'lucide-react';
 
 interface LoginPageProps {
   onLogin: (username: string, password: string) => Promise<boolean>;
+  initialUsername?: string;
+  sessionMessage?: string | null;
+  submitLabel?: string;
 }
 
-export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
-  const [username, setUsername] = useState('');
+export const LoginPage: React.FC<LoginPageProps> = ({
+  onLogin,
+  initialUsername = '',
+  sessionMessage = null,
+  submitLabel = 'Sign in',
+}) => {
+  const [username, setUsername] = useState(initialUsername);
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState('');
@@ -97,6 +105,12 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
             </div>
           </div>
 
+          {sessionMessage && !error && (
+            <div role="status" className="text-[var(--color-text-primary)] text-sm bg-[var(--color-primary)]/10 border border-[var(--color-primary)]/20 rounded-xl px-4 py-2">
+              {sessionMessage}
+            </div>
+          )}
+
           {/* Error */}
           {error && (
             <div role="alert" className="text-[var(--color-error)] text-sm bg-[var(--color-error)]/10 border border-[var(--color-error)]/20 rounded-xl px-4 py-2">
@@ -118,7 +132,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({ onLogin }) => {
             ) : (
               <>
                 <LogIn className="w-4 h-4" aria-hidden="true" />
-                Sign in
+                {submitLabel}
               </>
             )}
           </button>

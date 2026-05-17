@@ -76,6 +76,51 @@ const GlobalSearchSlot: React.FC = () => (
   </React.Suspense>
 );
 
+let authExpirationFetchInterceptorInstalled = false;
+
+const isProtectedApiRequest = (input: RequestInfo | URL): boolean => {
+  const rawUrl = input instanceof Request ? input.url : input.toString();
+  let url: URL;
+  try {
+    url = new URL(rawUrl, window.location.origin);
+  } catch {
+    return false;
+  }
+
+  if (url.origin !== window.location.origin || !url.pathname.startsWith('/api/')) return false;
+  if (
+    url.pathname === '/api/auth/login' ||
+    url.pathname === '/api/auth/register' ||
+    url.pathname === '/api/setup/status' ||
+    url.pathname === '/api/setup/complete' ||
+    url.pathname === '/api/health' ||
+    url.pathname.startsWith('/api/invites/') ||
+    url.pathname === '/api/providers/external/proxy-image'
+  ) {
+    return false;
+  }
+
+  return true;
+};
+
+const installAuthExpirationFetchInterceptor = () => {
+  if (authExpirationFetchInterceptorInstalled || typeof window === 'undefined') return;
+  authExpirationFetchInterceptorInstalled = true;
+  const originalFetch = window.fetch.bind(window);
+
+  window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const response = await originalFetch(input, init);
+    if (
+      response.status === 401 &&
+      isProtectedApiRequest(input) &&
+      usePlayerStore.getState().authToken
+    ) {
+      usePlayerStore.getState().expireAuthSession();
+    }
+    return response;
+  };
+};
+
 const App: React.FC = () => {
   const [isSettingsOpen, setIsSettingsOpen] = React.useState(false);
   const [dbConnected, _setDbConnected] = React.useState<boolean | null>(null);
@@ -91,6 +136,9 @@ const App: React.FC = () => {
   const needsSetup = usePlayerStore(state => state.needsSetup);
   const checkSetupStatus = usePlayerStore(state => state.checkSetupStatus);
   const authToken = usePlayerStore(state => state.authToken);
+  const authExpired = usePlayerStore(state => state.authExpired);
+  const authExpiredMessage = usePlayerStore(state => state.authExpiredMessage);
+  const authExpiredUsername = usePlayerStore(state => state.authExpiredUsername);
   const login = usePlayerStore(state => state.login);
 
   const [isScannerVisibleLocally, setIsScannerVisibleLocally] = React.useState(false);
@@ -155,6 +203,7 @@ const App: React.FC = () => {
 
   // Trigger an initial library fetch, apply theme, and subscribe to scan events
   React.useEffect(() => {
+    installAuthExpirationFetchInterceptor();
     usePlayerStore.getState().setTheme(usePlayerStore.getState().theme);
 
     const performInitialChecks = async () => {
@@ -192,6 +241,35 @@ const App: React.FC = () => {
 
     return () => clearInterval(interval);
   }, [checkSetupStatus, checkHealth]);
+
+  React.useEffect(() => {
+    if (!authToken || needsSetup) return;
+
+    let cancelled = false;
+    const validateSession = async () => {
+      const token = usePlayerStore.getState().authToken;
+      if (!token) return;
+      try {
+        const res = await fetch('/api/auth/me', {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!res.ok) return;
+        const data = await res.json().catch(() => null);
+        if (!cancelled && data?.user) {
+          usePlayerStore.setState({ currentUser: data.user });
+        }
+      } catch {
+        // Network and database health are handled separately.
+      }
+    };
+
+    validateSession();
+    const interval = window.setInterval(validateSession, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [authToken, needsSetup]);
 
   // Connect to scan status SSE only when authenticated (EventSource can't send headers)
   const onSSEMessage = React.useCallback((data: any) => {
@@ -468,7 +546,12 @@ const App: React.FC = () => {
       };
       return (
         <React.Suspense fallback={<FullPageFallback label="Loading sign in..." />}>
-          <LoginPage onLogin={handleLogin} />
+          <LoginPage
+            onLogin={handleLogin}
+            initialUsername={authExpiredUsername}
+            sessionMessage={authExpired ? authExpiredMessage : null}
+            submitLabel={authExpired ? 'Log in again' : 'Sign in'}
+          />
         </React.Suspense>
       );
   }

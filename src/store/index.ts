@@ -263,6 +263,9 @@ export interface PlayerState {
   providerArtistBio: 'lastfm' | 'genius';
   providerAlbumArt: 'lastfm' | 'genius' | 'musicbrainz';
   authToken: string | null; // JWT token
+  authExpired: boolean;
+  authExpiredMessage: string | null;
+  authExpiredUsername: string;
   streamingQuality: 'auto' | '64k' | '128k' | '160k' | '320k' | 'source';
   playbackDebugLogging: boolean;
   prebufferPolicy: PrebufferPolicy;
@@ -342,6 +345,7 @@ export interface PlayerState {
   addTracksToUserPlaylist: (playlistId: string, trackIds: string[]) => Promise<void>;
   setAuthToken: (token: string) => void;
   clearAuthToken: () => void;
+  expireAuthSession: (message?: string) => void;
   login: (username: string, password: string) => Promise<boolean>;
   register: (inviteToken: string, username: string, password: string) => Promise<boolean>;
   getAuthHeader: () => Record<string, string>;
@@ -748,6 +752,9 @@ export const usePlayerStore = create<PlayerState>()(
         concertsRadiusKm: 50,
         concertsAutoAddEnabled: false as boolean,
         authToken: null as string | null,
+        authExpired: false,
+        authExpiredMessage: null as string | null,
+        authExpiredUsername: '',
         streamingQuality: 'auto' as 'auto' | '64k' | '128k' | '160k' | '320k' | 'source',
         playbackDebugLogging: false as boolean,
         prebufferPolicy: 'conservative' as PrebufferPolicy,
@@ -832,9 +839,33 @@ export const usePlayerStore = create<PlayerState>()(
           }
         },
 
-        setAuthToken: (token: string) => set({ authToken: token }),
+        setAuthToken: (token: string) => set({ authToken: token, authExpired: false, authExpiredMessage: null }),
 
-        clearAuthToken: () => set({ authToken: null, currentUser: null }),
+        clearAuthToken: () => set({
+          authToken: null,
+          currentUser: null,
+          authExpired: false,
+          authExpiredMessage: null,
+          authExpiredUsername: '',
+        }),
+
+        expireAuthSession: (message = 'Your session expired. Log in again to continue.') => set((state: PlayerState) => ({
+          authToken: null,
+          currentUser: null,
+          authExpired: true,
+          authExpiredMessage: message,
+          authExpiredUsername: state.currentUser?.username || state.authExpiredUsername || '',
+          isLibraryLoading: false,
+          isPlaylistsLoading: false,
+          isFetchingInfinity: false,
+          isScanning: false,
+          scanPhase: 'idle',
+          scannedFiles: 0,
+          totalFiles: 0,
+          activeWorkers: 0,
+          activeFiles: [],
+          scanningFile: null,
+        })),
 
         login: async (username: string, password: string) => {
           try {
@@ -845,7 +876,13 @@ export const usePlayerStore = create<PlayerState>()(
             });
             if (res.ok) {
               const data = await res.json();
-              set({ authToken: data.token, currentUser: data.user });
+              set({
+                authToken: data.token,
+                currentUser: data.user,
+                authExpired: false,
+                authExpiredMessage: null,
+                authExpiredUsername: '',
+              });
               return true;
             }
             return false;
@@ -863,7 +900,13 @@ export const usePlayerStore = create<PlayerState>()(
             });
             if (res.ok) {
               const data = await res.json();
-              set({ authToken: data.token, currentUser: data.user });
+              set({
+                authToken: data.token,
+                currentUser: data.user,
+                authExpired: false,
+                authExpiredMessage: null,
+                authExpiredUsername: '',
+              });
               return true;
             }
             return false;
@@ -1140,14 +1183,28 @@ export const usePlayerStore = create<PlayerState>()(
               const libraryWithUrls = data.tracks.map((t: TrackInfo) => hydrateServerTrack(t, token, quality));
 
               set((state: PlayerState): Partial<PlayerState> => {
-                const libraryIds = new Set(libraryWithUrls.map((track: TrackInfo) => track.id));
+                const libraryById = new Map(libraryWithUrls.map((track: TrackInfo) => [track.id, track]));
+                const libraryIds = new Set(libraryById.keys());
                 const queueChanged = state.playlist.some((track: TrackInfo) => !libraryIds.has(track.id));
-                let nextQueue = state.playlist;
+                let nextQueue = state.playlist.map((track: TrackInfo) => {
+                  const latestTrack = libraryById.get(track.id);
+                  return latestTrack
+                    ? {
+                        ...track,
+                        ...latestTrack,
+                        queueEntryId: track.queueEntryId,
+                        playlistAddedAt: track.playlistAddedAt,
+                      }
+                    : track;
+                });
                 let nextIndex = state.currentIndex;
+                const refreshedContextMenuTrack = state.contextMenu
+                  ? libraryById.get(state.contextMenu.track.id)
+                  : null;
 
                 if (queueChanged) {
                   const currentTrack = state.currentIndex !== null ? state.playlist[state.currentIndex] : null;
-                  nextQueue = state.playlist.filter((track: TrackInfo) => libraryIds.has(track.id));
+                  nextQueue = nextQueue.filter((track: TrackInfo) => libraryIds.has(track.id));
 
                   if (currentTrack && !libraryIds.has(currentTrack.id)) {
                     playbackManager.stop();
@@ -1166,6 +1223,9 @@ export const usePlayerStore = create<PlayerState>()(
                   genres: data.genres || [],
                   playlist: nextQueue,
                   currentIndex: nextIndex,
+                  contextMenu: state.contextMenu && refreshedContextMenuTrack
+                    ? { ...state.contextMenu, track: { ...state.contextMenu.track, ...refreshedContextMenuTrack } }
+                    : state.contextMenu,
                   isLibraryLoading: false,
                 };
               });
