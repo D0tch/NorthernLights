@@ -102,6 +102,7 @@ export class CastManager {
     private readonly freshSessionWindowMs = 5000;
     private freshSessionPlaybackPromise: Promise<void> | null = null;
     private staleTransportRecoveryPromise: Promise<boolean> | null = null;
+    private mediaStatusRefreshPromise: Promise<any | null> | null = null;
     private preserveSessionOnNextEnd = false;
     private lifecycleReconcileBurstActive = false;
     private diagnosticsVerbose = false;
@@ -494,6 +495,58 @@ export class CastManager {
         return !!mediaSession.media || (Array.isArray(mediaSession.items) && mediaSession.items.length > 0);
     }
 
+    private async refreshMediaSessionStatus(reason: string): Promise<any | null> {
+        const session = this.castContext?.getCurrentSession?.() || null;
+        const mediaSession = session?.getMediaSession?.() || null;
+        if (!mediaSession || typeof mediaSession.getStatus !== 'function') return mediaSession;
+        if (this.mediaStatusRefreshPromise) return this.mediaStatusRefreshPromise;
+
+        this.mediaStatusRefreshPromise = new Promise<any | null>((resolve) => {
+            let settled = false;
+            let timeout: number | undefined;
+            const finish = (nextMediaSession: any | null) => {
+                if (settled) return;
+                settled = true;
+                if (timeout !== undefined) window.clearTimeout(timeout);
+                resolve(nextMediaSession || session?.getMediaSession?.() || mediaSession);
+            };
+            timeout = window.setTimeout(() => {
+                this.logCast('warn', `Timed out refreshing Cast media status: ${reason}`);
+                finish(session?.getMediaSession?.() || mediaSession);
+            }, 2500);
+
+            try {
+                const request = chrome.cast?.media?.GetStatusRequest
+                    ? new chrome.cast.media.GetStatusRequest()
+                    : null;
+                mediaSession.getStatus(
+                    request,
+                    () => {
+                        this.logCast('ok', `Refreshed Cast media status: ${reason}`);
+                        finish(session?.getMediaSession?.() || mediaSession);
+                    },
+                    (error: unknown) => {
+                        this.logCast('warn', `Failed to refresh Cast media status: ${reason}`, this.describeError(error));
+                        if (this.isDisconnectedPresentationError(error)) {
+                            void this.recoverStaleTransport(`media-status:${reason}`, error);
+                        }
+                        finish(session?.getMediaSession?.() || mediaSession);
+                    }
+                );
+            } catch (error) {
+                this.logCast('warn', `Cast media status refresh threw: ${reason}`, this.describeError(error));
+                if (this.isDisconnectedPresentationError(error)) {
+                    void this.recoverStaleTransport(`media-status:${reason}`, error);
+                }
+                finish(session?.getMediaSession?.() || mediaSession);
+            }
+        }).finally(() => {
+            this.mediaStatusRefreshPromise = null;
+        });
+
+        return this.mediaStatusRefreshPromise;
+    }
+
     private beginRejoinHydration(reason: string) {
         this.rejoinSessionPending = true;
         this.rejoinHydrationAttempts = 0;
@@ -506,7 +559,10 @@ export class CastManager {
     private async waitForRemoteSessionHydration(reason: string): Promise<void> {
         if (!this.rejoinSessionPending) return;
 
-        const mediaSession = this.castContext?.getCurrentSession?.()?.getMediaSession?.() || null;
+        const mediaSession =
+            await this.refreshMediaSessionStatus(`hydration:${reason}`)
+            || this.castContext?.getCurrentSession?.()?.getMediaSession?.()
+            || null;
         if (this.hasActiveRemoteMediaSession(mediaSession)) {
             this.rejoinSessionPending = false;
             this.clearRejoinHydrationTimer();
@@ -524,6 +580,7 @@ export class CastManager {
             console.warn('[Cast] Remote session hydration timed out; not auto-casting stale local state');
             if (!hasSession) {
                 localStorage.removeItem(SESSION_STORAGE_KEY);
+                this.logCast('warn', `Cleared unreachable stored Cast session: ${reason}`);
                 this.setHealthStatus('error', 'Cast session is no longer reachable.', reason);
                 this.state = this.castContext?.getCastState?.() || 'NOT_CONNECTED';
                 this.notifyStateChange();
@@ -546,7 +603,9 @@ export class CastManager {
         try {
             const sdkState = this.castContext.getCastState?.();
             const session = this.castContext.getCurrentSession?.() || null;
-            const mediaSession = session?.getMediaSession?.() || null;
+            const mediaSession = session
+                ? await this.refreshMediaSessionStatus(`reconcile:${reason}`) || session.getMediaSession?.() || null
+                : null;
 
             if (session) {
                 const sessionId = session.getSessionId?.();
@@ -568,6 +627,16 @@ export class CastManager {
 
             const storedId = localStorage.getItem(SESSION_STORAGE_KEY);
             if (storedId) {
+                if (sdkState === cast.framework.CastState.NO_DEVICES_AVAILABLE) {
+                    this.logCast('ok', `Stored Cast session rejoin deferred: ${reason}`, `stored=${storedId} castState=${sdkState}`);
+                    if (sdkState && sdkState !== this.state) {
+                        this.state = sdkState;
+                        this.notifyStateChange();
+                    }
+                    this.setHealthStatus('idle', '');
+                    return false;
+                }
+
                 const now = Date.now();
                 if (now - this.lastStoredSessionRejoinAt >= this.storedSessionRejoinThrottleMs) {
                     this.lastStoredSessionRejoinAt = now;
@@ -642,6 +711,9 @@ export class CastManager {
             cast.framework.CastContext.getInstance().setOptions({
                 receiverApplicationId,
                 autoJoinPolicy: chrome.cast.AutoJoinPolicy.ORIGIN_SCOPED,
+                resumeSavedSession: true,
+                androidReceiverCompatible: true,
+                language: navigator.language,
             });
 
             this.castContext = cast.framework.CastContext.getInstance();
@@ -858,6 +930,8 @@ export class CastManager {
                 cast.framework.RemotePlayerEventType.VOLUME_LEVEL_CHANGED,
                 () => {
                     this.onVolumeChange?.(this.player.volumeLevel);
+                    void this.refreshMediaSessionStatus('volume-level-changed')
+                        .then((mediaSession) => this.hydrateSenderFromRemoteSession(mediaSession, 'volume-level-changed'));
                 }
             );
 
@@ -865,6 +939,8 @@ export class CastManager {
                 cast.framework.RemotePlayerEventType.IS_MUTED_CHANGED,
                 () => {
                     this.onMuteChange?.(this.player.isMuted);
+                    void this.refreshMediaSessionStatus('mute-changed')
+                        .then((mediaSession) => this.hydrateSenderFromRemoteSession(mediaSession, 'mute-changed'));
                 }
             );
 
