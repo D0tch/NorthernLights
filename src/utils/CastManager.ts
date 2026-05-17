@@ -1049,8 +1049,11 @@ export class CastManager {
         mediaInfo.metadata.title = track.title || 'Unknown Title';
         mediaInfo.metadata.artist = track.artist || 'Unknown Artist';
         if (track.album) mediaInfo.metadata.albumName = track.album;
-        if (includeArtwork && track.artUrl) mediaInfo.metadata.images = [new chrome.cast.Image(track.artUrl)];
-        if (includeDuration && track.duration) mediaInfo.metadata.duration = track.duration;
+        const castImageUrl = includeArtwork ? this.getCastImageUrl(track.artUrl) : '';
+        if (castImageUrl) mediaInfo.metadata.images = [new chrome.cast.Image(castImageUrl)];
+        if (includeDuration && typeof track.duration === 'number' && isFinite(track.duration) && track.duration > 0) {
+            mediaInfo.metadata.duration = track.duration;
+        }
 
         const customData: Record<string, any> = {};
         if (track.queueEntryId) {
@@ -1515,6 +1518,17 @@ export class CastManager {
         }
     }
 
+    private getCastImageUrl(url?: string): string {
+        if (!url) return '';
+        try {
+            const parsed = new URL(url, window.location.href);
+            if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return '';
+            return parsed.toString();
+        } catch {
+            return '';
+        }
+    }
+
     public async castMedia(hlsUrl: string, rawUrl: string, title: string, artist: string, artUrl?: string, album?: string, format?: string, token?: string) {
         if (!this.isConnected()) return;
 
@@ -1561,8 +1575,9 @@ export class CastManager {
             mediaInfo.metadata.albumName = album;
         }
 
-        if (artUrl) {
-            mediaInfo.metadata.images = [new chrome.cast.Image(artUrl)];
+        const castImageUrl = this.getCastImageUrl(artUrl);
+        if (castImageUrl) {
+            mediaInfo.metadata.images = [new chrome.cast.Image(castImageUrl)];
         }
 
         // Pass auth token to custom receiver via customData for Bearer header injection
@@ -1634,10 +1649,7 @@ export class CastManager {
         const normalizedStartIndex = Math.max(0, Math.min(startIndex, tracks.length - 1));
         const normalizedStartTime = Number.isFinite(startTime) && startTime > 0 ? startTime : 0;
         const queueItems: any[] = tracks.map((track, index) => this.buildQueueItem(
-            {
-                ...track,
-                startTime: index === normalizedStartIndex ? normalizedStartTime : 0,
-            },
+            track,
             {
                 includeAuthTokenInCustomData: false,
                 includeArtwork: index === normalizedStartIndex,
@@ -1666,12 +1678,12 @@ export class CastManager {
 
         const request = new chrome.cast.media.LoadRequest(startItem.media);
         request.autoplay = true;
-        if (normalizedStartTime > 0) {
-            request.currentTime = normalizedStartTime;
-        }
         request.queueData = new chrome.cast.media.QueueData();
         request.queueData.items = queueItems;
         request.queueData.startIndex = normalizedStartIndex;
+        if (normalizedStartTime > 0) {
+            request.queueData.startTime = normalizedStartTime;
+        }
         request.queueData.repeatMode = this.getRepeatMode(repeat);
 
         try {
@@ -1679,12 +1691,13 @@ export class CastManager {
                 media: request.media,
                 queueData: {
                     startIndex: request.queueData.startIndex,
+                    startTime: request.queueData.startTime,
                     repeatMode: request.queueData.repeatMode,
                     items: request.queueData.items,
                 }
             }).length;
-            console.log(`[Cast] Queue load summary: items=${queueItems.length} startIndex=${normalizedStartIndex} approxPayloadChars=${approxPayloadChars}`);
-            this.logCast('ok', 'Queue load requested', `items=${queueItems.length} startIndex=${normalizedStartIndex} bytesApprox=${approxPayloadChars}`);
+            console.log(`[Cast] Queue load summary: items=${queueItems.length} startIndex=${normalizedStartIndex} startTime=${normalizedStartTime.toFixed(1)} approxPayloadChars=${approxPayloadChars}`);
+            this.logCast('ok', 'Queue load requested', `items=${queueItems.length} startIndex=${normalizedStartIndex} startTime=${normalizedStartTime.toFixed(1)} bytesApprox=${approxPayloadChars}`);
         } catch { /* ignore */ }
 
         // Serialize loadMedia calls to prevent concurrent loads from clashing
@@ -1703,8 +1716,41 @@ export class CastManager {
         } catch (e: any) {
             const errorDetail = e?.code || e?.message || String(e);
             const errorDesc = e?.description || '';
+            const describedError = this.describeError(e);
             console.error(`[Cast] Failed to load queue: ${errorDetail}${errorDesc ? ' — ' + errorDesc : ''}`, e);
-            this.logCast('error', 'Failed to load queue', `${errorDetail}${errorDesc ? ' - ' + errorDesc : ''} ${this.describeError(e)}`);
+            this.logCast('error', 'Failed to load queue', `${errorDetail}${errorDesc ? ' - ' + errorDesc : ''} ${describedError}`);
+            const isInvalidParameter = /invalid_parameter|INVALID_PARAMETER/.test(`${errorDetail} ${errorDesc} ${describedError}`);
+            if (isInvalidParameter && startTrack) {
+                try {
+                    const fallbackMediaInfo = this.buildMediaInfo(startTrack, {
+                        includeAuthTokenInCustomData: true,
+                        includeArtwork: true,
+                        includeDuration: true,
+                        compactHlsUrl: false,
+                    });
+                    const fallbackRequest = new chrome.cast.media.LoadRequest(fallbackMediaInfo);
+                    fallbackRequest.autoplay = true;
+                    if (normalizedStartTime > 0) {
+                        fallbackRequest.currentTime = normalizedStartTime;
+                    }
+                    this.logCast('warn', 'Retrying Cast queue failure as current media load', `index=${normalizedStartIndex} startTime=${normalizedStartTime.toFixed(1)}`);
+                    await this.runCastCommand('load-current-media-after-queue-invalid', async () => {
+                        const activeSession = this.castContext.getCurrentSession();
+                        if (!activeSession) throw new Error('No active Cast session');
+                        return activeSession.loadMedia(fallbackRequest);
+                    });
+                    this.queueItemIdByEntryId.clear();
+                    const sessionId = castSession.getSessionId();
+                    if (sessionId) {
+                        localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+                    }
+                    this.logCast('warn', 'Cast queue load fell back to current track', `index=${normalizedStartIndex} title=${startTrack.title || 'Unknown Title'}`);
+                    return;
+                } catch (fallbackError) {
+                    console.error('[Cast] Current media fallback after queue failure also failed:', fallbackError);
+                    this.logCast('error', 'Cast queue fallback failed', this.describeError(fallbackError));
+                }
+            }
             if (!String(errorDetail).includes('cancel') && !String(errorDetail).includes('abort')) {
                 toast.error('Failed to load queue on Cast device.');
             }
