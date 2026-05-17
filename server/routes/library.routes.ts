@@ -724,21 +724,29 @@ router.post('/refresh-metadata', async (req, res) => {
   (async () => {
     scanStatus.isScanning = true;
     scanStatus.phase = 'metadata';
+    scanStatus.scannedFiles = 0;
+    scanStatus.totalFiles = 0;
+    scanStatus.activeFiles = [];
+    scanStatus.activeWorkers = 0;
+    scanStatus.currentFile = `Refreshing metadata for ${path.basename(dirPath)}...`;
+    scanStatus.libraryChanged = false;
     broadcastScanStatus(true);
+    let processedExistingFiles = false;
 
     try {
       const { getPathsForDirectory } = await import('../database');
       const fileBufs = await getPathsForDirectory(dirPath);
 
       if (fileBufs.length === 0) {
-        scanStatus.isScanning = false;
-        broadcastScanStatus(true);
+        resetScanStatus(false);
         return;
       }
 
+      processedExistingFiles = true;
       scanStatus.totalFiles = fileBufs.length;
       scanStatus.scannedFiles = 0;
       scanStatus.currentFile = '';
+      broadcastScanStatus(true);
       
       const metadataConcurrency = await getScannerConcurrency();
       
@@ -747,8 +755,7 @@ router.post('/refresh-metadata', async (req, res) => {
       const purged = await purgeOrphanedEntities();
       console.log(`[Scanner] Purged orphaned entities after refresh: ${purged.artists} artists, ${purged.albums} albums, ${purged.genres} genres`);
 
-      scanStatus.isScanning = false;
-      broadcastScanStatus(true);
+      resetScanStatus(true);
 
       const { genreMatrixService } = await import('../services/genreMatrix.service');
       setImmediate(() => {
@@ -756,8 +763,7 @@ router.post('/refresh-metadata', async (req, res) => {
       });
 
     } catch (error: any) {
-      scanStatus.isScanning = false;
-      broadcastScanStatus(true);
+      resetScanStatus(processedExistingFiles);
       console.error('[Refresh Metadata Error]', error);
     }
   })();
