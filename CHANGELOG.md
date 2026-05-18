@@ -1,5 +1,27 @@
 # Changelog
 
+## [v1.0.0-rc.2] - 2026-05-19
+
+### Security
+- **Scoped Token Auth**: Separate `mediaAccessToken` and `sseAccessToken` JWTs (scope-limited, 7-day expiry) for HLS/Cast URLs and SSE streams — account JWT never exposed in URLs
+- **Password Policy**: Minimum 12 characters enforced across all creation surfaces (register, setup, admin create, password change)
+- **DB Recovery Token**: `AURORA_DB_RECOVERY_TOKEN` env var for unauthenticated database maintenance when auth cannot be verified
+- **SSE Token Encoding**: All EventSource connections use `encodeURIComponent` for token parameters
+
+### UI
+- **PlayerShell**: Desktop player redesigned as a compositional floating-pill / full-width-docked slab with animated transition between modes
+  - Top-edge chevron toggle (`bend`) for float ↔ dock switching
+  - Signal chain chip: hover-expanding pill showing quality → codec → bitrate
+  - Ticker title in float mode for long track names
+  - `usePlayerPlacement` hook for responsive placement
+  - 660 lines of new CSS: shell, bar-row grid, transport, volume, chain, waveform
+
+### Cast Reliability
+- Session preservation: `SESSION_ENDED` with active rejoin now stores session ID and calls `requestSessionById` instead of dropping
+- Stale hydration cancellation: monotonically increasing `rejoinHydrationRunId` cancels outdated rejoin loops
+- Stale media status discard: refreshes discarded when session ID changes between call and callback
+- Remote-player disconnect during rejoin preserved as recovering state
+
 ## [v1.0.0-rc.1] - 2026-04-30
 
 ### Core Architecture
