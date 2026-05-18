@@ -3432,3 +3432,660 @@ body {
     max-width: 380px;
   }
 }
+
+/* ─────────────────────────────────────────────────────────────────────── */
+/*  PLAYER SHELL — floating pill / docked slab + top-edge bend toggle      */
+/* ─────────────────────────────────────────────────────────────────────── */
+
+.player-shell {
+  position: absolute;
+  z-index: 40;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  transition:
+    left 240ms var(--ease-out),
+    right 240ms var(--ease-out),
+    bottom 240ms var(--ease-out),
+    width 240ms var(--ease-out),
+    max-width 240ms var(--ease-out),
+    transform 240ms var(--ease-out),
+    border-radius 240ms var(--ease-out),
+    box-shadow 240ms var(--ease-out),
+    padding 200ms var(--ease-out);
+  will-change: transform, border-radius;
+}
+
+.player-shell--float {
+  left: 50%;
+  right: auto;
+  bottom: 20px;
+  transform: translateX(-50%);
+  width: 92%;
+  max-width: 1100px;
+  border-radius: 22px;
+  box-shadow: var(--shadow-lg);
+  padding: 8px 16px;
+}
+
+.player-shell--dock {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  transform: translateX(0);
+  width: 100%;
+  max-width: 100%;
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+  border-bottom: none;
+  box-shadow: 0 -16px 40px rgba(0, 0, 0, 0.18);
+  padding: 8px 24px;
+}
+
+.dark .player-shell--float {
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+}
+.dark .player-shell--dock {
+  box-shadow: 0 -16px 50px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.02) inset;
+}
+
+.player-shell-inner {
+  position: relative;
+  z-index: 1;
+}
+
+/* Top-edge hit region: invisible 14px-tall strip across the bar's top */
+.player-shell-edge {
+  position: absolute;
+  top: -8px;
+  left: 0;
+  right: 0;
+  height: 22px;
+  z-index: 2;
+  cursor: pointer;
+}
+
+/* The chevron tab — visually "bends" out of the top edge on hover.
+   Cheapest bend: a small rounded protrusion that fades up out of the bar's top.
+   At rest: hidden + tucked behind the bar. On hover: lifts and reveals chevron. */
+.player-shell-bend {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 18px;
+  padding: 0;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-bottom: none;
+  border-radius: 12px 12px 0 0;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transform: translate(-50%, 0) scaleY(0);
+  transform-origin: bottom center;
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    transform 200ms var(--ease-out),
+    opacity 160ms var(--ease-out),
+    color 150ms var(--ease-out),
+    background 150ms var(--ease-out);
+}
+
+.player-shell.is-edge-hover .player-shell-bend,
+.player-shell-bend:focus-visible {
+  transform: translate(-50%, -100%) scaleY(1);
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.player-shell-bend:hover {
+  color: var(--color-primary);
+  background: var(--glass-bg-hover);
+}
+
+.player-shell-bend:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* When the chevron tab is showing, the bar's top corners pull in slightly so
+   the tab + bar read as a single bent edge. Cheap, hardware-accelerated. */
+.player-shell.is-edge-hover.player-shell--float {
+  border-top-left-radius: 28px;
+  border-top-right-radius: 28px;
+}
+
+/* ─────────────────────────────────────────────────────────────────────── */
+/*  PLAYER BAR ROW — single-row composition                                */
+/* ─────────────────────────────────────────────────────────────────────── */
+
+.player-bar-row {
+  display: grid;
+  /* Left + right clusters take their natural width; the center waveform
+     dynamically fills the leftover space between them, but never collapses
+     below 220px — otherwise the canvas measures to zero and the waveform
+     renders to a single hairline. */
+  grid-template-columns: auto minmax(220px, 1fr) auto;
+  align-items: center;
+  gap: 20px;
+  width: 100%;
+  min-height: 56px;
+}
+
+/* LEFT cluster: cover + metadata + chain. Grid column 1, justify start.
+   Capped so the waveform always gets meaningful room; metadata truncates
+   inside this cap. */
+.player-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  justify-self: start;
+  max-width: 320px;
+}
+
+.player-left .player-metadata {
+  min-width: 0;
+  max-width: 220px;
+}
+
+/* In docked mode there's a lot more horizontal room. Let the artist /
+   title block reach much wider before truncating — the waveform's flex
+   column happily gives up pixels in column 2 since it stretches to fill
+   leftover space. */
+.player-shell--dock .player-left {
+  max-width: min(560px, 40vw);
+}
+
+.player-shell--dock .player-left .player-metadata {
+  max-width: min(460px, 36vw);
+}
+
+/* RIGHT group wraps transport + volume + far cluster. Grid column 3,
+   justify-self: end so it reaches the slab's right edge in dock mode. */
+.player-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  justify-self: end;
+  min-width: 0;
+}
+
+.player-cover {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex-shrink: 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+
+.player-cover-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-surface-variant);
+  color: var(--color-text-muted);
+}
+
+.player-metadata {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 2px;
+}
+
+.player-title {
+  font-family: var(--font-display);
+  font-size: 0.92rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--color-text-primary);
+  line-height: 1.2;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Ticker wrapper sits inside .player-title. The inner span is the actual
+   text that translates back and forth when it overflows. Float-mode only;
+   dock mode has enough room that this almost never triggers, and we
+   suppress it explicitly below. */
+.player-title-ticker {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.player-title-ticker-inner {
+  display: inline-block;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+.player-shell--float .player-title-ticker.is-overflow .player-title-ticker-inner {
+  animation: player-title-scan var(--ticker-duration, 14s) var(--ease-in-out) infinite alternate;
+  animation-delay: 1.4s;
+}
+
+@keyframes player-title-scan {
+  0%, 8%   { transform: translateX(0); }
+  92%, 100% { transform: translateX(var(--ticker-shift, 0)); }
+}
+
+/* Dock mode: titles get their own roomy max-width via .player-shell--dock
+   .player-left rules above; if anything still overflows, just clip without
+   scrolling — the bar has enough information density already. */
+.player-shell--dock .player-title-ticker-inner {
+  animation: none;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .player-title-ticker-inner {
+    animation: none;
+    transform: none;
+  }
+}
+
+.player-title-empty {
+  color: var(--color-text-muted);
+  font-weight: 500;
+}
+
+.player-subline {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  font-size: 0.74rem;
+  color: var(--color-text-muted);
+  line-height: 1.2;
+}
+
+.player-artist {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  color: var(--color-text-secondary);
+}
+
+.player-artist-link {
+  text-decoration: none;
+  cursor: pointer;
+  transition: color 150ms var(--ease-out);
+}
+
+.player-artist-link:hover,
+.player-artist-link:focus-visible {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+/* CENTER: waveform. Grid column 2 — stretches to fill the leftover
+   space between left and right clusters. Min-width:0 lets the column
+   shrink below content width; overflow:hidden prevents the canvas from
+   escaping on slow ResizeObserver passes. */
+.player-center {
+  display: flex;
+  align-items: center;
+  justify-self: stretch;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.player-waveform {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.player-waveform-canvas {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  /* WaveformProgressBar renders its own 48px-tall canvas; we let it sit
+     freely inside the row so the bar's height tracks the waveform. */
+}
+
+.player-waveform-canvas .progress-bar-container,
+.player-waveform-canvas > div {
+  width: 100%;
+  padding: 0;
+}
+
+.player-waveform-empty {
+  width: 100%;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.player-waveform-times {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+  font-size: 0.72rem;
+  color: var(--color-text-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Pin each time span to a fixed character width so a ticking digit can't
+   change the times block's overall width — otherwise the canvas's flex
+   space shifts by sub-pixels every second and the dense waveform jitters. */
+.player-waveform-current,
+.player-waveform-total {
+  display: inline-block;
+  min-width: 4ch;
+}
+
+.player-waveform-current {
+  text-align: right;
+}
+
+.player-waveform-total {
+  text-align: left;
+}
+
+.player-waveform-sep {
+  display: inline-block;
+  width: 1ch;
+  text-align: center;
+  opacity: 0.5;
+}
+
+/* TRANSPORT cluster */
+.player-transport {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* VOLUME — hover-revealed slider */
+.player-volume {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 0 4px;
+}
+
+.player-volume-icon {
+  color: var(--color-text-muted);
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.player-volume-slider {
+  appearance: none;
+  width: 92px;
+  height: 3px;
+  background: rgba(0, 0, 0, 0.08);
+  border-radius: 9999px;
+  outline: none;
+  cursor: pointer;
+  transition: height 150ms var(--ease-out), background 150ms var(--ease-out);
+}
+
+.dark .player-volume-slider {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.player-volume:hover .player-volume-slider,
+.player-volume:focus-within .player-volume-slider {
+  height: 4px;
+  background: rgba(0, 0, 0, 0.12);
+}
+
+.dark .player-volume:hover .player-volume-slider,
+.dark .player-volume:focus-within .player-volume-slider {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.player-volume-slider::-webkit-slider-thumb {
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  cursor: pointer;
+  transition: transform 120ms var(--ease-out), box-shadow 150ms var(--ease-out);
+}
+
+.player-volume-slider:hover::-webkit-slider-thumb {
+  transform: scale(1.2);
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.35);
+}
+
+.player-volume-slider::-moz-range-thumb {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  border: none;
+  cursor: pointer;
+}
+
+/* FAR RIGHT: infinity / love / lyrics / cast */
+.player-far {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  position: relative;
+}
+
+.player-aux-btn:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* Cast button inside the far cluster: keep size aligned with siblings */
+.player-far .aurora-cast-control {
+  flex-shrink: 0;
+}
+
+/* Lyrics popup floats above the bar */
+.player-lyrics-popup {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  margin-bottom: 12px;
+  width: 320px;
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: 18px;
+  padding: 16px;
+  box-shadow: var(--shadow-lg);
+  z-index: 50;
+}
+
+/* ─────────────────────────────────────────────────────────────────────── */
+/*  SIGNAL CHAIN — listening-experience chip + center-out expansion panel  */
+/* ─────────────────────────────────────────────────────────────────────── */
+
+/* The wrapper reserves exactly the icon's footprint (22×22). The chip is
+   absolutely positioned inside it, so the pill can extend outward on hover
+   without pushing the artist text, the cover, or anything else around it. */
+.player-chain {
+  position: relative;
+  display: inline-block;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+.player-chain-chip {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0;
+  background: rgba(0, 0, 0, 0.04);
+  border: 1px solid var(--glass-border);
+  border-radius: 9999px;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  z-index: 2;
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  transition:
+    color 150ms var(--ease-out),
+    background 160ms var(--ease-out),
+    border-color 160ms var(--ease-out),
+    box-shadow 160ms var(--ease-out);
+}
+
+.dark .player-chain-chip {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.player-chain-chip:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
+/* The icon stays on the left of the pill, both at rest and when expanded. */
+.player-chain-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  transition: color 150ms var(--ease-out);
+}
+
+/* Chain nodes sit to the right of the icon. Hidden at rest by collapsing
+   max-width + opacity; revealed on hover or open. */
+.player-chain-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 0;
+  padding-right: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition:
+    max-width 260ms var(--ease-out),
+    padding-right 220ms var(--ease-out),
+    opacity 180ms var(--ease-out);
+}
+
+.player-chain-chip:hover,
+.player-chain-chip[aria-expanded="true"] {
+  /* Dark glass fill — deeper than the bar's own glass so the pill reads
+     as a distinct surface that emerged from the icon. */
+  background: rgba(8, 6, 20, 0.78);
+  border-color: var(--glass-border-hover);
+  color: rgba(232, 232, 248, 0.96);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+}
+
+/* Light theme: still glass, but a calm cool slate instead of pure black. */
+:root .player-chain-chip:hover,
+:root .player-chain-chip[aria-expanded="true"] {
+  background: rgba(28, 28, 40, 0.78);
+  color: rgba(245, 246, 250, 0.98);
+}
+
+.dark .player-chain-chip:hover,
+.dark .player-chain-chip[aria-expanded="true"] {
+  background: rgba(6, 4, 18, 0.82);
+  color: rgba(232, 232, 248, 0.96);
+}
+
+.player-chain-chip:hover .player-chain-icon,
+.player-chain-chip[aria-expanded="true"] .player-chain-icon {
+  color: var(--color-primary);
+}
+
+.player-chain-chip:hover .player-chain-content,
+.player-chain-chip[aria-expanded="true"] .player-chain-content {
+  max-width: 520px;
+  padding-right: 12px;
+  padding-left: 4px;
+  opacity: 1;
+}
+
+.player-chain-node {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 0.72rem;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.player-chain-node-label {
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+.player-chain-node-sub {
+  font-size: 0.64rem;
+  color: var(--color-text-muted);
+}
+
+.player-chain-arrow {
+  font-size: 0.78rem;
+  color: var(--color-text-muted);
+  line-height: 1;
+  opacity: 0.6;
+}
+
+/* ─────────────────────────────────────────────────────────────────────── */
+/*  Waveform integration — keep the existing component but flatten its     */
+/*  outer padding when used inside the player bar.                         */
+/* ─────────────────────────────────────────────────────────────────────── */
+
+.player-waveform-canvas .progress-time {
+  display: none;
+}
+
+/* ─────────────────────────────────────────────────────────────────────── */
+/*  Reduced motion                                                         */
+/* ─────────────────────────────────────────────────────────────────────── */
+
+@media (prefers-reduced-motion: reduce) {
+  .player-shell,
+  .player-shell-bend,
+  .player-chain-chip,
+  .player-chain-content,
+  .player-volume-slider {
+    transition-duration: 0ms;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────── */
+/*  Below md breakpoint: PlayerShell is hidden by wrapper class; nothing   */
+/*  more to do here. MobileMiniPlayer handles small viewports.             */
+/* ─────────────────────────────────────────────────────────────────────── */
+

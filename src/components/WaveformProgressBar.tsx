@@ -161,6 +161,10 @@ const WaveformProgressBarComponent: React.FC<WaveformProgressBarProps> = ({
     const [peaks, setPeaks] = useState<Float32Array | null>(null);
     const [loading, setLoading] = useState(false);
     const lastUrlRef = useRef<string>('');
+    // Retain the decoded audio buffer so we can re-extract peaks at new
+    // bucket counts when the container is resized, without re-fetching.
+    const decodedBufferRef = useRef<AudioBuffer | null>(null);
+    const lastBarCountRef = useRef<number>(0);
     // Intro animation state
     const introAnimRef = useRef<number | null>(null);
     const introStartRef = useRef<number | null>(null);
@@ -260,11 +264,15 @@ const WaveformProgressBarComponent: React.FC<WaveformProgressBarProps> = ({
         if (!allowWaveformDecode) {
             setLoading(false);
             setPeaks(null);
+            decodedBufferRef.current = null;
+            lastBarCountRef.current = 0;
             lastUrlRef.current = ''; // Reset so switching back to a decodable URL works
             return;
         }
         if (!audioUrl || audioUrl === lastUrlRef.current) return;
         lastUrlRef.current = audioUrl;
+        decodedBufferRef.current = null;
+        lastBarCountRef.current = 0;
         setPeaks(null);
         setLoading(true);
 
@@ -281,8 +289,10 @@ const WaveformProgressBarComponent: React.FC<WaveformProgressBarProps> = ({
                 audioCtx.close();
                 if (abortCtrl.signal.aborted) return;
 
+                decodedBufferRef.current = decoded;
                 const width = containerRef.current?.offsetWidth || 600;
                 const numBars = Math.max(24, Math.floor(width / 3));
+                lastBarCountRef.current = numBars;
                 setPeaks(extractPeaks(decoded, numBars));
             } catch (e) {
                 if ((e as any)?.name !== 'AbortError') {
@@ -296,6 +306,18 @@ const WaveformProgressBarComponent: React.FC<WaveformProgressBarProps> = ({
         return () => abortCtrl.abort();
     }, [audioUrl, allowWaveformDecode]);
 
+    // When the container width changes significantly (e.g. dock/undock),
+    // re-extract peaks at the new bucket count. The decoded buffer is kept
+    // in a ref so this is essentially free — no fetch, no re-decode.
+    const reextractPeaksForWidth = useCallback((widthPx: number) => {
+        const decoded = decodedBufferRef.current;
+        if (!decoded) return;
+        const numBars = Math.max(24, Math.floor(widthPx / 3));
+        if (Math.abs(numBars - lastBarCountRef.current) < 6) return; // ignore noise
+        lastBarCountRef.current = numBars;
+        setPeaks(extractPeaks(decoded, numBars));
+    }, []);
+
     useEffect(() => {
         drawStaticLayers();
     }, [drawStaticLayers]);
@@ -304,12 +326,25 @@ const WaveformProgressBarComponent: React.FC<WaveformProgressBarProps> = ({
         const container = containerRef.current;
         if (!container) return;
 
+        let frame: number | null = null;
         const observer = new ResizeObserver(() => {
-            drawStaticLayers();
+            // Re-extract peaks first (state update triggers a redraw via the
+            // drawStaticLayers effect), then defensively redraw for the
+            // common case where bucket count is stable.
+            const width = container.offsetWidth || container.clientWidth;
+            if (width > 0) reextractPeaksForWidth(width);
+            if (frame !== null) cancelAnimationFrame(frame);
+            frame = requestAnimationFrame(() => {
+                frame = null;
+                drawStaticLayers();
+            });
         });
         observer.observe(container);
-        return () => observer.disconnect();
-    }, [drawStaticLayers]);
+        return () => {
+            observer.disconnect();
+            if (frame !== null) cancelAnimationFrame(frame);
+        };
+    }, [drawStaticLayers, reextractPeaksForWidth]);
 
     const handleClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
         const container = containerRef.current;

@@ -1,10 +1,18 @@
-import React, { useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { usePlayerStore } from '../store/index';
+import { usePlaybackTimeStore } from '../store/playbackTime';
 import { useVolumeSync } from '../hooks/useVolumeSync';
-import { Infinity, FileText } from 'lucide-react';
+import { Infinity, FileText, Waypoints } from 'lucide-react';
 import { LyricsPanel } from './LyricsPanel';
 import { LoveButton } from './LoveButton';
 import { CastButton } from './cast/CastButton';
+import { WaveformProgressBar } from './WaveformProgressBar';
+import { castManager } from '../utils/CastManager';
+import { formatTime } from '../utils/formatTime';
+import { playbackManager } from '../utils/PlaybackManager';
+import { usePlayerPlacement } from '../hooks/usePlayerPlacement';
+import type { PlaybackLoadPath } from '../store/index';
 import {
   IconPrev,
   IconPlay,
@@ -14,16 +22,248 @@ import {
   IconSequential,
   IconRepeatAll,
   IconRepeatOne,
-  IconVolume
+  IconVolume,
 } from './icons/PlayerIcons';
 
-const baseBtnClass = "flex items-center justify-center w-10 h-10 rounded-full border border-black/10 bg-black/5 backdrop-blur-md text-black/60 hover:text-black/90 hover:border-black/20 hover:bg-black/10 hover:shadow-[0_4px_16px_rgba(0,0,0,0.1),inset_0_1px_0_rgba(255,255,255,0.6)] active:scale-95 active:bg-black/10 dark:border-white/10 dark:bg-white/5 dark:text-white/75 dark:hover:text-white dark:hover:border-white/20 dark:hover:bg-white/10 dark:hover:shadow-[0_4px_16px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.12)] transition-ui duration-150";
+// ──────────────────────────────────────────────────────────────────────────
+// Visual primitives shared inside the bar
+// ──────────────────────────────────────────────────────────────────────────
 
-const playBtnClass = "flex items-center justify-center w-14 h-14 rounded-full border border-emerald-500/40 bg-gradient-to-br from-emerald-500/85 to-emerald-600/90 backdrop-blur-[20px] text-white shadow-[0_0_24px_rgba(16,185,129,0.35),inset_0_1px_0_rgba(255,255,255,0.2)] hover:from-emerald-400/90 hover:to-emerald-500/95 hover:border-emerald-300/60 hover:shadow-[0_0_36px_rgba(16,185,129,0.65),inset_0_1px_0_rgba(255,255,255,0.25)] hover:scale-105 active:scale-95 transition-ui duration-200";
+const auxBtnClass =
+  'player-aux-btn flex items-center justify-center w-9 h-9 rounded-full text-[var(--color-text-muted)] ' +
+  'hover:text-[var(--color-text-primary)] hover:bg-black/5 dark:hover:bg-white/10 ' +
+  'transition-ui duration-150';
 
-const volumeSliderClass = "w-20 h-1 appearance-none bg-black/5 dark:bg-white/5 rounded-full cursor-pointer outline-none transition-[height] hover:h-1.5 " +
-  "[&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-2.5 [&::-webkit-slider-thumb]:h-2.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-[var(--color-text-secondary)] [&::-webkit-slider-thumb]:cursor-pointer [&::-webkit-slider-thumb]:transition-[background-color,box-shadow,transform] " +
-  "hover:[&::-webkit-slider-thumb]:bg-[var(--color-text-primary)] hover:[&::-webkit-slider-thumb]:scale-125 hover:[&::-webkit-slider-thumb]:shadow-[0_0_8px_rgba(16,185,129,0.3)]";
+const transportBtnClass =
+  'flex items-center justify-center w-9 h-9 rounded-full border border-black/10 bg-black/5 ' +
+  'text-black/65 hover:text-black/95 hover:border-black/20 hover:bg-black/10 ' +
+  'dark:border-white/10 dark:bg-white/5 dark:text-white/75 dark:hover:text-white ' +
+  'dark:hover:border-white/20 dark:hover:bg-white/10 active:scale-95 transition-ui duration-150';
+
+const playBtnClass =
+  'flex items-center justify-center w-11 h-11 rounded-full border border-emerald-500/40 ' +
+  'bg-gradient-to-br from-emerald-500/85 to-emerald-600/90 text-white ' +
+  'shadow-[0_0_18px_rgba(16,185,129,0.32),inset_0_1px_0_rgba(255,255,255,0.2)] ' +
+  'hover:from-emerald-400/90 hover:to-emerald-500/95 hover:border-emerald-300/60 ' +
+  'hover:shadow-[0_0_28px_rgba(16,185,129,0.55),inset_0_1px_0_rgba(255,255,255,0.25)] ' +
+  'hover:scale-105 active:scale-95 transition-ui duration-200';
+
+// ──────────────────────────────────────────────────────────────────────────
+// Title ticker — ping-pong scroll when text overflows (float mode only)
+// ──────────────────────────────────────────────────────────────────────────
+
+interface TitleTickerProps {
+  text: string;
+}
+
+const TitleTicker: React.FC<TitleTickerProps> = ({ text }) => {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const innerRef = useRef<HTMLSpanElement>(null);
+  const [overflow, setOverflow] = useState(0);
+
+  useLayoutEffect(() => {
+    const measure = () => {
+      const w = wrapperRef.current;
+      const i = innerRef.current;
+      if (!w || !i) return;
+      const diff = i.scrollWidth - w.clientWidth;
+      setOverflow(diff > 1 ? diff : 0);
+    };
+    measure();
+
+    const ro = new ResizeObserver(measure);
+    if (wrapperRef.current) ro.observe(wrapperRef.current);
+    if (innerRef.current) ro.observe(innerRef.current);
+    return () => ro.disconnect();
+  }, [text]);
+
+  // Scale the duration with the overflow distance so long titles don't fly
+  // by. ~28px per second feels calm; clamp to [10s, 22s].
+  const duration = overflow > 0
+    ? Math.min(22, Math.max(10, overflow / 28 * 2 + 4))
+    : 0;
+
+  const styleVar: React.CSSProperties = {
+    // Negative shift, applied via CSS variable on the inner span.
+    ['--ticker-shift' as never]: `${-overflow}px`,
+    ['--ticker-duration' as never]: `${duration}s`,
+  };
+
+  return (
+    <div
+      ref={wrapperRef}
+      className={`player-title-ticker ${overflow > 0 ? 'is-overflow' : ''}`}
+      title={text}
+      style={styleVar}
+    >
+      <span ref={innerRef} className="player-title-ticker-inner">
+        {text}
+      </span>
+    </div>
+  );
+};
+
+// ──────────────────────────────────────────────────────────────────────────
+// Signal-chain chip
+// ──────────────────────────────────────────────────────────────────────────
+
+type ChainNode = { label: string; sub?: string };
+
+const formatBitrate = (bitrate?: number) =>
+  bitrate && bitrate > 0 ? `${Math.round(bitrate / 1000)} kbps` : null;
+
+const outputCodecForLoadPath = (loadPath: PlaybackLoadPath): string | null => {
+  switch (loadPath) {
+    case 'direct':
+      return null;
+    case 'prepared-hls':
+    case 'fallback-hls':
+    case 'cast':
+      return 'HLS · AAC';
+    default:
+      return null;
+  }
+};
+
+interface SignalChainProps {
+  sourceFormat: string | null;
+  sourceBitrate: string | null;
+  outputCodec: string | null;
+  deviceLabel: string;
+}
+
+const SignalChain: React.FC<SignalChainProps> = ({
+  sourceFormat,
+  sourceBitrate,
+  outputCodec,
+  deviceLabel,
+}) => {
+  const [open, setOpen] = useState(false);
+  const closeTimer = useRef<number | null>(null);
+  const chipRef = useRef<HTMLButtonElement>(null);
+
+  const handleEnter = () => {
+    if (closeTimer.current) window.clearTimeout(closeTimer.current);
+    setOpen(true);
+  };
+  const handleLeave = () => {
+    if (closeTimer.current) window.clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(() => setOpen(false), 80);
+  };
+
+  useEffect(() => () => {
+    if (closeTimer.current) window.clearTimeout(closeTimer.current);
+  }, []);
+
+  const nodes: ChainNode[] = useMemo(() => {
+    const result: ChainNode[] = [];
+    if (sourceFormat) {
+      result.push({ label: sourceFormat, sub: sourceBitrate ?? undefined });
+    }
+    if (outputCodec) {
+      result.push({ label: outputCodec });
+    }
+    result.push({ label: deviceLabel });
+    return result;
+  }, [sourceFormat, sourceBitrate, outputCodec, deviceLabel]);
+
+  return (
+    <span
+      className="player-chain"
+      onPointerEnter={handleEnter}
+      onPointerLeave={handleLeave}
+      onFocus={handleEnter}
+      onBlur={handleLeave}
+    >
+      <button
+        ref={chipRef}
+        type="button"
+        className="player-chain-chip"
+        aria-expanded={open}
+        aria-label={`Listening on ${deviceLabel}. Show signal chain`}
+        onClick={() => setOpen((v) => !v)}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') setOpen(false);
+        }}
+      >
+        <span className="player-chain-icon" aria-hidden="true">
+          <Waypoints size={14} strokeWidth={1.8} />
+        </span>
+        <span className="player-chain-content" aria-hidden={!open}>
+          {nodes.map((node, i) => (
+            <React.Fragment key={`${node.label}-${i}`}>
+              <span className="player-chain-node">
+                <span className="player-chain-node-label">{node.label}</span>
+                {node.sub && <span className="player-chain-node-sub">{node.sub}</span>}
+              </span>
+              {i < nodes.length - 1 && (
+                <span className="player-chain-arrow" aria-hidden="true">→</span>
+              )}
+            </React.Fragment>
+          ))}
+        </span>
+      </button>
+    </span>
+  );
+};
+
+// ──────────────────────────────────────────────────────────────────────────
+// Inline waveform with trailing time label
+// ──────────────────────────────────────────────────────────────────────────
+
+const InlineWaveform: React.FC = () => {
+  const currentTime = usePlaybackTimeStore((s) => s.currentTime);
+  const duration = usePlaybackTimeStore((s) => s.duration);
+  const playlist = usePlayerStore((s) => s.playlist);
+  const currentIndex = usePlayerStore((s) => s.currentIndex);
+  const currentTrack = currentIndex !== null ? playlist[currentIndex] : null;
+  const [placement] = usePlayerPlacement();
+
+  const isTranscoded =
+    currentTrack?.format?.toUpperCase().includes('WMA') ||
+    currentTrack?.path?.toLowerCase().endsWith('.wma');
+
+  const dbDuration = currentTrack?.duration;
+  const displayDuration =
+    (!isFinite(duration) || duration === 0) && dbDuration ? dbDuration : duration;
+
+  const handleSeek = React.useCallback((time: number) => {
+    playbackManager.seek(time);
+  }, []);
+
+  // The WaveformProgressBar internally handles container resize via
+  // ResizeObserver, so dock/undock will redraw the existing peaks at the
+  // new width without a full remount + re-decode (which previously broke
+  // rendering when combined with strict-mode double-mount).
+  const audioUrl = currentTrack?.rawUrl || currentTrack?.url || '';
+
+  return (
+    <div className="player-waveform" data-placement={placement}>
+      <div className="player-waveform-canvas">
+        {currentTrack?.url ? (
+          <WaveformProgressBar
+            audioUrl={audioUrl}
+            duration={displayDuration}
+            onSeek={handleSeek}
+            dbDuration={dbDuration}
+            allowWaveformDecode={!isTranscoded}
+          />
+        ) : (
+          <div className="player-waveform-empty" />
+        )}
+      </div>
+      <span className="player-waveform-times" aria-hidden="true">
+        <span className="player-waveform-current">{formatTime(currentTime)}</span>
+        <span className="player-waveform-sep">/</span>
+        <span className="player-waveform-total">{formatTime(displayDuration)}</span>
+      </span>
+    </div>
+  );
+};
+
+// ──────────────────────────────────────────────────────────────────────────
+// PlayerControls
+// ──────────────────────────────────────────────────────────────────────────
 
 export const PlayerControls: React.FC = () => {
   const playbackState = usePlayerStore((state) => state.playbackState);
@@ -32,11 +272,15 @@ export const PlayerControls: React.FC = () => {
   const shuffle = usePlayerStore((state) => state.shuffle);
   const repeat = usePlayerStore((state) => state.repeat);
   const isInfinityMode = usePlayerStore((state) => state.isInfinityMode);
-  
-  // By avoiding mapping over the entire playlist slice, we stop mass re-renders on playlist appending
-  const currentTrack = usePlayerStore((state) => 
+
+  const currentTrack = usePlayerStore((state) =>
     state.currentIndex !== null ? state.playlist[state.currentIndex] : null
   );
+
+  const loadPath = usePlayerStore((state) => state.playbackTelemetry.loadPath);
+  const castConnected = usePlayerStore((state) => state.castConnected);
+  const audioOutputActive = usePlayerStore((state) => state.audioOutputActive);
+  const audioOutputDeviceLabel = usePlayerStore((state) => state.audioOutputDeviceLabel);
 
   const setVolume = usePlayerStore((state) => state.setVolume);
   const nextTrackAction = usePlayerStore((state) => state.nextTrack);
@@ -52,16 +296,13 @@ export const PlayerControls: React.FC = () => {
     if (state.playlist.length === 0) return;
     if (state.playbackState === 'playing') {
       state.pause();
+    } else if (state.currentIndex === null) {
+      state.playAtIndex(0);
     } else {
-      if (state.currentIndex === null) {
-        state.playAtIndex(0);
-      } else {
-        state.resume();
-      }
+      state.resume();
     }
   }, []);
 
-  // Optimized keyboard shortcuts logic capturing active state lazily 
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -98,34 +339,220 @@ export const PlayerControls: React.FC = () => {
   useVolumeSync();
 
   const [showLyrics, setShowLyrics] = useState(false);
+  const [castDeviceName, setCastDeviceName] = useState(castManager.getCastDeviceName());
 
-  const volumePercent = Math.round(volume * 100);
+  useEffect(() => {
+    const unsub = castManager.addStateChangeListener((state) => {
+      setCastDeviceName(state === 'CONNECTED' ? castManager.getCastDeviceName() : '');
+    });
+    return unsub;
+  }, []);
+
+  // ── Signal-chain data derivation ──────────────────────────────────────
+  const sourceFormat = currentTrack?.format?.toUpperCase() ?? null;
+  const sourceBitrate = formatBitrate(currentTrack?.bitrate);
+  const outputCodec = outputCodecForLoadPath(loadPath);
+
+  let deviceLabel = 'Browser';
+  if (castConnected && castDeviceName) {
+    deviceLabel = castDeviceName;
+  } else if (audioOutputActive && audioOutputDeviceLabel) {
+    deviceLabel = audioOutputDeviceLabel;
+  }
 
   return (
-    <div className="w-full flex items-center justify-between gap-6 px-2">
-      {/* Left Column: Aux Controls */}
-      <div className="flex-1 flex justify-start items-center pl-2 gap-2 relative">
-        <CastButton showDeviceName showIntro showStopAction />
+    <div className="player-bar-row" aria-live="polite">
+      {/* LEFT: cover + metadata + signal chain */}
+      <div className="player-left">
+        {currentTrack?.artUrl ? (
+          <img
+            src={currentTrack.artUrl}
+            alt=""
+            className="player-cover"
+            loading="lazy"
+          />
+        ) : (
+          <div className="player-cover player-cover-empty" aria-hidden="true">
+            <IconPlay />
+          </div>
+        )}
+
+        {currentTrack ? (
+          <div className="player-metadata">
+            <div className="player-title">
+              <TitleTicker
+                text={currentTrack.title || currentTrack.path.split(/[\\/]/).pop() || ''}
+              />
+            </div>
+            <div className="player-subline">
+              {currentTrack.artistId ? (
+                <Link
+                  to={`/library/artist/${currentTrack.artistId}`}
+                  className="player-artist player-artist-link"
+                  title={currentTrack.artist || 'Unknown Artist'}
+                >
+                  {currentTrack.artist || 'Unknown Artist'}
+                </Link>
+              ) : (
+                <span className="player-artist" title={currentTrack.artist || 'Unknown Artist'}>
+                  {currentTrack.artist || 'Unknown Artist'}
+                </span>
+              )}
+              {(sourceFormat || castConnected || audioOutputActive) && (
+                <SignalChain
+                  sourceFormat={sourceFormat}
+                  sourceBitrate={sourceBitrate}
+                  outputCodec={outputCodec}
+                  deviceLabel={deviceLabel}
+                />
+              )}
+            </div>
+          </div>
+        ) : (
+          <div className="player-metadata">
+            <div className="player-title player-title-empty">Nothing playing</div>
+          </div>
+        )}
+      </div>
+
+      {/* CENTER: waveform (fixed width) */}
+      <div className="player-center">
+        <InlineWaveform />
+      </div>
+
+      {/* RIGHT group: transport + volume + far cluster.
+          Wrapped together so it reaches the slab's right edge in dock mode
+          (grid template puts this group in column 3 with justify-self: end). */}
+      <div className="player-right">
+
+      {/* TRANSPORT cluster */}
+      <div className="player-transport">
+        <button
+          onClick={toggleShuffle}
+          aria-label="Toggle shuffle"
+          className={transportBtnClass}
+          style={{ opacity: shuffle ? 1 : 0.4 }}
+        >
+          {shuffle ? <IconShuffle /> : <IconSequential />}
+        </button>
+
+        <button
+          onClick={prevTrackAction}
+          aria-label="Previous track"
+          className={transportBtnClass}
+        >
+          <IconPrev />
+        </button>
+
+        <button
+          onClick={togglePlay}
+          aria-label={isBuffering ? 'Loading' : isPlaying ? 'Pause' : 'Play'}
+          className={playBtnClass}
+          disabled={isBuffering}
+        >
+          {isBuffering ? (
+            <svg
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              style={{ animation: 'spin 0.8s linear infinite' }}
+            >
+              <circle
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                opacity="0.25"
+              />
+              <path
+                d="M12 2a10 10 0 0 1 10 10"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+              />
+            </svg>
+          ) : isPlaying ? (
+            <IconPause />
+          ) : (
+            <IconPlay />
+          )}
+        </button>
+
+        <button
+          onClick={() => void nextTrackAction()}
+          aria-label="Next track"
+          className={transportBtnClass}
+        >
+          <IconNext />
+        </button>
+
+        <button
+          onClick={cycleRepeatAction}
+          aria-label={`Repeat mode: ${repeat}`}
+          className={transportBtnClass}
+          style={{ opacity: repeat === 'none' ? 0.4 : 1 }}
+        >
+          {repeat === 'one' ? <IconRepeatOne /> : <IconRepeatAll />}
+        </button>
+      </div>
+
+      {/* VOLUME (hover-revealed slider) */}
+      <div className="player-volume">
+        <span className="player-volume-icon" aria-hidden="true">
+          <IconVolume />
+        </span>
+        <input
+          id="volume-slider"
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={volume}
+          onChange={(e) => setVolume(parseFloat(e.target.value))}
+          className="player-volume-slider"
+          aria-label="Volume control"
+        />
+      </div>
+
+      {/* FAR RIGHT: infinity, love, lyrics, cast */}
+      <div className="player-far">
+        <button
+          onClick={toggleInfinityMode}
+          aria-label="Toggle Infinity Mode"
+          className={auxBtnClass}
+          style={{
+            opacity: isInfinityMode ? 1 : 0.55,
+            color: isInfinityMode ? 'var(--color-primary)' : undefined,
+            filter: isInfinityMode ? 'drop-shadow(0 0 6px var(--color-primary))' : 'none',
+          }}
+        >
+          <Infinity size={18} strokeWidth={2} />
+        </button>
+
+        {currentTrack && (
+          <LoveButton track={currentTrack} size={16} className={auxBtnClass} />
+        )}
+
         {currentTrack && (
           <button
-            onClick={() => setShowLyrics(!showLyrics)}
-            className="transition-colors hover:scale-105"
-            style={{ color: showLyrics ? 'var(--color-primary)' : 'var(--color-text-muted)' }}
+            onClick={() => setShowLyrics((v) => !v)}
+            className={auxBtnClass}
+            style={{ color: showLyrics ? 'var(--color-primary)' : undefined }}
             title="Lyrics"
-            aria-label="Open Lyrics"
+            aria-label="Open lyrics"
+            aria-pressed={showLyrics}
           >
-            <FileText size={18} />
+            <FileText size={16} />
           </button>
         )}
-        {currentTrack && (
-          <LoveButton
-            track={currentTrack}
-            size={18}
-            className="w-9 h-9 hover:bg-black/5 dark:hover:bg-white/10"
-          />
-        )}
+
+        <CastButton showDeviceName={false} showIntro showStopAction={false} size="sm" />
+
         {showLyrics && currentTrack && (
-          <div className="absolute bottom-full left-0 mb-3 w-64 bg-[var(--glass-bg)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-2xl p-4 shadow-2xl z-50">
+          <div className="player-lyrics-popup">
             <LyricsPanel
               trackName={currentTrack.title || currentTrack.path.split(/[\\/]/).pop() || ''}
               artistName={currentTrack.artist || ''}
@@ -136,101 +563,6 @@ export const PlayerControls: React.FC = () => {
         )}
       </div>
 
-      {/* Center: Now Playing + Main Controls */}
-      <div className="flex flex-col items-center gap-3 flex-[2] min-w-0" aria-live="polite">
-        {/* Metadata Stack */}
-        {currentTrack ? (
-          <div className="flex flex-col items-center min-w-0 w-full animate-in fade-in slide-in-from-bottom-2 duration-500">
-            <div className="text-sm font-bold text-[var(--color-text-primary)] truncate max-w-full tracking-tight" title={`${currentTrack.artist || 'Unknown Artist'} - ${currentTrack.title || currentTrack.path.split(/[\\/]/).pop()}`}>
-              <span className="text-[var(--color-primary)]">{currentTrack.artist || 'Unknown Artist'}</span>
-              <span className="text-[var(--color-text-muted)] mx-2 opacity-50">•</span>
-              <span>{currentTrack.title || currentTrack.path.split(/[\\/]/).pop()}</span>
-            </div>
-            
-            <div className="flex items-center justify-center gap-2 mt-1 flex-wrap">
-              {currentTrack.bitrate && (
-                <span className="text-[0.6rem] px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-[var(--color-text-secondary)] border border-[var(--glass-border)] whitespace-nowrap font-bold tracking-wider uppercase">
-                  {Math.round(currentTrack.bitrate / 1000)} kbps
-                </span>
-              )}
-              {currentTrack.format && (
-                <span className="text-[0.6rem] px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-[var(--color-text-secondary)] border border-[var(--glass-border)] uppercase whitespace-nowrap font-bold tracking-wider">
-                  {currentTrack.format}
-                </span>
-              )}
-              {currentTrack.genre && (
-                <span className="text-[0.6rem] px-2 py-0.5 rounded-full bg-black/5 dark:bg-white/10 text-[var(--color-text-secondary)] border border-[var(--glass-border)] whitespace-nowrap truncate max-w-[100px] font-bold tracking-wider uppercase">
-                  {currentTrack.genre}
-                </span>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="h-10" /> /* Placeholder to keep layout stable */
-        )}
-
-        {/* Transport Buttons */}
-        <div className="flex items-center justify-center gap-4">
-          <button onClick={toggleShuffle} aria-label="Toggle shuffle" className={baseBtnClass}
-            style={{ opacity: shuffle ? 1 : 0.4 }}>
-            {shuffle ? <IconShuffle /> : <IconSequential />}
-          </button>
-
-          <button onClick={prevTrackAction} aria-label="Previous track" className={baseBtnClass}>
-            <IconPrev />
-          </button>
-
-          <button onClick={togglePlay} aria-label={isBuffering ? "Loading" : isPlaying ? "Pause" : "Play"} className={playBtnClass} disabled={isBuffering}>
-            {isBuffering ? (
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" style={{ animation: 'spin 0.8s linear infinite' }}>
-                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" opacity="0.25" />
-                <path d="M12 2a10 10 0 0 1 10 10" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" />
-              </svg>
-            ) : isPlaying ? <IconPause /> : <IconPlay />}
-          </button>
-
-          <button onClick={() => void nextTrackAction()} aria-label="Next track" className={baseBtnClass}>
-            <IconNext />
-          </button>
-
-          <button onClick={cycleRepeatAction} aria-label={`Repeat mode: ${repeat}`} className={baseBtnClass}
-            style={{ opacity: repeat === 'none' ? 0.4 : 1 }}>
-            {repeat === 'one' ? <IconRepeatOne /> : <IconRepeatAll />}
-          </button>
-
-          <button onClick={toggleInfinityMode} aria-label="Toggle Infinity Mode" className={`${baseBtnClass} ml-3 border-transparent bg-transparent hover:bg-transparent shadow-none`}
-            style={{ 
-              opacity: isInfinityMode ? 1 : 0.4, 
-              color: isInfinityMode ? 'var(--color-primary)' : 'inherit',
-              filter: isInfinityMode ? 'drop-shadow(0 0 6px var(--color-primary))' : 'none',
-              transform: isInfinityMode ? 'scale(1.1)' : 'scale(1)'
-            }}>
-            <Infinity size={20} strokeWidth={2} />
-          </button>
-        </div>
-      </div>
-
-      {/* Right Column: Aux Controls */}
-      <div className="flex-1 flex justify-end items-center gap-4">
-        <div className="flex items-center gap-1.5">
-          <span className="text-[var(--color-text-muted)] text-[0.8rem] flex items-center" aria-hidden="true">
-            <IconVolume />
-          </span>
-          <input
-            id="volume-slider"
-            type="range"
-            min={0}
-            max={1}
-            step={0.01}
-            value={volume}
-            onChange={(e) => setVolume(parseFloat(e.target.value))}
-            className={volumeSliderClass}
-            aria-label="Volume Control"
-          />
-          <span className="min-w-[28px] text-[0.68rem] text-[var(--color-text-muted)] tracking-tighter" style={{ fontVariantNumeric: 'tabular-nums' }} aria-hidden="true">
-            {volumePercent}%
-          </span>
-        </div>
       </div>
     </div>
   );
