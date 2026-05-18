@@ -64,6 +64,10 @@ export const InviteRegister: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!token || !username.trim() || !password || !passwordsMatch) return;
+    if (password.length < 12) {
+      setError('Password must be at least 12 characters.');
+      return;
+    }
     setIsLoading(true);
     setError('');
 

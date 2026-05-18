@@ -109,6 +109,7 @@ export function DatabaseControl({ onReady, inline = false, variant = 'full' }: D
   const [dbStats, setDbStats] = useState<DatabaseStats | null>(null);
   const [actionInProgress, setActionInProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [recoveryToken, setRecoveryToken] = useState('');
   const [showRecreateModal, setShowRecreateModal] = useState(false);
   const [confirmRecreate, setConfirmRecreate] = useState(false);
   const onReadyCalled = useRef(false);
@@ -121,9 +122,16 @@ export function DatabaseControl({ onReady, inline = false, variant = 'full' }: D
   const { authToken } = usePlayerStore();
 
   const apiFetch = useCallback(async (endpoint: string, method = 'GET') => {
+    const headers: Record<string, string> = {};
+    if (authToken) {
+      headers.Authorization = `Bearer ${authToken}`;
+    } else if (recoveryToken.trim()) {
+      headers['X-Aurora-Recovery-Token'] = recoveryToken.trim();
+    }
+
     const res = await fetch(endpoint, {
       method,
-      headers: { Authorization: `Bearer ${authToken}` }
+      headers
     });
 
     const text = await res.text();
@@ -139,7 +147,7 @@ export function DatabaseControl({ onReady, inline = false, variant = 'full' }: D
       throw new Error(data.message || data.error || `API error: ${res.status}`);
     }
     return data;
-  }, [authToken]);
+  }, [authToken, recoveryToken]);
 
   const fetchDbStatus = useCallback(async () => {
     try {
@@ -228,6 +236,26 @@ export function DatabaseControl({ onReady, inline = false, variant = 'full' }: D
             <button onClick={() => setError(null)} className="ml-auto text-[var(--color-text-muted)] hover:text-white">
               <X className="w-4 h-4" />
             </button>
+          </div>
+        )}
+
+        {!authToken && (
+          <div className="p-4 rounded-xl bg-[var(--color-bg-secondary)] border border-[var(--color-border)] text-left space-y-2">
+            <label htmlFor="db-recovery-token" className="block text-xs font-semibold uppercase tracking-wider text-[var(--color-text-muted)]">
+              Database recovery token
+            </label>
+            <input
+              id="db-recovery-token"
+              type="password"
+              value={recoveryToken}
+              onChange={(event) => setRecoveryToken(event.target.value)}
+              placeholder="Set AURORA_DB_RECOVERY_TOKEN on the server"
+              className="w-full bg-[var(--color-bg-tertiary)] border border-[var(--glass-border)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50"
+              autoComplete="off"
+            />
+            <p className="text-xs text-[var(--color-text-muted)]">
+              Required only when the database is down and normal admin login cannot be verified.
+            </p>
           </div>
         )}
 

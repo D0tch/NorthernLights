@@ -46,8 +46,8 @@ export const AdminPanel = ({ onClose }) => {
     }, []);
     const createUser = async () => {
         setCreateError('');
-        if (newUsername.length < 3 || newPassword.length < 5) {
-            setCreateError('Username 3+ chars, password 5+ chars');
+        if (newUsername.length < 3 || newPassword.length < 12) {
+            setCreateError('Username 3+ chars, password 12+ chars');
             return;
         }
         try {

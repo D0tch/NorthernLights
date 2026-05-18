@@ -91,9 +91,9 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
     // SSE for model download progress in setup wizard
     React.useEffect(() => {
         if (step !== 4 || !modelDownloading) return;
-        const token = usePlayerStore.getState().authToken;
+        const token = usePlayerStore.getState().sseAccessToken || usePlayerStore.getState().authToken;
         if (!token) return;
-        const es = new EventSource('/api/settings/models/progress?token=' + token);
+        const es = new EventSource('/api/settings/models/progress?token=' + encodeURIComponent(token));
         es.onmessage = (e) => {
             try {
                 const data = JSON.parse(e.data);
@@ -168,10 +168,10 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
 
     React.useEffect(() => {
         if (step === 3) {
-            const token = usePlayerStore.getState().authToken;
+            const token = usePlayerStore.getState().sseAccessToken || usePlayerStore.getState().authToken;
             if (!token) return;
             fetchMbdbUpdateInfo();
-            const es = new EventSource('/api/admin/mbdb/status?token=' + token);
+            const es = new EventSource('/api/admin/mbdb/status?token=' + encodeURIComponent(token));
             es.onmessage = (e) => {
                 try {
                     const data = JSON.parse(e.data);
@@ -207,8 +207,8 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
 
     const handleCreateAdmin = async () => {
         setAuthError('');
-        if (username.length < 3 || password.length < 5) {
-            setAuthError('Username must be ≥ 3 chars, password ≥ 5 chars.');
+        if (username.length < 3 || password.length < 12) {
+            setAuthError('Username must be at least 3 chars, password at least 12 chars.');
             return;
         }
         
@@ -229,7 +229,7 @@ export const SetupWizard: React.FC<{ onComplete: () => void }> = ({ onComplete }
 
             const data = await res.json();
             // Store JWT token and user info
-            usePlayerStore.getState().setAuthToken(data.token);
+            usePlayerStore.getState().setAuthToken(data.token, data.mediaToken, data.sseToken);
             if (data.user) {
                 usePlayerStore.setState({ currentUser: data.user });
             }

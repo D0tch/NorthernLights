@@ -100,7 +100,7 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                         const confirm = (form.elements.namedItem('confirmPassword') as HTMLInputElement).value;
 
                         if (!current || !newPw) return;
-                        if (newPw.length < 5) { showToast('Password must be 5+ characters', 'error'); return; }
+                        if (newPw.length < 12) { showToast('Password must be at least 12 characters', 'error'); return; }
                         if (newPw !== confirm) { showToast('Passwords do not match', 'error'); return; }
 
                         try {
@@ -122,7 +122,7 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                 >
                     <input name="currentPassword" type="password" placeholder="Current password" required
                         className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-xl px-4 py-3 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50" />
-                    <input name="newPassword" type="password" placeholder="New password (5+ chars)" required
+                    <input name="newPassword" type="password" placeholder="New password (12+ chars)" required
                         className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-xl px-4 py-3 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50" />
                     <input name="confirmPassword" type="password" placeholder="Confirm new password" required
                         className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-xl px-4 py-3 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50" />
