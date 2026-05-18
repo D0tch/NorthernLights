@@ -8,6 +8,7 @@ import { BarChart2, Wrench, Globe, AlertCircle, Clock, Database, Check, ArrowRig
 
 export const DatabaseTab: React.FC = () => {
     const authToken = usePlayerStore(state => state.authToken);
+    const sseAccessToken = usePlayerStore(state => state.sseAccessToken);
     const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
     
     const { addToast } = useToast();
@@ -56,7 +57,8 @@ export const DatabaseTab: React.FC = () => {
     useEffect(() => {
         if (dbTab === 'mbdb' && authToken) {
             fetchMbdbUpdateInfo();
-            const es = new EventSource('/api/admin/mbdb/status?token=' + authToken);
+            const token = sseAccessToken || authToken;
+            const es = new EventSource('/api/admin/mbdb/status?token=' + encodeURIComponent(token));
             es.onmessage = (e) => {
                 try {
                     const data = JSON.parse(e.data);
@@ -68,7 +70,7 @@ export const DatabaseTab: React.FC = () => {
             };
             return () => es.close();
         }
-    }, [dbTab, authToken, fetchMbdbUpdateInfo]);
+    }, [dbTab, authToken, sseAccessToken, fetchMbdbUpdateInfo]);
 
     const handleMbdbImport = async () => {
         setConfirmDialog({

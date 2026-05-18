@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyToken, JwtPayload } from '../services/auth.service';
-import { getSystemSetting } from '../database';
+import { verifyScopedToken, ScopedTokenScope } from '../services/scopedToken.service';
 
 // Extend Express Request to include user info
 declare global {
@@ -30,7 +30,6 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     path === '/api/auth/register' ||
     path.startsWith('/api/invites/') ||
     path === '/api/admin/db/status' ||
-    path === '/api/admin/db/stats' ||
     path === '/api/admin/db/start' ||
     path === '/api/admin/db/create' ||
     path === '/api/admin/db/recreate' ||
@@ -47,6 +46,8 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     if (needsSetup) return next();
   }
 
+  const scopedScope = getScopedTokenScopeForPath(path);
+
   // Extract token from Authorization header or query param
   let token: string | undefined;
 
@@ -57,33 +58,27 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     token = req.query.token as string;
   }
 
-  // Fallback: Support legacy Basic Auth during transition
-  if (!token && authHeader && authHeader.startsWith('Basic ')) {
-    const b64auth = authHeader.split(' ')[1];
-    const [username, password] = Buffer.from(b64auth, 'base64').toString().split(':');
-
-    if (username && password) {
-      const { getUserByUsername } = await import('../database');
-      const { verifyPassword: checkPassword } = await import('../services/auth.service');
-      const user = await getUserByUsername(username);
-      if (user && await checkPassword(password, user.password_hash)) {
-        req.user = { userId: user.id, username: user.username, role: user.role };
-        return next();
-      }
-    }
-  }
-
   if (!token) {
     return res.status(401).json({ error: 'Authentication required' });
   }
 
   const payload = await verifyToken(token);
+  if (payload) {
+    req.user = payload;
+    return next();
+  }
+
+  if (scopedScope) {
+    const scopedPayload = await verifyScopedToken(token, scopedScope);
+    if (scopedPayload) {
+      req.user = scopedPayload;
+      return next();
+    }
+  }
+
   if (!payload) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
-
-  req.user = payload;
-  next();
 }
 
 // Admin-only middleware (must be used after requireAuth)
@@ -92,4 +87,24 @@ export function requireAdmin(req: Request, res: Response, next: NextFunction) {
     return res.status(403).json({ error: 'Admin access required' });
   }
   next();
+}
+
+function getScopedTokenScopeForPath(path: string): ScopedTokenScope | null {
+  if (
+    path.startsWith('/api/stream') ||
+    path === '/api/art' ||
+    path === '/api/cast/log'
+  ) {
+    return 'media';
+  }
+
+  if (
+    path === '/api/library/scan/status' ||
+    path === '/api/admin/mbdb/status' ||
+    path === '/api/settings/models/progress'
+  ) {
+    return 'sse';
+  }
+
+  return null;
 }

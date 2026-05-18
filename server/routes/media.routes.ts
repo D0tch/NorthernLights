@@ -29,10 +29,11 @@ const MIME_TYPES: Record<string, string> = {
 // CORS helper to handle authenticated requests and custom headers
 const setCorsHeaders = (req: any, res: any) => {
   const origin = req.headers.origin;
-  // If we have an origin, echo it back instead of using '*' to allow withCredentials/Authorization
-  if (origin) {
+  // If we have an allowed origin, echo it back instead of using '*' to allow
+  // withCredentials/Authorization. Do not reflect arbitrary origins.
+  if (origin && isAllowedMediaOrigin(origin)) {
     res.setHeader('Access-Control-Allow-Origin', origin);
-  } else {
+  } else if (!origin) {
     res.setHeader('Access-Control-Allow-Origin', '*');
   }
   res.setHeader('Access-Control-Allow-Credentials', 'true');
@@ -40,6 +41,18 @@ const setCorsHeaders = (req: any, res: any) => {
   res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, Range');
   res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Range');
 };
+
+function isAllowedMediaOrigin(origin: string): boolean {
+  const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS.split(',').map((value) => value.trim()).filter(Boolean)
+    : ['http://localhost:3000'];
+  if (process.env.CAST_RECEIVER_ORIGIN) allowedOrigins.push(process.env.CAST_RECEIVER_ORIGIN);
+  return (
+    allowedOrigins.includes(origin) ||
+    origin.startsWith('https://www.gstatic.com') ||
+    origin.startsWith('https://cast.google.com')
+  );
+}
 
 // ─── HLS Streaming ─────────────────────────────────────────────────────
 
@@ -187,6 +200,13 @@ async function resolveTrackForHls(trackId: string): Promise<{
     } catch { /* non-critical */ }
   }
 
+  const allowed = await isPathAllowed(fileBuf);
+  if (!allowed) {
+    const err = new Error('Forbidden: Path is outside allowed library directories') as Error & { status?: number };
+    err.status = 403;
+    throw err;
+  }
+
   return { fileBuf, bitrate, sourceFormat };
 }
 
@@ -253,6 +273,8 @@ router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
     if (!res.headersSent) {
       if (err?.code === 'ENOENT' || err?.message?.includes('ENOENT')) {
         res.status(501).send('FFmpeg not installed — HLS streaming unavailable');
+      } else if (err?.status === 403) {
+        res.status(403).send('Forbidden');
       } else {
         res.status(500).send('HLS streaming error');
       }
@@ -301,6 +323,8 @@ router.all('/stream/:trackId/media.m3u8', async (req, res) => {
     if (!res.headersSent) {
       if (err?.code === 'ENOENT' || err?.message?.includes('ENOENT')) {
         res.status(501).send('FFmpeg not installed — HLS streaming unavailable');
+      } else if (err?.status === 403) {
+        res.status(403).send('Forbidden');
       } else if (err?.status === 404) {
         res.status(404).send('Track not found');
       } else {
@@ -353,6 +377,9 @@ router.all('/stream/:trackId/prewarm', async (req, res) => {
     writeHlsServerLog(`[prewarm ${trackId} ${quality} ${targetCodec}] Error: ${err?.message || String(err)}`);
     if (err?.code === 'ENOENT' || err?.message?.includes('ENOENT')) {
       return res.status(501).json({ ok: false, error: 'FFmpeg not installed — HLS streaming unavailable' });
+    }
+    if (err?.status === 403) {
+      return res.status(403).json({ ok: false, error: 'Forbidden' });
     }
     if (err?.status === 404) {
       return res.status(404).json({ ok: false, error: 'Track not found' });

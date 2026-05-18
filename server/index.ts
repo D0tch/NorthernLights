@@ -36,6 +36,18 @@ import concertsRoutes from './routes/concerts.routes';
 
 const app = express();
 const port = process.env.PORT || 3001;
+const isProduction = process.env.NODE_ENV === 'production';
+
+app.disable('x-powered-by');
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 // Honor X-Forwarded-Proto / X-Forwarded-Host from reverse proxies (nginx,
 // Traefik, Caddy, cloud load balancers) so req.protocol + req.get('host')
@@ -43,7 +55,9 @@ const port = process.env.PORT || 3001;
 app.set('trust proxy', true);
 
 // Allowed origins setup
-const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(',') : ['http://localhost:3000'];
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean)
+  : ['http://localhost:3000'];
 // If a custom Cast receiver origin is set, add it to CORS whitelist so
 // the receiver can fetch HLS segments from our media server
 if (process.env.CAST_RECEIVER_ORIGIN && !allowedOrigins.includes(process.env.CAST_RECEIVER_ORIGIN)) {
@@ -55,8 +69,7 @@ app.use(cors({
       !origin ||
       allowedOrigins.includes(origin) ||
       origin.startsWith('https://www.gstatic.com') ||
-      origin.startsWith('https://cast.google.com') ||
-      origin.startsWith('chrome-extension://')
+      origin.startsWith('https://cast.google.com')
     ) {
       callback(null, true);
     } else {
@@ -66,6 +79,17 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Range', 'Accept-Encoding', 'Authorization'],
   exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type']
 }));
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  if (isProduction && req.secure) {
+    res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
+  }
+  next();
+});
 app.use(express.json());
 
 // Serve static files from the 'dist' directory in production
@@ -125,21 +149,24 @@ if (fs.existsSync(distPath)) {
       // Non-fatal — fall back to generic copy
     }
 
-    const title = `${inviterName} invited you to Aurora`;
-    const description = `Join ${inviterName}'s Aurora music library — your own private, AI-powered music player.`;
+    const safeInviterName = escapeHtml(inviterName);
+    const title = `${safeInviterName} invited you to Aurora`;
+    const description = `Join ${safeInviterName}'s Aurora music library — your own private, AI-powered music player.`;
     const imageUrl = `${origin}/apple-touch-icon.png`;
-    const inviteUrl = `${origin}/invite/${token}`;
+    const inviteUrl = `${origin}/invite/${encodeURIComponent(token)}`;
+    const safeImageUrl = escapeHtml(imageUrl);
+    const safeInviteUrl = escapeHtml(inviteUrl);
 
     const metaInjection = `
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="${inviteUrl}" />
+    <meta property="og:url" content="${safeInviteUrl}" />
     <meta property="og:title" content="${title}" />
     <meta property="og:description" content="${description}" />
-    <meta property="og:image" content="${imageUrl}" />
+    <meta property="og:image" content="${safeImageUrl}" />
     <meta name="twitter:card" content="summary" />
     <meta name="twitter:title" content="${title}" />
     <meta name="twitter:description" content="${description}" />
-    <meta name="twitter:image" content="${imageUrl}" />
+    <meta name="twitter:image" content="${safeImageUrl}" />
     <title>${title}</title>`;
 
     const baseHtml = cachedIndexHtml || (fs.existsSync(path.join(distPath, 'index.html'))

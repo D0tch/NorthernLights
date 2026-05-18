@@ -262,7 +262,9 @@ export interface PlayerState {
   providerArtistArtwork: 'genius' | 'none';
   providerArtistBio: 'lastfm' | 'genius';
   providerAlbumArt: 'lastfm' | 'genius' | 'musicbrainz';
-  authToken: string | null; // JWT token
+  authToken: string | null; // Account JWT token
+  mediaAccessToken: string | null; // Scoped token for HLS/art/Cast URLs
+  sseAccessToken: string | null; // Scoped token for EventSource URLs
   authExpired: boolean;
   authExpiredMessage: string | null;
   authExpiredUsername: string;
@@ -343,7 +345,7 @@ export interface PlayerState {
   togglePin: (playlistId: string, pinned: boolean) => Promise<void>;
   replaceTracksInUserPlaylist: (playlistId: string, trackIds: string[]) => Promise<void>;
   addTracksToUserPlaylist: (playlistId: string, trackIds: string[]) => Promise<void>;
-  setAuthToken: (token: string) => void;
+  setAuthToken: (token: string, mediaAccessToken?: string | null, sseAccessToken?: string | null) => void;
   clearAuthToken: () => void;
   expireAuthSession: (message?: string) => void;
   login: (username: string, password: string) => Promise<boolean>;
@@ -752,6 +754,8 @@ export const usePlayerStore = create<PlayerState>()(
         concertsRadiusKm: 50,
         concertsAutoAddEnabled: false as boolean,
         authToken: null as string | null,
+        mediaAccessToken: null as string | null,
+        sseAccessToken: null as string | null,
         authExpired: false,
         authExpiredMessage: null as string | null,
         authExpiredUsername: '',
@@ -839,10 +843,18 @@ export const usePlayerStore = create<PlayerState>()(
           }
         },
 
-        setAuthToken: (token: string) => set({ authToken: token, authExpired: false, authExpiredMessage: null }),
+        setAuthToken: (token: string, mediaAccessToken: string | null = null, sseAccessToken: string | null = null) => set({
+          authToken: token,
+          mediaAccessToken: mediaAccessToken || token,
+          sseAccessToken: sseAccessToken || token,
+          authExpired: false,
+          authExpiredMessage: null,
+        }),
 
         clearAuthToken: () => set({
           authToken: null,
+          mediaAccessToken: null,
+          sseAccessToken: null,
           currentUser: null,
           authExpired: false,
           authExpiredMessage: null,
@@ -851,6 +863,8 @@ export const usePlayerStore = create<PlayerState>()(
 
         expireAuthSession: (message = 'Your session expired. Log in again to continue.') => set((state: PlayerState) => ({
           authToken: null,
+          mediaAccessToken: null,
+          sseAccessToken: null,
           currentUser: null,
           authExpired: true,
           authExpiredMessage: message,
@@ -878,6 +892,8 @@ export const usePlayerStore = create<PlayerState>()(
               const data = await res.json();
               set({
                 authToken: data.token,
+                mediaAccessToken: data.mediaToken || data.token,
+                sseAccessToken: data.sseToken || data.token,
                 currentUser: data.user,
                 authExpired: false,
                 authExpiredMessage: null,
@@ -902,6 +918,8 @@ export const usePlayerStore = create<PlayerState>()(
               const data = await res.json();
               set({
                 authToken: data.token,
+                mediaAccessToken: data.mediaToken || data.token,
+                sseAccessToken: data.sseToken || data.token,
                 currentUser: data.user,
                 authExpired: false,
                 authExpiredMessage: null,
@@ -1141,8 +1159,8 @@ export const usePlayerStore = create<PlayerState>()(
             if (res.ok) {
               const data = await res.json();
               if (data.track) {
-                const { authToken, streamingQuality } = state;
-                const token = authToken || '';
+                const { mediaAccessToken, authToken, streamingQuality } = state;
+                const token = mediaAccessToken || authToken || '';
                 const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
 
                 const track = {
@@ -1176,8 +1194,8 @@ export const usePlayerStore = create<PlayerState>()(
             if (res.ok) {
               const data = await res.json();
               
-              const { authToken, streamingQuality } = get();
-              const token = authToken || '';
+              const { mediaAccessToken, authToken, streamingQuality } = get();
+              const token = mediaAccessToken || authToken || '';
               const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
 
               const libraryWithUrls = data.tracks.map((t: TrackInfo) => hydrateServerTrack(t, token, quality));
@@ -1246,8 +1264,8 @@ export const usePlayerStore = create<PlayerState>()(
               if (res.ok) {
                  const data = await res.json();
                  
-                 const { authToken, library } = get();
-                 const token = authToken || '';
+                 const { mediaAccessToken, authToken, library } = get();
+                 const token = mediaAccessToken || authToken || '';
 
                  // Map track objects inside playlists to have full stream URLs
                  const populatedPlaylists = data.playlists.map((pl: any) => {
@@ -1335,7 +1353,7 @@ export const usePlayerStore = create<PlayerState>()(
              nextTrackIds,
              get().library,
              targetPlaylist.tracks,
-             get().authToken || '',
+             get().mediaAccessToken || get().authToken || '',
              get().streamingQuality
            );
 
@@ -1549,8 +1567,8 @@ export const usePlayerStore = create<PlayerState>()(
             if (fetchRes.ok) {
               const data = await fetchRes.json();
               
-              const { authToken, streamingQuality } = get();
-              const token = authToken || '';
+              const { mediaAccessToken, authToken, streamingQuality } = get();
+              const token = mediaAccessToken || authToken || '';
               const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
 
               const latestLibrary = data.tracks.map((t: TrackInfo) => hydrateServerTrack(t, token, quality));
@@ -2055,6 +2073,8 @@ export const usePlayerStore = create<PlayerState>()(
         providerArtistBio: state.providerArtistBio,
         providerAlbumArt: state.providerAlbumArt,
         authToken: state.authToken,
+        mediaAccessToken: state.mediaAccessToken,
+        sseAccessToken: state.sseAccessToken,
         currentUser: state.currentUser,
         streamingQuality: state.streamingQuality,
         playbackDebugLogging: state.playbackDebugLogging,

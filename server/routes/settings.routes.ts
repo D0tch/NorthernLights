@@ -6,15 +6,24 @@ import OpenAI from 'openai';
 
 const router = Router();
 
+const userKeys = new Set(['discoveryLevel', 'genreStrictness', 'artistAmnesiaLimit', 'llmPlaylistDiversity', 'llmVetoMode', 'llmGenreCohesion', 'llmDiscoveryBias', 'llmArtistSpread', 'genrePenaltyCurve', 'llmRecoveryStrength', 'llmAdjacentReach', 'llmTracksPerPlaylist', 'llmPlaylistCount', 'lastFmScrobbleEnabled', 'listenBrainzScrobbleEnabled', 'concertsEnabled', 'concertsLat', 'concertsLng', 'concertsLocationLabel', 'concertsRadiusKm', 'concertsAutoAddEnabled']);
+const serverKeys = new Set(['llmBaseUrl', 'llmApiKey', 'llmModelName', 'hubGenerationSchedule', 'systemPlaylistConfig', 'audioAnalysisCpu', 'scannerConcurrency', 'geniusApiKey', 'lastFmApiKey', 'lastFmSharedSecret', 'musicBrainzEnabled', 'musicBrainzClientId', 'musicBrainzClientSecret', 'musicBrainzRedirectUri', 'providerArtistImage', 'providerArtistArtwork', 'providerArtistBio', 'providerAlbumArt', 'autoFolderWalk', 'jambaseEnabled', 'jambaseMaxSubscriptionsPerUser', 'jambaseCacheTtlDays', 'jambaseMonthlyCap', 'jambaseHardStop']);
+const secretServerKeys = new Set(['llmApiKey', 'geniusApiKey', 'lastFmApiKey', 'lastFmSharedSecret', 'musicBrainzClientSecret']);
+const nonAdminReadableServerKeys = new Set(['hubGenerationSchedule', 'systemPlaylistConfig', 'providerArtistImage', 'providerArtistArtwork', 'providerArtistBio', 'providerAlbumArt', 'musicBrainzEnabled', 'musicBrainzConnected']);
+// Keys that are written by OAuth2/connect flows server-side, not exposed to frontend
+const protectedKeys = new Set(['musicBrainzAccessToken', 'musicBrainzRefreshToken', 'musicBrainzTokenExpiresAt', 'musicBrainzConnected', 'musicBrainzUsername', 'lastFmSessionKey', 'lastFmUsername', 'lastFmConnected', 'listenBrainzUserToken', 'listenBrainzUsername', 'listenBrainzConnected', 'jwtSecret']);
+
 // Get settings (merged: server-wide + user-specific)
 router.get('/settings', async (req, res) => {
   try {
     const userId = req.user?.userId;
+    const isAdmin = req.user?.role === 'admin';
 
     // System-level (server-wide) settings
     const serverKeys = ['audioAnalysisCpu', 'scannerConcurrency', 'hubGenerationSchedule', 'systemPlaylistConfig', 'llmBaseUrl', 'llmApiKey', 'llmModelName', 'genreMatrixLastRun', 'genreMatrixLastResult', 'genreMatrixProgress', 'geniusApiKey', 'lastFmApiKey', 'lastFmSharedSecret', 'musicBrainzEnabled', 'musicBrainzClientId', 'musicBrainzClientSecret', 'musicBrainzConnected', 'musicBrainzRedirectUri', 'providerArtistImage', 'providerArtistArtwork', 'providerArtistBio', 'providerAlbumArt', 'autoFolderWalk', 'mbdbLastImport', 'jambaseEnabled', 'jambaseMaxSubscriptionsPerUser', 'jambaseCacheTtlDays', 'jambaseMonthlyCap', 'jambaseHardStop'];
     const settings: Record<string, any> = {};
     for (const k of serverKeys) {
+      if (!isAdmin && (secretServerKeys.has(k) || !nonAdminReadableServerKeys.has(k))) continue;
       settings[k] = await getSystemSetting(k);
     }
 
@@ -26,7 +35,7 @@ router.get('/settings', async (req, res) => {
         const userVal = await getUserSetting(userId, k);
         if (userVal !== null) {
           settings[k] = userVal;
-        } else if (!userOnlyKeys.includes(k)) {
+        } else if (!userOnlyKeys.includes(k) && isAdmin) {
           // Fallback to system setting for non-user-only keys
           settings[k] = await getSystemSetting(k);
         }
@@ -59,22 +68,36 @@ router.post('/settings', async (req, res) => {
     const userId = req.user?.userId;
     const settings = req.body;
 
-    const userKeys = new Set(['discoveryLevel', 'genreStrictness', 'artistAmnesiaLimit', 'llmPlaylistDiversity', 'llmVetoMode', 'llmGenreCohesion', 'llmDiscoveryBias', 'llmArtistSpread', 'genrePenaltyCurve', 'llmRecoveryStrength', 'llmAdjacentReach', 'llmTracksPerPlaylist', 'llmPlaylistCount', 'lastFmScrobbleEnabled', 'listenBrainzScrobbleEnabled', 'concertsEnabled', 'concertsLat', 'concertsLng', 'concertsLocationLabel', 'concertsRadiusKm', 'concertsAutoAddEnabled']);
-    const serverKeys = new Set(['llmBaseUrl', 'llmApiKey', 'llmModelName', 'hubGenerationSchedule', 'systemPlaylistConfig', 'audioAnalysisCpu', 'scannerConcurrency', 'geniusApiKey', 'lastFmApiKey', 'lastFmSharedSecret', 'musicBrainzEnabled', 'musicBrainzClientId', 'musicBrainzClientSecret', 'musicBrainzRedirectUri', 'providerArtistImage', 'providerArtistArtwork', 'providerArtistBio', 'providerAlbumArt', 'autoFolderWalk', 'jambaseEnabled', 'jambaseMaxSubscriptionsPerUser', 'jambaseCacheTtlDays', 'jambaseMonthlyCap', 'jambaseHardStop']);
-    // Keys that are written by OAuth2/connect flows server-side, not exposed to frontend
-    const protectedKeys = new Set(['musicBrainzAccessToken', 'musicBrainzRefreshToken', 'musicBrainzTokenExpiresAt', 'musicBrainzConnected', 'musicBrainzUsername', 'lastFmSessionKey', 'lastFmUsername', 'lastFmConnected', 'listenBrainzUserToken', 'listenBrainzUsername', 'listenBrainzConnected']);
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+      return res.status(400).json({ error: 'Settings payload must be an object' });
+    }
+
+    const unknownKeys: string[] = [];
+    const forbiddenKeys: string[] = [];
+
+    for (const k of Object.keys(settings)) {
+      if (protectedKeys.has(k)) {
+        forbiddenKeys.push(k);
+      } else if (userKeys.has(k)) {
+        if (!userId) forbiddenKeys.push(k);
+      } else if (serverKeys.has(k)) {
+        if (req.user?.role !== 'admin') forbiddenKeys.push(k);
+      } else {
+        unknownKeys.push(k);
+      }
+    }
+
+    if (forbiddenKeys.length > 0) {
+      return res.status(403).json({ error: 'Admin access required for one or more settings', keys: forbiddenKeys });
+    }
+    if (unknownKeys.length > 0) {
+      return res.status(400).json({ error: 'Unknown settings keys', keys: unknownKeys });
+    }
 
     for (const [k, v] of Object.entries(settings)) {
-      if (protectedKeys.has(k)) {
-        // Protected keys can only be set by server-side OAuth2 flows, ignore from client
-        continue;
-      } else if (userKeys.has(k) && userId) {
-        await setUserSetting(userId, k, v);
+      if (userKeys.has(k)) {
+        await setUserSetting(userId!, k, v);
       } else if (serverKeys.has(k)) {
-        if (req.user?.role === 'admin') {
-          await setSystemSetting(k, v);
-        }
-      } else {
         await setSystemSetting(k, v);
       }
     }
@@ -90,7 +113,7 @@ router.post('/settings', async (req, res) => {
 });
 
 // LLM connection test
-router.post('/health/llm', async (req, res) => {
+router.post('/health/llm', requireAdmin, async (req, res) => {
   try {
     const { llmBaseUrl, llmApiKey } = req.body;
     const openai = new OpenAI({

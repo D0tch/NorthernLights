@@ -33,6 +33,7 @@ export const LibraryTab: React.FC = () => {
     const autoFolderWalk = usePlayerStore(state => state.autoFolderWalk);
     const setSettings = usePlayerStore(state => state.setSettings);
     const authToken = usePlayerStore(state => state.authToken);
+    const sseAccessToken = usePlayerStore(state => state.sseAccessToken);
 
     const [dirStats, setDirStats] = useState<Record<string, { totalTracks: number; withMetadata: number; analyzed: number }>>({});
     const [dirStatsLoading, setDirStatsLoading] = useState(false);
@@ -93,7 +94,9 @@ export const LibraryTab: React.FC = () => {
 
             // Open SSE stream for live progress
             if (modelSseRef.current) modelSseRef.current.close();
-            const sse = new EventSource('/api/settings/models/progress');
+            const token = sseAccessToken || authToken;
+            if (!token) return;
+            const sse = new EventSource('/api/settings/models/progress?token=' + encodeURIComponent(token));
             modelSseRef.current = sse;
             sse.onmessage = (e) => {
                 try {
@@ -112,7 +115,7 @@ export const LibraryTab: React.FC = () => {
             };
             sse.onerror = () => { sse.close(); setIsModelDownloading(false); fetchModelStatus(); };
         } catch {}
-    }, [getAuthHeader, fetchModelStatus]);
+    }, [getAuthHeader, fetchModelStatus, sseAccessToken, authToken]);
 
     // Mount model status fetch (after fetchModelStatus is declared)
     useEffect(() => {

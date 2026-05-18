@@ -7,15 +7,33 @@ import { dbConnected, setDbConnected, initDatabaseConnection, mbdbStatus, mbdbCl
 import { mbdbService } from '../services/mbdb.service';
 import { verifyToken } from '../services/auth.service';
 import { Request, Response, NextFunction } from 'express';
+import crypto from 'crypto';
 
 const router = Router();
+const MIN_PASSWORD_LENGTH = 12;
 
-// Special middleware to allow DB control even if DB is down (bootstrap/emergency)
-const requireAdminOrDbDown = async (req: Request, res: Response, next: NextFunction) => {
-  if (dbConnected === false) {
-    return next();
-  }
+function getRecoveryTokenFromRequest(req: Request): string | null {
+  const header = req.get('x-aurora-recovery-token') || req.get('x-db-recovery-token');
+  if (header) return header.trim();
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith('Recovery ')) return authHeader.substring('Recovery '.length).trim();
+  return null;
+}
 
+function isValidRecoveryToken(candidate: string | null): boolean {
+  const expected = (process.env.AURORA_DB_RECOVERY_TOKEN || process.env.DB_RECOVERY_TOKEN || '').trim();
+  if (!expected || !candidate) return false;
+
+  const expectedBuffer = Buffer.from(expected);
+  const candidateBuffer = Buffer.from(candidate);
+  return expectedBuffer.length === candidateBuffer.length && crypto.timingSafeEqual(expectedBuffer, candidateBuffer);
+}
+
+// Database control must remain authenticated even when the database is down.
+// Normal admin JWTs work while the DB is healthy. If the DB is unavailable,
+// use AURORA_DB_RECOVERY_TOKEN from the server environment as an out-of-band
+// recovery credential instead of trusting any unauthenticated request.
+const requireAdminOrDbRecovery = async (req: Request, res: Response, next: NextFunction) => {
   let token: string | undefined;
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
@@ -24,17 +42,30 @@ const requireAdminOrDbDown = async (req: Request, res: Response, next: NextFunct
     token = req.query.token as string;
   }
 
+  if (token) {
+    const payload = await verifyToken(token);
+    if (payload?.role === 'admin') {
+      (req as any).user = payload;
+      return next();
+    }
+  }
+
+  if (dbConnected === false) {
+    if (isValidRecoveryToken(getRecoveryTokenFromRequest(req))) {
+      return next();
+    }
+
+    return res.status(401).json({
+      error: process.env.AURORA_DB_RECOVERY_TOKEN || process.env.DB_RECOVERY_TOKEN
+        ? 'Database recovery token required'
+        : 'Database is down and no recovery token is configured',
+    });
+  }
+
   if (!token) {
     return res.status(401).json({ error: 'Authentication required' });
   }
-
-  const payload = await verifyToken(token);
-  if (!payload || payload.role !== 'admin') {
-    return res.status(403).json({ error: 'Admin access required' });
-  }
-
-  (req as any).user = payload;
-  next();
+  return res.status(403).json({ error: 'Admin access required' });
 };
 
 // ─── User Management ────────────────────────────────────────────────
@@ -55,8 +86,11 @@ router.post('/users', requireAdmin, async (req, res) => {
     if (!username || !password) {
       return res.status(400).json({ error: 'Username and password required' });
     }
-    if (username.length < 3 || password.length < 5) {
-      return res.status(400).json({ error: 'Username 3+ chars, password 5+ chars' });
+    if (username.length < 3 || password.length < MIN_PASSWORD_LENGTH) {
+      return res.status(400).json({ error: `Username 3+ chars, password ${MIN_PASSWORD_LENGTH}+ chars` });
+    }
+    if (role && role !== 'admin' && role !== 'user') {
+      return res.status(400).json({ error: 'Role must be admin or user' });
     }
 
     const existing = await getUserByUsername(username);
@@ -80,8 +114,18 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
 
     const fields: any = {};
     if (username) fields.username = username;
-    if (password) fields.passwordHash = await hashPassword(password);
-    if (role) fields.role = role;
+    if (password) {
+      if (password.length < MIN_PASSWORD_LENGTH) {
+        return res.status(400).json({ error: `Password must be ${MIN_PASSWORD_LENGTH}+ characters` });
+      }
+      fields.passwordHash = await hashPassword(password);
+    }
+    if (role) {
+      if (role !== 'admin' && role !== 'user') {
+        return res.status(400).json({ error: 'Role must be admin or user' });
+      }
+      fields.role = role;
+    }
 
     await updateUser(id as string, fields);
     res.json({ status: 'updated' });
@@ -156,7 +200,7 @@ router.post('/cleanup-playlists', requireAdmin, async (req, res) => {
 
 // ─── Database Container Control ─────────────────────────────────────
 
-router.get('/db/status', requireAdminOrDbDown, async (req, res) => {
+router.get('/db/status', requireAdminOrDbRecovery, async (req, res) => {
   try {
     const containerName = process.env.DB_CONTAINER_NAME || 'music-postgres';
     const status = await getContainerStatus(containerName);
@@ -168,7 +212,7 @@ router.get('/db/status', requireAdminOrDbDown, async (req, res) => {
   }
 });
 
-router.get('/db/stats', requireAdminOrDbDown, async (req, res) => {
+router.get('/db/stats', requireAdminOrDbRecovery, async (req, res) => {
   try {
     const stats = await getDatabaseStats();
     const poolStats = await getPoolStats();
@@ -179,7 +223,7 @@ router.get('/db/stats', requireAdminOrDbDown, async (req, res) => {
   }
 });
 
-router.post('/db/start', requireAdminOrDbDown, async (req, res) => {
+router.post('/db/start', requireAdminOrDbRecovery, async (req, res) => {
   try {
     const containerName = process.env.DB_CONTAINER_NAME || 'music-postgres';
     const result = await startContainer(containerName);
@@ -203,7 +247,7 @@ router.post('/db/stop', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/db/create', requireAdminOrDbDown, async (req, res) => {
+router.post('/db/create', requireAdminOrDbRecovery, async (req, res) => {
   try {
     const dbPort = process.env.DB_PORT || '5432';
     const dataDir = process.env.DB_DATA_DIR || './postgres-data';
@@ -228,7 +272,7 @@ router.post('/db/create', requireAdminOrDbDown, async (req, res) => {
   }
 });
 
-router.post('/db/recreate', requireAdminOrDbDown, async (req, res) => {
+router.post('/db/recreate', requireAdminOrDbRecovery, async (req, res) => {
   try {
     const dbPort = process.env.DB_PORT || '5432';
     const dataDir = process.env.DB_DATA_DIR || './postgres-data';

@@ -1,9 +1,9 @@
 import React from 'react';
 import { Routes, Route, Navigate, NavLink, useLocation } from 'react-router-dom';
 import { PlaylistSidebar } from './components/PlaylistSidebar';
-import PlayerControls from './components/PlayerControls';
-import ProgressBar from './components/ProgressBar';
+import PlayerShell from './components/PlayerShell';
 import MobileMiniPlayer from './components/MobileMiniPlayer';
+import { usePlayerPlacement } from './hooks/usePlayerPlacement';
 import MobileBottomTabs from './components/MobileBottomTabs';
 import CastHealthToasts from './components/cast/CastHealthToasts';
 import KeyboardHint from './components/KeyboardHint';
@@ -136,6 +136,7 @@ const App: React.FC = () => {
   const needsSetup = usePlayerStore(state => state.needsSetup);
   const checkSetupStatus = usePlayerStore(state => state.checkSetupStatus);
   const authToken = usePlayerStore(state => state.authToken);
+  const sseAccessToken = usePlayerStore(state => state.sseAccessToken);
   const authExpired = usePlayerStore(state => state.authExpired);
   const authExpiredMessage = usePlayerStore(state => state.authExpiredMessage);
   const authExpiredUsername = usePlayerStore(state => state.authExpiredUsername);
@@ -147,6 +148,7 @@ const App: React.FC = () => {
   const playlist = usePlayerStore(state => state.playlist);
   const currentUser = usePlayerStore(state => state.currentUser);
   const isAdmin = currentUser?.role === 'admin';
+  const [playerPlacement] = usePlayerPlacement();
 
   // Auto-show scanner toast when a scan starts
   React.useEffect(() => {
@@ -302,7 +304,7 @@ const App: React.FC = () => {
   }, []);
 
   useSSE(
-    !needsSetup && authToken ? `/api/library/scan/status?token=${authToken}` : null,
+    !needsSetup && (sseAccessToken || authToken) ? `/api/library/scan/status?token=${encodeURIComponent(sseAccessToken || authToken || '')}` : null,
     { onMessage: onSSEMessage, throttleMs: 100 }
   );
 
@@ -638,7 +640,13 @@ const App: React.FC = () => {
 
           {/* Main Content Area (Routing) */}
           <div className="flex-1 flex overflow-hidden">
-            <div className={`flex-1 overflow-y-auto ${playlist.length > 0 ? 'pb-32 md:pb-48' : 'pb-16 md:pb-4'}`}>
+            <div className={`flex-1 overflow-y-auto ${
+              playlist.length > 0
+                ? playerPlacement === 'dock'
+                  ? 'pb-32 md:pb-24'
+                  : 'pb-32 md:pb-44'
+                : 'pb-16 md:pb-4'
+            }`}>
               {library.length === 0 ? (
                 isLibraryLoading && location.pathname !== '/library' ? (
                   <div className="page-container">
@@ -717,13 +725,10 @@ const App: React.FC = () => {
 
           <CastHealthToasts />
 
-          {/* Floating Playback Controls Footer — Desktop Only */}
+          {/* Desktop Playback Surface — floats or docks based on user preference */}
           {playlist.length > 0 && (
-            <div className="hidden md:block absolute bottom-6 left-1/2 -translate-x-1/2 w-11/12 max-w-4xl z-40 bg-[var(--glass-bg)] backdrop-blur-2xl border border-[var(--glass-border)] rounded-[2rem] p-4 pb-5 shadow-2xl">
-              <ProgressBar />
-              <div className="mt-2">
-                <PlayerControls />
-              </div>
+            <div className="hidden md:block">
+              <PlayerShell />
             </div>
           )}
 
