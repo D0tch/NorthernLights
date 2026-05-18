@@ -91,6 +91,7 @@ export class CastManager {
     private userSessionRequestPending = false;
     private rejoinSessionPending = false;
     private rejoinHydrationTimer: ReturnType<typeof setTimeout> | null = null;
+    private rejoinHydrationRunId = 0;
     private rejoinHydrationAttempts = 0;
     private readonly maxRejoinHydrationAttempts = 12;
     private readonly rejoinHydrationDelayMs = 250;
@@ -231,6 +232,14 @@ export class CastManager {
         }
     }
 
+    private getSessionId(session: any | null): string {
+        try {
+            return session?.getSessionId?.() || '';
+        } catch {
+            return '';
+        }
+    }
+
     private getSafeDeviceName(): string {
         try {
             return this.getCastDeviceName() || 'unknown-device';
@@ -354,6 +363,7 @@ export class CastManager {
         this.userSessionRequestPending = false;
         this.rejoinSessionPending = false;
         this.freshSessionStartedAt = 0;
+        this.rejoinHydrationRunId += 1;
         this.clearRejoinHydrationTimer();
         if (options.clearStoredSession) {
             localStorage.removeItem(SESSION_STORAGE_KEY);
@@ -542,6 +552,34 @@ export class CastManager {
         return mediaSession || this.getRemotePlayerMediaSession();
     }
 
+    private schedulePreservedSessionRejoin(sessionId: string, reason: string) {
+        if (!sessionId) return;
+
+        localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+        this.rejoinSessionPending = true;
+        this.state = 'CONNECTING';
+        this.notifyStateChange();
+        this.setHealthStatus('recovering', 'Reconnecting Cast control...', reason);
+        this.logCast('warn', 'Preserving Cast session after transport detach', `reason=${reason} stored=${sessionId}`);
+
+        window.setTimeout(() => {
+            if (this.castContext?.getCurrentSession?.()) return;
+
+            try {
+                chrome.cast.requestSessionById(sessionId);
+                this.beginRejoinHydration(reason);
+            } catch (error) {
+                this.rejoinSessionPending = false;
+                this.rejoinHydrationRunId += 1;
+                localStorage.removeItem(SESSION_STORAGE_KEY);
+                this.state = this.castContext?.getCastState?.() || 'NOT_CONNECTED';
+                this.notifyStateChange();
+                this.setHealthStatus('error', 'Could not reconnect Cast control.', this.describeError(error));
+                this.logCast('error', `Preserved Cast session rejoin failed: ${reason}`, this.describeError(error));
+            }
+        }, 350);
+    }
+
     private describeRemotePlayer(): string {
         if (!this.player) return 'remotePlayer=none';
         const queueItems = Array.isArray(this.player.queueData?.items) ? this.player.queueData.items.length : 0;
@@ -559,6 +597,9 @@ export class CastManager {
 
     private async refreshMediaSessionStatus(reason: string): Promise<any | null> {
         const session = this.castContext?.getCurrentSession?.() || null;
+        if (!session) return null;
+
+        const sessionId = this.getSessionId(session);
         const mediaSession = session?.getMediaSession?.() || null;
         if (!mediaSession || typeof mediaSession.getStatus !== 'function') return this.getHydratableMediaSession(mediaSession);
         if (this.mediaStatusRefreshPromise) return this.mediaStatusRefreshPromise;
@@ -570,7 +611,15 @@ export class CastManager {
                 if (settled) return;
                 settled = true;
                 if (timeout !== undefined) window.clearTimeout(timeout);
-                resolve(this.getHydratableMediaSession(nextMediaSession || session?.getMediaSession?.() || mediaSession));
+                const currentSession = this.castContext?.getCurrentSession?.() || null;
+                const currentSessionId = this.getSessionId(currentSession);
+                if (!currentSession || (sessionId && currentSessionId && currentSessionId !== sessionId)) {
+                    this.logCast('warn', `Discarded stale Cast media status: ${reason}`, `expected=${sessionId || 'unknown'} current=${currentSessionId || 'none'}`);
+                    resolve(null);
+                    return;
+                }
+
+                resolve(this.getHydratableMediaSession(nextMediaSession || currentSession.getMediaSession?.() || mediaSession));
             };
             timeout = window.setTimeout(() => {
                 this.logCast('warn', `Timed out refreshing Cast media status: ${reason}`);
@@ -611,19 +660,29 @@ export class CastManager {
 
     private beginRejoinHydration(reason: string) {
         this.rejoinSessionPending = true;
+        const runId = this.rejoinHydrationRunId + 1;
+        this.rejoinHydrationRunId = runId;
         this.rejoinHydrationAttempts = 0;
         this.clearRejoinHydrationTimer();
         this.logCast('ok', `Begin Cast hydration: ${reason}`);
         this.setHealthStatus('rejoining', 'Syncing with Cast session...', reason);
-        void this.waitForRemoteSessionHydration(reason);
+        void this.waitForRemoteSessionHydration(reason, runId);
     }
 
-    private async waitForRemoteSessionHydration(reason: string): Promise<void> {
-        if (!this.rejoinSessionPending) return;
+    private async waitForRemoteSessionHydration(reason: string, runId: number): Promise<void> {
+        if (!this.rejoinSessionPending || runId !== this.rejoinHydrationRunId) return;
+
+        const refreshedMediaSession = await this.refreshMediaSessionStatus(`hydration:${reason}`);
+        const currentSession = this.castContext?.getCurrentSession?.() || null;
+        if (!this.rejoinSessionPending || runId !== this.rejoinHydrationRunId) {
+            this.logCast('warn', `Discarded stale Cast hydration: ${reason}`, `run=${runId} active=${this.rejoinHydrationRunId} hasSession=${Boolean(currentSession)}`);
+            return;
+        }
 
         const mediaSession =
-            await this.refreshMediaSessionStatus(`hydration:${reason}`)
-            || this.getHydratableMediaSession(this.castContext?.getCurrentSession?.()?.getMediaSession?.() || null)
+            (currentSession
+                ? refreshedMediaSession || this.getHydratableMediaSession(currentSession.getMediaSession?.() || null)
+                : null)
             || null;
         if (this.hasActiveRemoteMediaSession(mediaSession)) {
             this.rejoinSessionPending = false;
@@ -654,7 +713,7 @@ export class CastManager {
 
         this.rejoinHydrationAttempts += 1;
         this.rejoinHydrationTimer = setTimeout(() => {
-            void this.waitForRemoteSessionHydration(reason);
+            void this.waitForRemoteSessionHydration(reason, runId);
         }, this.rejoinHydrationDelayMs);
     }
 
@@ -664,12 +723,21 @@ export class CastManager {
         this.reconnectInProgress = true;
         try {
             const sdkState = this.castContext.getCastState?.();
-            const session = this.castContext.getCurrentSession?.() || null;
-            const mediaSession = session
-                ? await this.refreshMediaSessionStatus(`reconcile:${reason}`) || this.getHydratableMediaSession(session.getMediaSession?.() || null)
+            const startingSession = this.castContext.getCurrentSession?.() || null;
+            const refreshedMediaSession = startingSession
+                ? await this.refreshMediaSessionStatus(`reconcile:${reason}`)
                 : null;
+            const session = startingSession ? this.castContext.getCurrentSession?.() || null : null;
+
+            if (startingSession && !session) {
+                this.logCast('warn', `Skipped stale Cast reconcile after session ended: ${reason}`);
+                this.state = this.castContext?.getCastState?.() || 'NOT_CONNECTED';
+                this.notifyStateChange();
+                return false;
+            }
 
             if (session) {
+                const mediaSession = refreshedMediaSession || this.getHydratableMediaSession(session.getMediaSession?.() || null);
                 const sessionId = session.getSessionId?.();
                 if (sessionId) localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
                 this.state = 'CONNECTED';
@@ -902,12 +970,44 @@ export class CastManager {
                             this.logCast('ok', 'SESSION_ENDED');
                             if (this.preserveSessionOnNextEnd) {
                                 this.preserveSessionOnNextEnd = false;
+                                const preservedSessionId =
+                                    this.getSessionId(event.session || null)
+                                    || this.getCurrentSessionId()
+                                    || this.getStoredSessionId();
+                                this.freshSessionStartedAt = 0;
+                                this.suppressRemoteEndedDuringDisconnect = false;
+
+                                if (!preservedSessionId) {
+                                    this.logCast('warn', 'Could not preserve ended Cast session because no session id was available');
+                                    localStorage.removeItem(SESSION_STORAGE_KEY);
+                                    this.rejoinSessionPending = false;
+                                    this.rejoinHydrationRunId += 1;
+                                    this.clearRejoinHydrationTimer();
+                                    this.state = 'NOT_CONNECTED';
+                                    this.setHealthStatus('idle', '');
+                                    this.notifyStateChange();
+                                    break;
+                                }
+
+                                localStorage.setItem(SESSION_STORAGE_KEY, preservedSessionId);
+
+                                if (this.staleTransportRecoveryPromise || this.rejoinSessionPending) {
+                                    this.state = 'CONNECTING';
+                                    this.setHealthStatus('recovering', 'Reconnecting Cast control...', 'stale-transport-detach-ended');
+                                    this.notifyStateChange();
+                                    this.logCast('warn', 'SESSION_ENDED preserved during stale transport recovery', `stored=${preservedSessionId || 'none'}`);
+                                    break;
+                                }
+
+                                this.schedulePreservedSessionRejoin(preservedSessionId, 'stale-transport-detach-ended');
+                                break;
                             } else {
                                 localStorage.removeItem(SESSION_STORAGE_KEY);
                             }
                             this.rejoinSessionPending = false;
                             this.freshSessionStartedAt = 0;
                             this.suppressRemoteEndedDuringDisconnect = false;
+                            this.rejoinHydrationRunId += 1;
                             this.clearRejoinHydrationTimer();
                             this.state = 'NOT_CONNECTED';
                             this.setHealthStatus('idle', '');
@@ -929,8 +1029,16 @@ export class CastManager {
                     if (!this.player.isConnected) {
                         console.log('[Cast] Remote player disconnected');
                         this.logCast('warn', 'Remote player disconnected');
+                        if (this.rejoinSessionPending || this.staleTransportRecoveryPromise) {
+                            this.state = 'CONNECTING';
+                            this.setHealthStatus('recovering', 'Reconnecting Cast control...', 'remote-player-disconnected-during-rejoin');
+                            this.notifyStateChange();
+                            this.logCast('warn', 'Remote player disconnect preserved during Cast reconnect');
+                            return;
+                        }
                         localStorage.removeItem(SESSION_STORAGE_KEY);
                         this.rejoinSessionPending = false;
+                        this.rejoinHydrationRunId += 1;
                         this.clearRejoinHydrationTimer();
                         this.state = 'NOT_CONNECTED';
                         this.setHealthStatus('error', 'Cast device disconnected.');
