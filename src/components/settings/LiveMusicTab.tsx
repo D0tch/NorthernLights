@@ -209,6 +209,7 @@ export const LiveMusicTab: React.FC = () => {
     // Location
     const [locating, setLocating] = useState(false);
     const [manualCity, setManualCity] = useState('');
+    const [locationEditorOpen, setLocationEditorOpen] = useState(false);
 
     const reverseGeocode = async (lat: number, lng: number): Promise<string | null> => {
         try {
@@ -239,6 +240,7 @@ export const LiveMusicTab: React.FC = () => {
                 const label = (await reverseGeocode(lat, lng)) || `${lat.toFixed(2)}, ${lng.toFixed(2)}`;
                 setSettings({ concertsLat: lat, concertsLng: lng, concertsLocationLabel: label });
                 persist({ concertsLat: lat, concertsLng: lng, concertsLocationLabel: label });
+                setLocationEditorOpen(false);
                 setLocating(false);
             },
             (err) => {
@@ -270,6 +272,7 @@ export const LiveMusicTab: React.FC = () => {
             setSettings({ concertsLat: lat, concertsLng: lng, concertsLocationLabel: label });
             persist({ concertsLat: lat, concertsLng: lng, concertsLocationLabel: label });
             setManualCity('');
+            setLocationEditorOpen(false);
         } catch (e: any) {
             addToast(e?.message || 'Could not look up location', 'error');
         } finally {
@@ -277,39 +280,41 @@ export const LiveMusicTab: React.FC = () => {
         }
     };
 
-    const clearLocation = () => {
-        setSettings({ concertsLat: null, concertsLng: null, concertsLocationLabel: '' });
-        persist({ concertsLat: null, concertsLng: null, concertsLocationLabel: '' });
-    };
-
     // Render helpers
     const renderArtistRow = (a: LibraryArtist) => {
         const isSubbed = subscribed.has(a.id);
         const atLimit = !isSubbed && subs.length >= maxSubs;
         return (
-            <li key={a.id} className="live-music-artist-row">
-                <div className="live-music-avatar" aria-hidden="true">
-                    {a.image_url ? (
-                        <img src={a.image_url} alt="" loading="lazy" />
-                    ) : (
-                        <Headphones size={16} />
-                    )}
-                </div>
-                <div className="live-music-artist-row__copy">
-                    <div className="live-music-artist-row__name">{a.name}</div>
-                    {typeof a.user_plays === 'number' && a.user_plays > 0 && (
-                        <div className="live-music-artist-row__meta">{a.user_plays.toLocaleString()} plays</div>
-                    )}
-                </div>
+            <li key={a.id}>
                 <button
                     type="button"
                     onClick={() => isSubbed ? unsubscribe(a.id) : subscribe(a.id)}
                     disabled={atLimit}
-                    className="live-music-subscribe-btn"
+                    className="live-music-artist-row"
                     data-state={isSubbed ? 'subscribed' : atLimit ? 'disabled' : 'idle'}
-                    aria-label={isSubbed ? `Unsubscribe from ${a.name}` : `Subscribe to ${a.name}`}
+                    aria-pressed={isSubbed}
+                    aria-label={isSubbed ? `Remove ${a.name} from subscribed artists` : atLimit ? `Subscription limit reached for ${a.name}` : `Add ${a.name} to subscribed artists`}
                 >
-                    {isSubbed ? 'Subscribed' : atLimit ? 'Limit reached' : 'Subscribe'}
+                    <div className="live-music-avatar" aria-hidden="true">
+                        {a.image_url ? (
+                            <img src={a.image_url} alt="" loading="lazy" />
+                        ) : (
+                            <Headphones size={16} />
+                        )}
+                    </div>
+                    <div className="live-music-artist-row__copy">
+                        <div className="live-music-artist-row__name">{a.name}</div>
+                        {typeof a.user_plays === 'number' && a.user_plays > 0 && (
+                            <div className="live-music-artist-row__meta">{a.user_plays.toLocaleString()} plays</div>
+                        )}
+                    </div>
+                    {isSubbed ? (
+                        <span className="live-music-artist-row__state">Subscribed</span>
+                    ) : atLimit ? (
+                        <span className="live-music-artist-row__state">Limit reached</span>
+                    ) : (
+                        <span className="live-music-artist-row__state">Add</span>
+                    )}
                 </button>
             </li>
         );
@@ -318,6 +323,7 @@ export const LiveMusicTab: React.FC = () => {
     const lookupList = query.trim() ? results : topArtists;
     const showSuggestionsLabel = !query.trim() && topArtists.length > 0;
     const hasLocation = concertsLat !== null && concertsLng !== null;
+    const showLocationEditor = !hasLocation || locationEditorOpen;
 
     return (
         <div className="settings-section live-music-settings">
@@ -390,8 +396,12 @@ export const LiveMusicTab: React.FC = () => {
                                     <h5>{concertsLocationLabel || `${concertsLat.toFixed(2)}, ${concertsLng.toFixed(2)}`}</h5>
                                     <p>{concertsLat.toFixed(4)}, {concertsLng.toFixed(4)}</p>
                                 </div>
-                                <button type="button" onClick={clearLocation} className="live-music-icon-button" aria-label="Clear location">
-                                    <X size={18} aria-hidden="true" />
+                                <button
+                                    type="button"
+                                    onClick={() => setLocationEditorOpen(open => !open)}
+                                    className="btn btn-ghost btn-sm"
+                                >
+                                    {locationEditorOpen ? 'Cancel' : 'Change location'}
                                 </button>
                             </div>
                         ) : (
@@ -401,40 +411,44 @@ export const LiveMusicTab: React.FC = () => {
                             </div>
                         )}
 
-                        <div className="live-music-location-actions">
-                            <button
-                                type="button"
-                                onClick={useCurrentLocation}
-                                disabled={locating}
-                                className="btn btn-primary btn-sm"
-                            >
-                                {locating ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <MapPin size={14} aria-hidden="true" />}
-                                Use current location
-                            </button>
-                        </div>
+                        {showLocationEditor && (
+                            <>
+                                <div className="live-music-location-actions">
+                                    <button
+                                        type="button"
+                                        onClick={useCurrentLocation}
+                                        disabled={locating}
+                                        className="btn btn-primary btn-sm"
+                                    >
+                                        {locating ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : <MapPin size={14} aria-hidden="true" />}
+                                        Use current location
+                                    </button>
+                                </div>
 
-                        <div className="live-music-field-row">
-                            <label className="live-music-field" htmlFor="live-music-city">
-                                <span>Enter a city manually</span>
-                                <input
-                                    id="live-music-city"
-                                    type="text"
-                                    value={manualCity}
-                                    onChange={e => setManualCity(e.target.value)}
-                                    onKeyDown={e => { if (e.key === 'Enter') submitManualCity(); }}
-                                    placeholder="Oslo, Norway"
-                                    autoComplete="off"
-                                />
-                            </label>
-                            <button
-                                type="button"
-                                onClick={submitManualCity}
-                                disabled={locating || !manualCity.trim()}
-                                className="btn btn-ghost btn-sm live-music-field-row__action disabled:opacity-50"
-                            >
-                                {locating ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : 'Search'}
-                            </button>
-                        </div>
+                                <div className="live-music-field-row">
+                                    <label className="live-music-field" htmlFor="live-music-city">
+                                        <span>Enter a city manually</span>
+                                        <input
+                                            id="live-music-city"
+                                            type="text"
+                                            value={manualCity}
+                                            onChange={e => setManualCity(e.target.value)}
+                                            onKeyDown={e => { if (e.key === 'Enter') submitManualCity(); }}
+                                            placeholder="Oslo, Norway"
+                                            autoComplete="off"
+                                        />
+                                    </label>
+                                    <button
+                                        type="button"
+                                        onClick={submitManualCity}
+                                        disabled={locating || !manualCity.trim()}
+                                        className="btn btn-ghost btn-sm live-music-field-row__action disabled:opacity-50"
+                                    >
+                                        {locating ? <Loader2 size={14} className="animate-spin" aria-hidden="true" /> : 'Search'}
+                                    </button>
+                                </div>
+                            </>
+                        )}
 
                         <div className="live-music-radius">
                             <div className="live-music-radius__label">
@@ -459,40 +473,6 @@ export const LiveMusicTab: React.FC = () => {
                         </div>
                     </section>
 
-                    <section className="live-music-panel live-music-panel--automation">
-                        <div className="live-music-panel__header">
-                            <div className="live-music-panel__title">
-                                <Sparkles size={17} aria-hidden="true" />
-                                <h4>Auto-subscribe</h4>
-                            </div>
-                            <button
-                                type="button"
-                                role="switch"
-                                aria-checked={concertsAutoAddEnabled}
-                                onClick={toggleAutoAdd}
-                                className="account-switch"
-                                data-state={concertsAutoAddEnabled ? 'on' : 'off'}
-                                aria-label="Toggle auto-add"
-                            >
-                                <span className="account-switch__thumb" />
-                            </button>
-                        </div>
-                        <p className="live-music-panel__description">
-                            Fill empty slots with your most-played artists. Manual picks stay untouched, and removed auto-picks stay out.
-                        </p>
-                        {concertsAutoAddEnabled && (
-                            <button
-                                type="button"
-                                onClick={() => refreshAutoAdd(false)}
-                                disabled={autoRefreshing}
-                                className="live-music-link-button"
-                            >
-                                {autoRefreshing ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <RotateCw size={12} aria-hidden="true" />}
-                                Refresh suggestions now
-                            </button>
-                        )}
-                    </section>
-
                     <section className="live-music-panel live-music-panel--subscriptions">
                         <div className="live-music-panel__header">
                             <div className="live-music-panel__title">
@@ -500,6 +480,40 @@ export const LiveMusicTab: React.FC = () => {
                                 <h4>Subscribed Artists</h4>
                             </div>
                             <span className="live-music-count">{subs.length} / {maxSubs}</span>
+                        </div>
+
+                        <div className="live-music-auto-strip">
+                            <div className="live-music-auto-strip__copy">
+                                <Sparkles size={15} aria-hidden="true" />
+                                <div>
+                                    <strong>Auto-subscribe</strong>
+                                    <span>Fill open slots from your most-played artists.</span>
+                                </div>
+                            </div>
+                            <div className="live-music-auto-strip__actions">
+                                {concertsAutoAddEnabled && (
+                                    <button
+                                        type="button"
+                                        onClick={() => refreshAutoAdd(false)}
+                                        disabled={autoRefreshing}
+                                        className="live-music-link-button"
+                                    >
+                                        {autoRefreshing ? <Loader2 size={12} className="animate-spin" aria-hidden="true" /> : <RotateCw size={12} aria-hidden="true" />}
+                                        Refresh
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={concertsAutoAddEnabled}
+                                    onClick={toggleAutoAdd}
+                                    className="account-switch"
+                                    data-state={concertsAutoAddEnabled ? 'on' : 'off'}
+                                    aria-label="Toggle auto-add"
+                                >
+                                    <span className="account-switch__thumb" />
+                                </button>
+                            </div>
                         </div>
 
                         {subsLoading ? (
