@@ -103,6 +103,24 @@ const isProtectedApiRequest = (input: RequestInfo | URL): boolean => {
   return true;
 };
 
+const getRequestToken = (input: RequestInfo | URL, init?: RequestInit): string | null => {
+  const readHeaders = (headers?: HeadersInit | null): string | null => {
+    if (!headers) return null;
+    const authorization = new Headers(headers).get('Authorization');
+    return authorization?.startsWith('Bearer ') ? authorization.slice(7) : null;
+  };
+
+  const headerToken = readHeaders(init?.headers) || (input instanceof Request ? readHeaders(input.headers) : null);
+  if (headerToken) return headerToken;
+
+  const rawUrl = input instanceof Request ? input.url : input.toString();
+  try {
+    return new URL(rawUrl, window.location.origin).searchParams.get('token');
+  } catch {
+    return null;
+  }
+};
+
 const installAuthExpirationFetchInterceptor = () => {
   if (authExpirationFetchInterceptorInstalled || typeof window === 'undefined') return;
   authExpirationFetchInterceptorInstalled = true;
@@ -110,10 +128,13 @@ const installAuthExpirationFetchInterceptor = () => {
 
   window.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const response = await originalFetch(input, init);
+    const currentToken = usePlayerStore.getState().authToken;
+    const requestToken = getRequestToken(input, init);
     if (
       response.status === 401 &&
       isProtectedApiRequest(input) &&
-      usePlayerStore.getState().authToken
+      currentToken &&
+      requestToken === currentToken
     ) {
       usePlayerStore.getState().expireAuthSession();
     }
