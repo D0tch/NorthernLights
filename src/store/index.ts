@@ -1,6 +1,7 @@
 import { create, StateCreator } from 'zustand';
 import { persist, PersistOptions } from 'zustand/middleware';
 import type { TrackInfo } from '../utils/fileSystem';
+import { EMPTY_FILTER_STATE } from '../utils/filterState';
 import { extractMetadata } from '../utils/fileSystem';
 import { playbackManager, PlaybackState } from '../utils/PlaybackManager';
 import { castManager } from '../utils/CastManager';
@@ -158,6 +159,61 @@ export interface EntityInfo {
   artist_name?: string;
 }
 
+export interface ArtistInfo extends EntityInfo {
+  artist_type?: string;
+  area?: string;
+  genres?: string;
+  community_tags?: string;
+  image_url?: string;
+  artwork_url?: string;
+  listeners?: string;
+  lifespan_begin?: string;
+  lifespan_end?: string;
+  disambiguation?: string;
+  mbid?: string;
+  bio?: string;
+  links?: string;
+  members?: string;
+  created_at?: string;
+}
+
+export interface AlbumInfo extends EntityInfo {
+  image_url?: string;
+  mbid?: string;
+  description?: string;
+  tags?: string;
+  listeners?: string;
+  playcount?: string;
+  created_at?: string;
+}
+
+export type SortOption = 'name' | 'recentlyAdded' | 'year';
+
+export interface FacetSelection {
+  [facetKey: string]: string[];
+}
+
+export interface QueryCondition {
+  metadataType: string;
+  operator: string;
+  value: string;
+}
+
+export interface QueryGroup {
+  id: string;
+  conditions: QueryCondition[];
+}
+
+export type SortDirection = 'asc' | 'desc';
+
+export interface FilterState {
+  facets: FacetSelection;
+  sort: SortOption;
+  sortDirection: SortDirection;
+  queryGroups: QueryGroup[] | null;
+  queryResultIds: string[] | null;
+}
+
 export type PlaybackLoadPath = 'none' | 'cast' | 'direct' | 'prepared-hls' | 'fallback-hls';
 export type PlaybackPrepareStatus = 'idle' | 'preparing' | 'ready' | 'failed';
 export type PlaybackRecoveryPath = 'none' | 'normal-hls-after-prepare-failure' | 'normal-hls-after-promotion-failure';
@@ -204,9 +260,19 @@ export interface PlayerState {
   isPlaylistsLoading: boolean;
 
   // Entity State (for navigation)
-  artists: EntityInfo[];
-  albums: EntityInfo[];
+  artists: ArtistInfo[];
+  albums: AlbumInfo[];
   genres: EntityInfo[];
+
+  // Filter State (per view)
+  artistFilters: FilterState;
+  albumFilters: FilterState;
+  setArtistFilters: (filters: FilterState) => void;
+  setAlbumFilters: (filters: FilterState) => void;
+  clearArtistFilters: () => void;
+  clearAlbumFilters: () => void;
+  setArtistQueryResultIds: (ids: string[] | null) => void;
+  setAlbumQueryResultIds: (ids: string[] | null) => void;
 
   // Playlist State (Current Play Queue)
   playlist: TrackInfo[];
@@ -244,6 +310,7 @@ export interface PlayerState {
   shuffle: boolean;
   repeat: "none" | "one" | "all";
   theme: 'light' | 'dark';
+  reducedMotion: boolean;
   lastFmApiKey: string;
   lastFmSharedSecret: string;
   lastFmScrobbleEnabled: boolean;
@@ -399,6 +466,7 @@ export interface PlayerState {
   cycleRepeat: () => void;
   setCastConnected: (connected: boolean) => void;
   setTheme: (theme: 'light' | 'dark') => void;
+  setReducedMotion: (enabled: boolean) => void;
   setLastFmApiKey: (key: string) => void;
   setLastFmSharedSecret: (secret: string) => void;
   setLastFmScrobbleEnabled: (enabled: boolean) => void;
@@ -671,9 +739,17 @@ export const usePlayerStore = create<PlayerState>()(
         isLibraryLoading: false as boolean,
         playlists: [] as Playlist[],
         isPlaylistsLoading: false as boolean,
-        artists: [] as EntityInfo[],
-        albums: [] as EntityInfo[],
+        artists: [] as ArtistInfo[],
+        albums: [] as AlbumInfo[],
         genres: [] as EntityInfo[],
+        artistFilters: { ...EMPTY_FILTER_STATE } as FilterState,
+        albumFilters: { ...EMPTY_FILTER_STATE } as FilterState,
+        setArtistFilters: (filters: FilterState) => { set({ artistFilters: filters }); },
+        setAlbumFilters: (filters: FilterState) => { set({ albumFilters: filters }); },
+        clearArtistFilters: () => { set({ artistFilters: { ...EMPTY_FILTER_STATE } }); },
+        clearAlbumFilters: () => { set({ albumFilters: { ...EMPTY_FILTER_STATE } }); },
+        setArtistQueryResultIds: (ids: string[] | null) => { set({ artistFilters: { ...get().artistFilters, queryResultIds: ids } }); },
+        setAlbumQueryResultIds: (ids: string[] | null) => { set({ albumFilters: { ...get().albumFilters, queryResultIds: ids } }); },
         playlist: [] as TrackInfo[],
 
         isScanning: false as boolean,
@@ -724,6 +800,7 @@ export const usePlayerStore = create<PlayerState>()(
         shuffle: false as boolean,
         repeat: "none" as "none" | "one" | "all",
         theme: 'light' as 'light' | 'dark',
+        reducedMotion: (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) || false,
         lastFmApiKey: '',
         lastFmSharedSecret: '',
         lastFmScrobbleEnabled: false as boolean,
@@ -840,6 +917,15 @@ export const usePlayerStore = create<PlayerState>()(
             document.documentElement.classList.add('dark');
           } else {
             document.documentElement.classList.remove('dark');
+          }
+        },
+
+        setReducedMotion: (enabled: boolean) => {
+          set({ reducedMotion: enabled });
+          if (enabled) {
+            document.documentElement.classList.add('reduced-motion');
+          } else {
+            document.documentElement.classList.remove('reduced-motion');
           }
         },
 
@@ -1236,8 +1322,8 @@ export const usePlayerStore = create<PlayerState>()(
                 return {
                   library: libraryWithUrls,
                   libraryFolders: data.directories,
-                  artists: data.artists || [],
-                  albums: data.albums || [],
+                  artists: data.artists || [] as ArtistInfo[],
+                  albums: data.albums || [] as AlbumInfo[],
                   genres: data.genres || [],
                   playlist: nextQueue,
                   currentIndex: nextIndex,
@@ -1574,8 +1660,8 @@ export const usePlayerStore = create<PlayerState>()(
               const latestLibrary = data.tracks.map((t: TrackInfo) => hydrateServerTrack(t, token, quality));
               set({
                 library: latestLibrary,
-                artists: data.artists || [],
-                albums: data.albums || [],
+                 artists: data.artists || [] as ArtistInfo[],
+                 albums: data.albums || [] as AlbumInfo[],
                 genres: data.genres || []
               });
             }
@@ -2054,6 +2140,7 @@ export const usePlayerStore = create<PlayerState>()(
         shuffle: state.shuffle,
         repeat: state.repeat,
         theme: state.theme,
+        reducedMotion: state.reducedMotion,
         lastFmApiKey: state.lastFmApiKey,
         lastFmScrobbleEnabled: state.lastFmScrobbleEnabled,
         lastFmConnected: state.lastFmConnected,
