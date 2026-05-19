@@ -6,7 +6,7 @@ The project lives in the `NorthernLights` repository, but the product name in th
 
 ## Status
 
-Current release: `1.0.0-beta.3`
+Current release: `1.0.0-rc.3`
 
 Aurora is ready for early self-hosted production use. Expect fast iteration and occasional migrations before the first stable `1.0.0` release.
 

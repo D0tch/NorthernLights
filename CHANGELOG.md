@@ -1,5 +1,23 @@
 # Changelog
 
+## [v1.0.0-rc.3] - 2026-05-19
+
+### Library
+- **Facet Filters & Query Builder**: Artists and Albums now have sort, facet, and advanced query filtering with a visual query builder modal supporting AND/OR condition groups
+- **Filter API**: `POST /api/filter/artists` and `/api/filter/albums` with validated SQL field references and ILIKE queries
+- **GIN Trigram Indexes**: `artists(name, genres, community_tags, area)` and `albums(title, artist_name, tags)` for index-backed wildcard text search at scale
+- **Merged Artist Redirects**: Merged rows preserved as redirect pointers (`merged_into` UUID column) instead of deletion, preventing re-creation on library refresh
+- **Manual Artist Merge**: New "Manual merge" section in Artist Entities to merge any two artists by name with side-by-side preview cards and audit trail in `artist_duplicate_reviews`
+- **Album Merge Conflict Handling**: `UNIQUE(title, artist_name)` violations now fold tracks into the survivor album instead of failing
+
+### UI
+- **SoftAurora WebGL Backdrop**: Animated aurora bands on Login and Invite Register pages via `ogl` renderer
+- **Reduced Motion Toggle**: Appearance settings now offers a persistent reduced-motion preference independent of OS-level `prefers-reduced-motion`
+- **Settings Modal Redesign**: Grouped nav (User/App/Server/Admin), search with auto-switch, ESC close, body scroll lock, compact layout via matchMedia
+- **Settings Tabs Redesign**: Account (profile hero, password form, deletion flow), Library (coverage stats, folder rows, analysis progress), Artist Entities (overview, guide cards, review queue, manual merge), Live Music (hero toggle, overview grid, collapsible location, auto-subscribe strip)
+- **Modal Accessibility**: ConfirmModal/PromptModal now have focus traps, `aria-labelledby`/`aria-describedby`, `role="dialog"`, and restore-focus-on-unmount. PromptModal supports `inputType`, `autoComplete`, `confirmLabel`
+- **~2500 lines of new CSS**: Filter rack, settings panels, switch toggles, merge preview cards, live music panels, unified responsive grids
+
 ## [v1.0.0-rc.2] - 2026-05-19
 
 ### Security
