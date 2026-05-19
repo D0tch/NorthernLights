@@ -2225,6 +2225,67 @@ export async function mergeArtistDuplicateCandidate(opts: {
   clearEntityCaches();
 }
 
+// Manual merge — accepts any canonical + duplicate ids, no candidate-key
+// machinery. Used from the Artist Entities tab when the auto-detector
+// doesn't cluster two rows (different normalized keys, e.g. "DJ Tiësto" vs
+// "Tiësto") but the user knows they're the same artist. The decision is
+// still written to artist_duplicate_reviews for auditability.
+export async function mergeArtistsManually(opts: {
+  canonicalArtistId: string;
+  duplicateArtistIds: string[];
+  userId?: string | null;
+}) {
+  const db = await initDB();
+  const ids = Array.from(new Set([opts.canonicalArtistId, ...opts.duplicateArtistIds].filter(Boolean)));
+  if (ids.length < 2) {
+    throw new Error('At least two artists are required to merge');
+  }
+
+  const placeholders = ids.map((_, idx) => `$${idx + 1}`).join(',');
+  const res = await db.query(`
+    SELECT a.*, COUNT(t.id)::int AS track_count
+    FROM artists a
+    LEFT JOIN tracks t ON t.artist_id = a.id
+    WHERE a.id IN (${placeholders})
+    GROUP BY a.id
+  `, ids);
+
+  if (res.rows.length !== ids.length) {
+    throw new Error('One or more selected artists no longer exist');
+  }
+
+  const rows = res.rows.map((row: any) => ({
+    ...row,
+    normalized_key: row.normalized_key || normalizeArtistIdentityKey(row.name) || null,
+    track_count: Number(row.track_count || 0),
+  })) as ArtistCanonicalRow[];
+
+  const canonical = rows.find(row => row.id === opts.canonicalArtistId);
+  if (!canonical) throw new Error('Canonical artist not found');
+
+  for (const duplicate of rows) {
+    if (duplicate.id === canonical.id) continue;
+    await mergeArtistRows(db, canonical, duplicate);
+  }
+
+  const sortedIds = [...ids].sort();
+  const candidateKey = `artist-manual:${canonical.id}`;
+  const signature = sortedIds.join(',');
+
+  await db.query(`
+    INSERT INTO artist_duplicate_reviews (candidate_key, signature, decision, canonical_artist_id, artist_ids, decided_by)
+    VALUES ($1, $2, 'merged', $3, $4::jsonb, $5)
+    ON CONFLICT (candidate_key, signature) DO UPDATE SET
+      decision = EXCLUDED.decision,
+      canonical_artist_id = EXCLUDED.canonical_artist_id,
+      artist_ids = EXCLUDED.artist_ids,
+      decided_by = EXCLUDED.decided_by,
+      created_at = NOW()
+  `, [candidateKey, signature, canonical.id, JSON.stringify(ids), opts.userId || null]);
+
+  clearEntityCaches();
+}
+
 // Backfill entity IDs for tracks that don't have them yet. The legacy featured
 // artist correction is intentionally one-time; new scans already normalize this.
 export async function migrateEntityIds() {

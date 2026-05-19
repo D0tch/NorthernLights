@@ -92,6 +92,34 @@ router.post('/artist-duplicates/merge', requireAdmin, async (req, res) => {
   }
 });
 
+// Manual merge — used when the auto-detector doesn't cluster two rows
+// (e.g. "DJ Tiësto" vs "Tiësto") but the user knows they're the same.
+router.post('/artists/manual-merge', requireAdmin, async (req, res) => {
+  try {
+    const { canonicalArtistId, duplicateArtistIds } = req.body || {};
+    if (!canonicalArtistId || !Array.isArray(duplicateArtistIds) || duplicateArtistIds.length < 1) {
+      return res.status(400).json({ error: 'canonicalArtistId and duplicateArtistIds are required' });
+    }
+    const cleanedDuplicates = duplicateArtistIds
+      .map(String)
+      .filter(id => id && id !== String(canonicalArtistId));
+    if (cleanedDuplicates.length < 1) {
+      return res.status(400).json({ error: 'At least one duplicate artist id distinct from the canonical is required' });
+    }
+    const { mergeArtistsManually, purgeOrphanedEntities } = await import('../database');
+    await mergeArtistsManually({
+      canonicalArtistId: String(canonicalArtistId),
+      duplicateArtistIds: cleanedDuplicates,
+      userId: req.user?.userId || null,
+    });
+    await purgeOrphanedEntities();
+    res.json({ status: 'merged' });
+  } catch (error: any) {
+    console.error('[ArtistDuplicates] manual merge error:', error);
+    res.status(500).json({ error: error.message || 'Failed to merge artists' });
+  }
+});
+
 router.post('/love', async (req, res) => {
   try {
     const userId = req.user?.userId;
