@@ -672,6 +672,20 @@ export async function initDB(): Promise<Pool> {
           count INTEGER NOT NULL DEFAULT 0,
           last_call_at TIMESTAMPTZ
         );
+
+        -- ==========================================
+        -- GIN TRIGRAM INDEXES FOR FILTER ILIKE QUERIES
+        -- pg_trgm extension is already enabled above.
+        -- These allow index-backed wildcard text search
+        -- instead of sequential scans on large tables.
+        -- ==========================================
+        CREATE INDEX IF NOT EXISTS artists_name_trgm_idx ON artists USING gin (name gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS artists_genres_trgm_idx ON artists USING gin (genres gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS artists_community_tags_trgm_idx ON artists USING gin (community_tags gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS artists_area_trgm_idx ON artists USING gin (area gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS albums_title_trgm_idx ON albums USING gin (title gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS albums_artist_name_trgm_idx ON albums USING gin (artist_name gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS albums_tags_trgm_idx ON albums USING gin (tags gin_trgm_ops);
       `);
 
       // One-time backfill of user_track_play_buckets from user_playback_stats.
