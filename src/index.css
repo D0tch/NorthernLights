@@ -1081,6 +1081,14 @@ body {
    as a typographic line, not as form chrome.
    ──────────────────────────────────────────────────────────────────── */
 
+.filter-zone {
+  margin-bottom: 24px;
+}
+
+.filter-zone--mobile {
+  margin-bottom: 18px;
+}
+
 .filter-rack {
   position: relative;
   display: flex;
@@ -1489,6 +1497,9 @@ body {
    44px, and disables the hover-only tooltip in favour of the inline
    label so touch users can read what each button does. */
 @media (pointer: coarse) and (min-width: 768px) {
+  .filter-zone {
+    margin-bottom: 28px;
+  }
   .filter-rack {
     gap: 8px;
   }

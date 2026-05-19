@@ -2,6 +2,8 @@
 
 ## [2026-05-19] V1.0.0-rc.3: Library Filters, Artist Merge Redirects, Settings Redesign, Accessibility
 
+- **Filter Bar Spacing**: Wrapped `FilterBar` in a `.filter-zone` container with consistent bottom margin (24px desktop, 18px mobile, 28px touch-coarse) to fix layout compression.
+
 - **Library Filter System**: Facet-based filtering for Artists and Albums with sort options, query builder modal (AND/OR condition groups against server-side SQL columns), and mobile filter overlay. New `POST /api/filter/artists` and `/api/filter/albums` endpoints with validated ILIKE queries. GIN trigram indexes on artists(name, genres, community_tags, area) and albums(title, artist_name, tags) for index-backed wildcard text search.
 - **Merged Artist Redirects**: Merged-away artist rows are now preserved with a `merged_into` UUID pointing to the canonical row instead of being deleted. This prevents library refreshes from recreating credit strings as fresh duplicates. `getOrCreateArtist`, `getArtistById`, `getAllArtists`, and the filter API all chase redirect chains. `purgeOrphanedEntities` keeps merge targets alive. Album merge now handles `UNIQUE(title, artist_name)` conflicts by folding tracks into the survivor before deleting the duplicate.
 - **Manual Artist Merge**: New UI in Artist Entities tab for merging any two artists by name (e.g. "DJ Tiësto" → "Tiësto") with side-by-side preview cards showing track/album counts and MBID. Backend endpoint `POST /api/library/artists/manual-merge` writes the merge to `artist_duplicate_reviews` for auditability. ConfirmModal extended with `body` (ReactNode), `confirmTone` ('primary' | 'danger'), and wider layout for merge previews.

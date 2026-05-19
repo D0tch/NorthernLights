@@ -70,21 +70,23 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   if (isMobile) {
     const isActive = totalActiveChips > 0 || queryActive;
     return (
-      <button
-        onClick={onOpenQueryBuilder}
-        className={`filter-icon-btn ${isActive ? 'filter-icon-btn--active' : ''} min-h-[44px] min-w-[44px]`}
-        style={{ width: 44, height: 44, borderRadius: 14 }}
-        aria-label={isActive ? `Filters (${totalActiveChips} active)` : 'Filters'}
-      >
-        <SlidersHorizontal size={18} strokeWidth={1.75} />
-      </button>
+      <div className="filter-zone filter-zone--mobile">
+        <button
+          onClick={onOpenQueryBuilder}
+          className={`filter-icon-btn ${isActive ? 'filter-icon-btn--active' : ''} min-h-[44px] min-w-[44px]`}
+          style={{ width: 44, height: 44, borderRadius: 14 }}
+          aria-label={isActive ? `Filters (${totalActiveChips} active)` : 'Filters'}
+        >
+          <SlidersHorizontal size={18} strokeWidth={1.75} />
+        </button>
+      </div>
     );
   }
 
   const currentSort = SORT_OPTIONS.find(o => o.value === filterState.sort);
 
   return (
-    <>
+    <div className="filter-zone">
       <div className="filter-rack" role="toolbar" aria-label={`Filter ${view}`}>
         {facets.map((facet, idx) => {
           const values = facetValues[idx] || [];
@@ -228,7 +230,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
       )}
 
       {tooltip && <FilterTip key={tooltip.key} label={tooltip.label} sub={tooltip.sub} rect={tooltip.rect} />}
-    </>
+    </div>
   );
 };
 

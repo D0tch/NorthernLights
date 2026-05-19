@@ -16,6 +16,7 @@
 - **Settings Modal Redesign**: Grouped nav (User/App/Server/Admin), search with auto-switch, ESC close, body scroll lock, compact layout via matchMedia
 - **Settings Tabs Redesign**: Account (profile hero, password form, deletion flow), Library (coverage stats, folder rows, analysis progress), Artist Entities (overview, guide cards, review queue, manual merge), Live Music (hero toggle, overview grid, collapsible location, auto-subscribe strip)
 - **Modal Accessibility**: ConfirmModal/PromptModal now have focus traps, `aria-labelledby`/`aria-describedby`, `role="dialog"`, and restore-focus-on-unmount. PromptModal supports `inputType`, `autoComplete`, `confirmLabel`
+- **Filter Bar Spacing**: `.filter-zone` wrapper with consistent bottom margin (24px desktop, 18px mobile, 28px coarse-touch) to prevent layout compression
 - **~2500 lines of new CSS**: Filter rack, settings panels, switch toggles, merge preview cards, live music panels, unified responsive grids
 
 ## [v1.0.0-rc.2] - 2026-05-19
