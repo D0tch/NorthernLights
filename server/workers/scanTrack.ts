@@ -108,7 +108,11 @@ process.stdin.on('data', async (chunk: string) => {
       const utf8Path = Buffer.from(msg.filePathBase64, 'base64').toString('utf8');
 
       // parseFile() accepts a plain string path — no Buffer hacks needed.
-      const metadata = await mm.parseFile(utf8Path, { skipCovers: true, skipPostHeaders: true });
+      // duration: true forces music-metadata to scan MPEG frames when the
+      // file lacks a Xing/Info/LAME header or TLEN tag (common for DJ-mix
+      // compilations); without it format.duration is undefined and we
+      // persist 0 forever.
+      const metadata = await mm.parseFile(utf8Path, { skipCovers: true, duration: true });
       const rawUrls = extractUrlTags(metadata.native || {});
 
       process.stdout.write(JSON.stringify({
