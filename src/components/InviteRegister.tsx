@@ -2,6 +2,31 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../store/index';
 import { UserPlus, CheckCircle2, XCircle, Eye, EyeOff, Loader2 } from 'lucide-react';
+import SoftAurora from './SoftAurora';
+
+const AuthBackdrop: React.FC = () => (
+  <div className="absolute inset-0 pointer-events-none">
+    <div className="app-backdrop" />
+    <div className="absolute inset-0">
+      <SoftAurora
+        speed={0.2}
+        scale={1.4}
+        brightness={1.8}
+        color1="#10B981"
+        color2="#22C983"
+        noiseFrequency={2}
+        noiseAmplitude={7}
+        bandHeight={1}
+        bandSpread={0.4}
+        octaveDecay={0.2}
+        layerOffset={0.65}
+        colorSpeed={1}
+        enableMouseInteraction={false}
+        mouseInfluence={0.1}
+      />
+    </div>
+  </div>
+);
 
 interface InviteData {
   valid: boolean;
@@ -91,10 +116,7 @@ export const InviteRegister: React.FC = () => {
   if (inviteData === null) {
     return (
       <div className="fixed inset-0 z-[100] bg-[var(--color-bg-primary)] flex items-center justify-center p-4">
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="app-backdrop" />
-          <div className="aurora-background" />
-        </div>
+        <AuthBackdrop />
         <div className="auth-card-enter relative z-10 w-full max-w-sm bg-[var(--glass-bg)] border border-[var(--glass-border)] shadow-2xl rounded-3xl p-8 backdrop-blur-3xl flex flex-col items-center gap-4">
           <div className="w-14 h-14 bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded-full flex items-center justify-center">
             <Loader2 className="w-7 h-7 animate-spin" />
@@ -117,10 +139,7 @@ export const InviteRegister: React.FC = () => {
 
     return (
       <div className="fixed inset-0 z-[100] bg-[var(--color-bg-primary)] flex items-center justify-center p-4">
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="app-backdrop" />
-          <div className="aurora-background" />
-        </div>
+        <AuthBackdrop />
         <div className="auth-card-enter relative z-10 w-full max-w-sm bg-[var(--glass-bg)] border border-[var(--glass-border)] shadow-2xl rounded-3xl p-8 backdrop-blur-3xl flex flex-col items-center gap-4 text-center">
           <XCircle className="w-12 h-12 text-[var(--color-error)]" />
           <h1 className="text-xl font-bold text-[var(--color-text-primary)]"
@@ -143,10 +162,7 @@ export const InviteRegister: React.FC = () => {
   if (success) {
     return (
       <div className="fixed inset-0 z-[100] bg-[var(--color-bg-primary)] flex items-center justify-center p-4">
-        <div className="absolute inset-0 pointer-events-none">
-          <div className="app-backdrop" />
-          <div className="aurora-background" />
-        </div>
+        <AuthBackdrop />
         <div className="auth-card-enter relative z-10 w-full max-w-sm bg-[var(--glass-bg)] border border-[var(--glass-border)] shadow-2xl rounded-3xl p-8 backdrop-blur-3xl flex flex-col items-center gap-4 text-center">
           <CheckCircle2 className="w-12 h-12 text-[var(--color-primary)]" />
           <p className="text-lg font-semibold text-[var(--color-text-primary)]"
@@ -163,10 +179,7 @@ export const InviteRegister: React.FC = () => {
 
   return (
     <div className="fixed inset-0 z-[100] bg-[var(--color-bg-primary)] flex items-center justify-center p-4 overflow-y-auto">
-      <div className="absolute inset-0 pointer-events-none">
-        <div className="app-backdrop" />
-        <div className="aurora-background" />
-      </div>
+      <AuthBackdrop />
 
       <div className="auth-card-enter relative z-10 w-full max-w-sm bg-[var(--glass-bg)] border border-[var(--glass-border)] shadow-2xl rounded-3xl p-8 backdrop-blur-3xl my-auto">
         {/* Header */}

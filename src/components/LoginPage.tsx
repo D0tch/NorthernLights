@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { Music2, Eye, EyeOff, Loader2, LogIn } from 'lucide-react';
+import SoftAurora from './SoftAurora';
 
 interface LoginPageProps {
   onLogin: (username: string, password: string) => Promise<boolean>;
@@ -38,7 +39,24 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       {/* Aurora atmosphere — matches app-backdrop */}
       <div className="absolute inset-0 pointer-events-none">
         <div className="app-backdrop" />
-        <div className="aurora-background" />
+        <div className="absolute inset-0">
+          <SoftAurora
+            speed={0.2}
+            scale={1.4}
+            brightness={1.8}
+            color1="#10B981"
+            color2="#22C983"
+            noiseFrequency={2}
+            noiseAmplitude={7}
+            bandHeight={1}
+            bandSpread={0.4}
+            octaveDecay={0.2}
+            layerOffset={0.65}
+            colorSpeed={1}
+            enableMouseInteraction={false}
+            mouseInfluence={0.1}
+          />
+        </div>
       </div>
 
       <div className="auth-card-enter relative z-10 w-full max-w-sm bg-[var(--glass-bg)] border border-[var(--glass-border)] shadow-2xl rounded-3xl p-8 backdrop-blur-3xl my-auto">
@@ -52,7 +70,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
             Aurora
           </h1>
           <p className="text-sm text-[var(--color-text-muted)] mt-1">
-            your library
+            Rediscover your music
           </p>
         </div>
 
