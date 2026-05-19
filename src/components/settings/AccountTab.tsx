@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { CheckCircle2, KeyRound, Radio, ShieldAlert, UserRound } from 'lucide-react';
 import { usePlayerStore } from '../../store/index';
 import { useToast } from '../../hooks/useToast';
 import { ConfirmModal } from '../ConfirmModal';
@@ -30,25 +31,39 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
     const { addToast } = useToast();
     
     const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel?: string; onConfirm: () => void } | null>(null);
-    const [promptDialog, setPromptDialog] = useState<{ title: string; label?: string; placeholder?: string; onSubmit: (value: string) => void } | null>(null);
+    const [promptDialog, setPromptDialog] = useState<{ title: string; label?: string; placeholder?: string; inputType?: React.HTMLInputTypeAttribute; autoComplete?: string; confirmLabel?: string; onSubmit: (value: string) => void } | null>(null);
     const [lbTokenInput, setLbTokenInput] = useState('');
     const [lbConnecting, setLbConnecting] = useState(false);
     const [lastFmConnecting, setLastFmConnecting] = useState(false);
+    const isMountedRef = useRef(true);
+    const lastFmPollRunRef = useRef(0);
 
     const username = currentUser?.username || 'User';
+    const roleLabel = currentUser?.role || 'listener';
 
     const showToast = (msg: string, type: 'success' | 'error' | 'info') => addToast(msg, type);
 
+    useEffect(() => {
+        return () => {
+            isMountedRef.current = false;
+            lastFmPollRunRef.current += 1;
+        };
+    }, []);
+
     const pollLastFmCompletion = async () => {
+        const runId = lastFmPollRunRef.current + 1;
+        lastFmPollRunRef.current = runId;
         const deadline = Date.now() + 120_000;
         while (Date.now() < deadline) {
             await new Promise(resolve => window.setTimeout(resolve, 2_000));
+            if (!isMountedRef.current || lastFmPollRunRef.current !== runId) return;
             try {
                 const res = await fetch('/api/providers/lastfm/complete', {
                     method: 'POST',
                     headers: getAuthHeader(),
                 });
                 const data = await res.json().catch(() => ({}));
+                if (!isMountedRef.current || lastFmPollRunRef.current !== runId) return;
                 if (res.ok && data.status === 'ok') {
                     setLastFmConnected(true);
                     setLastFmUsername(data.username || '');
@@ -60,37 +75,193 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                     return;
                 }
             } catch (e: any) {
+                if (!isMountedRef.current || lastFmPollRunRef.current !== runId) return;
                 showToast(e?.message || 'Network error', 'error');
                 return;
             }
         }
+        if (!isMountedRef.current || lastFmPollRunRef.current !== runId) return;
         showToast('Last.fm authorization timed out', 'error');
     };
 
+    const handleLastFmConnect = async () => {
+        if (!lastFmApiKey.trim() || !lastFmSharedSecret.trim()) {
+            showToast('Configure the Last.fm API Key and Shared Secret first', 'error');
+            return;
+        }
+
+        const authWindow = window.open('about:blank', 'lastfm-auth', 'popup=yes,width=760,height=820');
+        setLastFmConnecting(true);
+        try {
+            const saveRes = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                body: JSON.stringify({
+                    lastFmApiKey: lastFmApiKey.trim(),
+                    lastFmSharedSecret: lastFmSharedSecret.trim(),
+                }),
+            });
+            if (!saveRes.ok) {
+                const saveErr = await saveRes.json().catch(() => ({}));
+                authWindow?.close();
+                showToast(saveErr.error || 'Failed to save Last.fm credentials', 'error');
+                return;
+            }
+
+            const res = await fetch(`/api/providers/lastfm/authorize?origin=${encodeURIComponent(window.location.origin)}`, { headers: getAuthHeader() });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || !data.url) {
+                authWindow?.close();
+                showToast(data.error || 'Failed to start authorization', 'error');
+                return;
+            }
+            if (authWindow && !authWindow.closed) {
+                authWindow.location.href = data.url;
+            } else {
+                window.open(data.url, '_blank', 'noopener,noreferrer');
+            }
+            showToast('Approve Aurora in the Last.fm window to finish connecting', 'info');
+            await pollLastFmCompletion();
+        } catch (e: any) {
+            authWindow?.close();
+            if (!isMountedRef.current) return;
+            showToast(e?.message || 'Network error', 'error');
+        } finally {
+            if (isMountedRef.current) {
+                setLastFmConnecting(false);
+            }
+        }
+    };
+
+    const handleLastFmDisconnect = async () => {
+        try {
+            const res = await fetch('/api/providers/lastfm/disconnect', { method: 'POST', headers: getAuthHeader() });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                showToast(data.error || 'Failed to disconnect', 'error');
+            } else {
+                setLastFmConnected(false);
+                setLastFmUsername('');
+                showToast('Last.fm account disconnected', 'success');
+            }
+        } catch (e: any) {
+            showToast(e?.message || 'Network error', 'error');
+        }
+    };
+
+    const handleListenBrainzConnect = async () => {
+        setLbConnecting(true);
+        try {
+            const res = await fetch('/api/providers/listenbrainz/connect', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                body: JSON.stringify({ token: lbTokenInput.trim() }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) {
+                showToast(data.error || 'Failed to connect', 'error');
+            } else {
+                setListenBrainzConnected(true);
+                setListenBrainzUsername(data.username || '');
+                setListenBrainzScrobbleEnabled(true);
+                setLbTokenInput('');
+                showToast('ListenBrainz connected successfully', 'success');
+            }
+        } catch (e: any) {
+            showToast(e?.message || 'Network error', 'error');
+        } finally {
+            setLbConnecting(false);
+        }
+    };
+
+    const handleListenBrainzDisconnect = async () => {
+        try {
+            const res = await fetch('/api/providers/listenbrainz/disconnect', { method: 'POST', headers: getAuthHeader() });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok || data.error) {
+                showToast(data.error || 'Failed to disconnect', 'error');
+            } else {
+                setListenBrainzConnected(false);
+                setListenBrainzUsername('');
+                showToast('ListenBrainz account disconnected', 'success');
+            }
+        } catch (e: any) {
+            showToast(e?.message || 'Network error', 'error');
+        }
+    };
+
+    const requestAccountDeletion = () => {
+        setConfirmDialog({
+            title: 'Delete Account',
+            message: 'This will permanently delete your account. You will be signed out immediately. Type your password to confirm.',
+            confirmLabel: 'Delete My Account',
+            onConfirm: async () => {
+                setConfirmDialog(null);
+                setPromptDialog({
+                    title: 'Confirm Password',
+                    label: 'Enter your password to delete your account.',
+                    inputType: 'password',
+                    autoComplete: 'current-password',
+                    confirmLabel: 'Delete Account',
+                    onSubmit: async (password) => {
+                        setPromptDialog(null);
+                        try {
+                            const res = await fetch('/api/auth/delete-account', {
+                                method: 'DELETE',
+                                headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                                body: JSON.stringify({ password })
+                            });
+                            if (res.ok) {
+                                showToast('Account deleted', 'success');
+                                clearAuthToken();
+                                onClose();
+                            } else {
+                                const data = await res.json();
+                                showToast(data.error || 'Failed', 'error');
+                            }
+                        } catch {
+                            showToast('Network error', 'error');
+                        }
+                    },
+                });
+            },
+        });
+    };
+
     return (
-        <div className="settings-section">
-            <div className="settings-section-header mb-6">
-                <h3 className="text-xl font-bold text-[var(--color-text-primary)]">My Account</h3>
-            </div>
-
-            <div className="bg-[var(--color-surface)] rounded-2xl overflow-hidden border border-[var(--glass-border)] shadow-xl">
-                <div className="h-24 bg-aurora-gradient opacity-80"></div>
-                <div className="px-4 pb-6 -mt-12">
-                    <div className="flex items-end gap-3 mb-4">
-                        <div className="w-20 h-20 rounded-full border-4 border-[var(--color-surface)] bg-[var(--color-surface-variant)] flex items-center justify-center text-3xl font-bold text-[var(--color-text-primary)] overflow-hidden shadow-lg backdrop-blur-md">
-                            {username[0]?.toUpperCase() || 'U'}
-                        </div>
-                        <div className="mb-1">
-                            <h4 className="text-xl font-bold text-white">{username}</h4>
-                            <span className="text-xs text-white/60 capitalize">{currentUser?.role}</span>
-                        </div>
-                    </div>
+        <div className="settings-section account-settings">
+            <header className="account-settings__header">
+                <div>
+                    <p className="account-settings__eyebrow">Account</p>
+                    <h3>My Account</h3>
                 </div>
-            </div>
+                <span className="account-settings__role">{roleLabel}</span>
+            </header>
 
-            {/* Change Password */}
-            <div className="mt-6 bg-[var(--color-surface)] rounded-2xl p-5 border border-[var(--glass-border)]">
-                <h4 className="font-semibold text-[var(--color-text-primary)] mb-4">Change Password</h4>
+            <section className="account-profile" aria-label="Signed in account">
+                <div className="account-profile__glow" aria-hidden="true"></div>
+                <div className="account-profile__avatar" aria-hidden="true">
+                    {username[0]?.toUpperCase() || 'U'}
+                </div>
+                <div className="account-profile__copy">
+                    <div className="account-profile__label">
+                        <UserRound size={15} aria-hidden="true" />
+                        Signed in as
+                    </div>
+                    <h4>{username}</h4>
+                    <p>{roleLabel} access on this Aurora server</p>
+                </div>
+            </section>
+
+            <section className="account-panel account-panel--security">
+                <div className="account-panel__header">
+                    <div className="account-panel__title">
+                        <KeyRound size={17} aria-hidden="true" />
+                        <h4>Change Password</h4>
+                    </div>
+                    <p>Use at least 12 characters.</p>
+                </div>
+
                 <form
                     onSubmit={async (e) => {
                         e.preventDefault();
@@ -116,234 +287,166 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                             } else {
                                 showToast(data.error || 'Failed', 'error');
                             }
-                        } catch { showToast('Network error', 'error'); }
+                        } catch {
+                            showToast('Network error', 'error');
+                        }
                     }}
-                    className="space-y-3"
+                    className="account-password-form"
                 >
-                    <input name="currentPassword" type="password" placeholder="Current password" required
-                        className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-xl px-4 py-3 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50" />
-                    <input name="newPassword" type="password" placeholder="New password (12+ chars)" required
-                        className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-xl px-4 py-3 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50" />
-                    <input name="confirmPassword" type="password" placeholder="Confirm new password" required
-                        className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-xl px-4 py-3 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50" />
-                    <button type="submit" className="btn btn-primary">
+                    <label className="account-field">
+                        <span>Current password</span>
+                        <input name="currentPassword" type="password" required autoComplete="current-password" />
+                    </label>
+                    <label className="account-field">
+                        <span>New password</span>
+                        <input name="newPassword" type="password" required autoComplete="new-password" placeholder="12+ characters" />
+                    </label>
+                    <label className="account-field">
+                        <span>Confirm password</span>
+                        <input name="confirmPassword" type="password" required autoComplete="new-password" />
+                    </label>
+                    <button type="submit" className="btn btn-primary account-password-form__action">
                         Update Password
                     </button>
                 </form>
-            </div>
+            </section>
 
-            {/* Last.fm User Integration */}
-            <div className="mt-6 bg-[var(--color-surface)] rounded-2xl p-5 border border-[var(--glass-border)]">
-                <h4 className="font-semibold text-[var(--color-text-primary)] mb-1">Last.fm Scrobbling</h4>
-                <p className="text-sm text-[var(--color-text-muted)] mb-4">Link your personal Last.fm account to automatically scrobble your played tracks from Aurora.</p>
-                {lastFmConnected ? (
-                    <div className="flex flex-col gap-4">
-                        <div className="flex items-center justify-between">
-                            <span className="text-green-500 font-semibold text-sm drop-shadow-sm">✓ Connected as {lastFmUsername || 'Last.fm User'}</span>
-                            <button onClick={async () => { 
-                                try { 
-                                    const res = await fetch('/api/providers/lastfm/disconnect', { method: 'POST', headers: getAuthHeader() }); 
-                                    const data = await res.json(); 
-                                    if (!res.ok || data.error) { 
-                                        showToast(data.error || 'Failed to disconnect', 'error'); 
-                                    } else { 
-                                        setLastFmConnected(false); 
-                                        setLastFmUsername(''); 
-                                        showToast('Last.fm account disconnected', 'success');
-                                    } 
-                                } catch (e: any) { 
-                                    showToast(e?.message || 'Network error', 'error'); 
-                                } 
-                            }} className="btn btn-ghost btn-sm">Disconnect</button>
-                        </div>
-                        <div className="border-t border-[var(--glass-border)] pt-4 flex items-center justify-between">
-                            <label className="text-sm font-medium text-[var(--color-text-primary)]">Auto-scrobble played tracks</label>
-                            <button onClick={() => setLastFmScrobbleEnabled(!lastFmScrobbleEnabled)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${lastFmScrobbleEnabled ? 'bg-[#d51007]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}>
-                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow-sm ${lastFmScrobbleEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
-                            </button>
-                        </div>
+            <section className="account-panel account-panel--connections">
+                <div className="account-panel__header">
+                    <div className="account-panel__title">
+                        <Radio size={17} aria-hidden="true" />
+                        <h4>Listening Services</h4>
                     </div>
-                ) : (
-                    <div className="flex items-center justify-between">
-                        <p className="text-sm text-[var(--color-text-secondary)]">Not connected.</p>
-                        <button
-                            disabled={lastFmConnecting}
-                            onClick={async () => {
-                                if (!lastFmApiKey.trim() || !lastFmSharedSecret.trim()) {
-                                    showToast('Configure the Last.fm API Key and Shared Secret first', 'error');
-                                    return;
-                                }
+                    <p>Connect scrobbling accounts for this user.</p>
+                </div>
 
-                                const authWindow = window.open('about:blank', 'lastfm-auth', 'popup=yes,width=760,height=820');
-                                setLastFmConnecting(true);
-                                try {
-                                    const saveRes = await fetch('/api/settings', {
-                                        method: 'POST',
-                                        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-                                        body: JSON.stringify({
-                                            lastFmApiKey: lastFmApiKey.trim(),
-                                            lastFmSharedSecret: lastFmSharedSecret.trim(),
-                                        }),
-                                    });
-                                    if (!saveRes.ok) {
-                                        const saveErr = await saveRes.json().catch(() => ({}));
-                                        authWindow?.close();
-                                        showToast(saveErr.error || 'Failed to save Last.fm credentials', 'error');
-                                        return;
-                                    }
+                <div className="account-provider-list">
+                    <div className="account-provider">
+                        <div className="account-provider__main">
+                            <div className="account-provider__copy">
+                                <div className="account-provider__title-row">
+                                    <h5>Last.fm</h5>
+                                    {lastFmConnected ? (
+                                        <span className="account-status account-status--connected">
+                                            <CheckCircle2 size={14} aria-hidden="true" />
+                                            {lastFmUsername || 'Connected'}
+                                        </span>
+                                    ) : (
+                                        <span className="account-status">Not connected</span>
+                                    )}
+                                </div>
+                                <p>Scrobble played tracks from Aurora to your personal Last.fm account.</p>
+                            </div>
 
-                                    const res = await fetch(`/api/providers/lastfm/authorize?origin=${encodeURIComponent(window.location.origin)}`, { headers: getAuthHeader() });
-                                    const data = await res.json().catch(() => ({}));
-                                    if (!res.ok || !data.url) {
-                                        authWindow?.close();
-                                        showToast(data.error || 'Failed to start authorization', 'error');
-                                        return;
-                                    }
-                                    if (authWindow && !authWindow.closed) {
-                                        authWindow.location.href = data.url;
-                                    } else {
-                                        window.open(data.url, '_blank', 'noopener,noreferrer');
-                                    }
-                                    showToast('Approve Aurora in the Last.fm window to finish connecting', 'info');
-                                    await pollLastFmCompletion();
-                                } catch (e: any) {
-                                    authWindow?.close();
-                                    showToast(e?.message || 'Network error', 'error');
-                                } finally {
-                                    setLastFmConnecting(false);
-                                }
-                            }}
-                            className="btn btn-primary btn-sm flex items-center gap-1.5"
-                        >
-                            <svg viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"><path d="M11.96 0C5.36 0 0 5.36 0 11.96c0 6.6 5.36 11.96 11.96 11.96 6.6 0 11.96-5.36 11.96-11.96C23.92 5.36 18.56 0 11.96 0zm-2.07 16.71c-2.18 0-3.95-1.77-3.95-3.95 0-2.18 1.77-3.95 3.95-3.95 2.18 0 3.95 1.77 3.95 3.95 0 2.18-1.77 3.95-3.95 3.95zM17 12.76c0 .87-.71 1.58-1.58 1.58-.87 0-1.58-.71-1.58-1.58 0-.87.71-1.58 1.58-1.58.87 0 1.58.71 1.58 1.58zm3.64-5.39c-1.32 0-2.4-1.08-2.4-2.4 0-1.32 1.08-2.4 2.4-2.4 1.32 0 2.4 1.08 2.4 2.4.01 1.32-1.07 2.4-2.39 2.4" /></svg>
-                            {lastFmConnecting ? 'Connecting...' : 'Connect to Last.fm'}
-                        </button>
-                    </div>
-                )}
-            </div>
-
-            {/* ListenBrainz User Integration */}
-            <div className="mt-6 bg-[var(--color-surface)] rounded-2xl p-5 border border-[var(--glass-border)]">
-                <h4 className="font-semibold text-[var(--color-text-primary)] mb-1">ListenBrainz Scrobbling</h4>
-                <p className="text-sm text-[var(--color-text-muted)] mb-4">
-                    Link your ListenBrainz account to submit listens as you play. Paste your user token from{' '}
-                    <a href="https://listenbrainz.org/profile/" target="_blank" rel="noreferrer" className="text-[var(--color-primary)] underline">listenbrainz.org/profile</a>.
-                </p>
-                {listenBrainzConnected ? (
-                    <div className="flex flex-col gap-4">
-                        <div className="flex items-center justify-between">
-                            <span className="text-green-500 font-semibold text-sm drop-shadow-sm">✓ Connected as {listenBrainzUsername || 'ListenBrainz User'}</span>
-                            <button onClick={async () => {
-                                try {
-                                    const res = await fetch('/api/providers/listenbrainz/disconnect', { method: 'POST', headers: getAuthHeader() });
-                                    const data = await res.json().catch(() => ({}));
-                                    if (!res.ok || data.error) {
-                                        showToast(data.error || 'Failed to disconnect', 'error');
-                                    } else {
-                                        setListenBrainzConnected(false);
-                                        setListenBrainzUsername('');
-                                        showToast('ListenBrainz account disconnected', 'success');
-                                    }
-                                } catch (e: any) {
-                                    showToast(e?.message || 'Network error', 'error');
-                                }
-                            }} className="btn btn-ghost btn-sm">Disconnect</button>
+                            {lastFmConnected ? (
+                                <button type="button" onClick={handleLastFmDisconnect} className="btn btn-ghost btn-sm">Disconnect</button>
+                            ) : (
+                                <button
+                                    type="button"
+                                    disabled={lastFmConnecting}
+                                    onClick={handleLastFmConnect}
+                                    className="btn btn-primary btn-sm"
+                                >
+                                    {lastFmConnecting ? 'Connecting...' : 'Connect'}
+                                </button>
+                            )}
                         </div>
-                        <div className="border-t border-[var(--glass-border)] pt-4 flex items-center justify-between">
-                            <label className="text-sm font-medium text-[var(--color-text-primary)]">Auto-submit played tracks</label>
-                            <button onClick={() => setListenBrainzScrobbleEnabled(!listenBrainzScrobbleEnabled)} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${listenBrainzScrobbleEnabled ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}>
-                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform shadow-sm ${listenBrainzScrobbleEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
-                            </button>
-                        </div>
-                    </div>
-                ) : (
-                    <div className="flex flex-col gap-3">
-                        <input
-                            type="password"
-                            value={lbTokenInput}
-                            onChange={e => setLbTokenInput(e.target.value)}
-                            placeholder="User token"
-                            className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
-                            autoComplete="off"
-                        />
-                        <div className="flex justify-end">
-                            <button
-                                disabled={!lbTokenInput.trim() || lbConnecting}
-                                onClick={async () => {
-                                    setLbConnecting(true);
-                                    try {
-                                        const res = await fetch('/api/providers/listenbrainz/connect', {
-                                            method: 'POST',
-                                            headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-                                            body: JSON.stringify({ token: lbTokenInput.trim() }),
-                                        });
-                                        const data = await res.json().catch(() => ({}));
-                                        if (!res.ok || data.error) {
-                                            showToast(data.error || 'Failed to connect', 'error');
-                                        } else {
-                                            setListenBrainzConnected(true);
-                                            setListenBrainzUsername(data.username || '');
-                                            setListenBrainzScrobbleEnabled(true);
-                                            setLbTokenInput('');
-                                            showToast('ListenBrainz connected successfully', 'success');
-                                        }
-                                    } catch (e: any) {
-                                        showToast(e?.message || 'Network error', 'error');
-                                    } finally {
-                                        setLbConnecting(false);
-                                    }
-                                }}
-                                className="btn btn-primary btn-sm disabled:opacity-50"
-                            >
-                                {lbConnecting ? 'Connecting…' : 'Connect ListenBrainz'}
-                            </button>
-                        </div>
-                    </div>
-                )}
-            </div>
 
-            {/* Delete Account */}
-            <div className="mt-6 bg-red-500/5 rounded-2xl p-5 border border-red-500/20">
-                <h4 className="font-semibold text-red-600 dark:text-red-400 mb-2">Danger Zone</h4>
-                <p className="text-sm text-[var(--color-text-muted)] mb-4">Permanently delete your account and all associated data. This cannot be undone.</p>
-                <button
-                    onClick={() => {
-                        setConfirmDialog({
-                            title: 'Delete Account',
-                            message: 'This will permanently delete your account. You will be signed out immediately. Type your password to confirm.',
-                            confirmLabel: 'Delete My Account',
-                            onConfirm: async () => {
-                                setConfirmDialog(null);
-                                setPromptDialog({
-                                    title: 'Confirm Password',
-                                    label: 'Enter your password to delete your account.',
-                                    onSubmit: async (password) => {
-                                        setPromptDialog(null);
-                                        try {
-                                            const res = await fetch('/api/auth/delete-account', {
-                                                method: 'DELETE',
-                                                headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-                                                body: JSON.stringify({ password })
-                                            });
-                                            if (res.ok) {
-                                                showToast('Account deleted', 'success');
-                                                clearAuthToken();
-                                                onClose();
-                                            } else {
-                                                const data = await res.json();
-                                                showToast(data.error || 'Failed', 'error');
-                                            }
-                                        } catch { showToast('Network error', 'error'); }
-                                    },
-                                });
-                            },
-                        });
-                    }}
-                    className="btn btn-danger"
-                >
+                        {lastFmConnected && (
+                            <div className="account-provider__setting">
+                                <span>Auto-scrobble played tracks</span>
+                                <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={lastFmScrobbleEnabled}
+                                    onClick={() => setLastFmScrobbleEnabled(!lastFmScrobbleEnabled)}
+                                    className="account-switch"
+                                    data-state={lastFmScrobbleEnabled ? 'on' : 'off'}
+                                >
+                                    <span className="account-switch__thumb" />
+                                </button>
+                            </div>
+                        )}
+                    </div>
+
+                    <div className="account-provider">
+                        <div className="account-provider__main">
+                            <div className="account-provider__copy">
+                                <div className="account-provider__title-row">
+                                    <h5>ListenBrainz</h5>
+                                    {listenBrainzConnected ? (
+                                        <span className="account-status account-status--connected">
+                                            <CheckCircle2 size={14} aria-hidden="true" />
+                                            {listenBrainzUsername || 'Connected'}
+                                        </span>
+                                    ) : (
+                                        <span className="account-status">Not connected</span>
+                                    )}
+                                </div>
+                                <p>
+                                    Submit listens as you play. User tokens live at{' '}
+                                    <a href="https://listenbrainz.org/profile/" target="_blank" rel="noreferrer">listenbrainz.org/profile</a>.
+                                </p>
+                            </div>
+
+                            {listenBrainzConnected && (
+                                <button type="button" onClick={handleListenBrainzDisconnect} className="btn btn-ghost btn-sm">Disconnect</button>
+                            )}
+                        </div>
+
+                        {listenBrainzConnected ? (
+                            <div className="account-provider__setting">
+                                <span>Auto-submit played tracks</span>
+                                <button
+                                    type="button"
+                                    role="switch"
+                                    aria-checked={listenBrainzScrobbleEnabled}
+                                    onClick={() => setListenBrainzScrobbleEnabled(!listenBrainzScrobbleEnabled)}
+                                    className="account-switch"
+                                    data-state={listenBrainzScrobbleEnabled ? 'on' : 'off'}
+                                >
+                                    <span className="account-switch__thumb" />
+                                </button>
+                            </div>
+                        ) : (
+                            <div className="account-token-row">
+                                <label className="account-field account-field--token" htmlFor="listenbrainz-token">
+                                    <span>User token</span>
+                                    <input
+                                        id="listenbrainz-token"
+                                        type="password"
+                                        value={lbTokenInput}
+                                        onChange={e => setLbTokenInput(e.target.value)}
+                                        placeholder="Paste token"
+                                        autoComplete="off"
+                                    />
+                                </label>
+                                <button
+                                    type="button"
+                                    disabled={!lbTokenInput.trim() || lbConnecting}
+                                    onClick={handleListenBrainzConnect}
+                                    className="btn btn-primary btn-sm account-token-row__action disabled:opacity-50"
+                                >
+                                    {lbConnecting ? 'Connecting...' : 'Connect'}
+                                </button>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </section>
+
+            <section className="account-panel account-panel--danger">
+                <div className="account-panel__header">
+                    <div className="account-panel__title">
+                        <ShieldAlert size={17} aria-hidden="true" />
+                        <h4>Danger Zone</h4>
+                    </div>
+                    <p>Permanently delete this account and all associated data.</p>
+                </div>
+                <button type="button" onClick={requestAccountDeletion} className="btn btn-danger account-danger__action">
                     Delete Account
                 </button>
-            </div>
+            </section>
 
             {confirmDialog && (
                 <ConfirmModal
@@ -360,6 +463,9 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                     title={promptDialog.title}
                     label={promptDialog.label}
                     placeholder={promptDialog.placeholder}
+                    inputType={promptDialog.inputType}
+                    autoComplete={promptDialog.autoComplete}
+                    confirmLabel={promptDialog.confirmLabel}
                     onSubmit={promptDialog.onSubmit}
                     onCancel={() => setPromptDialog(null)}
                 />

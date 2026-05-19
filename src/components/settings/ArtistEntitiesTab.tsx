@@ -28,15 +28,15 @@ const candidateKind = (candidate: ArtistDuplicateCandidate): CandidateKind =>
 const KindBadge: React.FC<{ kind: CandidateKind }> = ({ kind }) => {
     if (kind === 'compound-credit') {
         return (
-            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-amber-500/15 text-amber-600 dark:text-amber-400 border border-amber-500/30">
-                <Layers size={11} />
+            <span className="artist-entity-badge artist-entity-badge--compound">
+                <Layers size={11} aria-hidden="true" />
                 Compound credit
             </span>
         );
     }
     return (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/30">
-            <Users2 size={11} />
+        <span className="artist-entity-badge artist-entity-badge--same">
+            <Users2 size={11} aria-hidden="true" />
             Same identity
         </span>
     );
@@ -117,7 +117,7 @@ export const ArtistEntitiesTab: React.FC = () => {
         const kind = candidateKind(candidate);
 
         const message = kind === 'compound-credit'
-            ? `Merge the credit row${duplicateArtistIds.length === 1 ? '' : 's'} into "${canonicalArtist.name}"? Tracks, subscriptions, dismissed-auto state, and concert events will be moved. Metadata (MBID, image, bio) will NOT be copied across — the credit row's MBID belongs to the credit string, not to ${canonicalArtist.name}.`
+            ? `Merge the credit row${duplicateArtistIds.length === 1 ? '' : 's'} into "${canonicalArtist.name}"? Tracks, subscriptions, dismissed-auto state, and concert events will be moved. Metadata (MBID, image, bio) will not be copied across because the credit row's MBID belongs to the credit string, not to ${canonicalArtist.name}.`
             : `Merge ${duplicateArtistIds.length} artist entr${duplicateArtistIds.length === 1 ? 'y' : 'ies'} into "${canonicalArtist.name}"? Track links, subscriptions, dismissed-auto state, concert events, and any missing metadata will be copied to the canonical artist.`;
 
         setConfirmDialog({
@@ -159,147 +159,159 @@ export const ArtistEntitiesTab: React.FC = () => {
     const compoundCount = candidates.filter(c => candidateKind(c) === 'compound-credit').length;
 
     return (
-        <div className="settings-section mb-8">
-            <div className="settings-section-header mb-4">
-                <h3 className="text-lg font-bold text-[var(--color-text-primary)]">Artist Entities</h3>
-                <p className="text-sm text-[var(--color-text-muted)] mt-1">
-                    Review and consolidate artist rows that look like duplicates or compound credit strings. Merges
-                    are reversible only by re-scanning the library, so read each candidate carefully before acting.
-                </p>
-            </div>
-
-            {/* How this works */}
-            <div className="rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] p-4 mb-4 text-sm text-[var(--color-text-secondary)] space-y-3">
-                <div className="flex items-start gap-2">
-                    <KindBadge kind="same-identity" />
-                    <div className="flex-1">
-                        <p className="font-medium text-[var(--color-text-primary)] mb-1">Same identity duplicates</p>
-                        <p className="text-xs leading-relaxed">
-                            Two or more artist rows whose names normalize to the same canonical key — typically diacritic
-                            or punctuation variants like <span className="font-mono">Tiësto</span> /{' '}
-                            <span className="font-mono">Tiesto</span> or <span className="font-mono">N&rsquo;to</span> /{' '}
-                            <span className="font-mono">NTO</span>. Pick the row with the right display name (usually the
-                            one with diacritics) and click Merge. Tracks, subscriptions, concert events, and any missing
-                            metadata fields (MBID, image, bio) are moved to the canonical row.
-                        </p>
-                    </div>
-                </div>
-                <div className="flex items-start gap-2">
-                    <KindBadge kind="compound-credit" />
-                    <div className="flex-1">
-                        <p className="font-medium text-[var(--color-text-primary)] mb-1">Compound credits</p>
-                        <p className="text-xs leading-relaxed">
-                            A credit string like <span className="font-mono">Tony Bennett &amp; Lady Gaga</span>,{' '}
-                            <span className="font-mono">The Chainsmokers + Kygo</span>, or{' '}
-                            <span className="font-mono">Sia &amp; At home with the kids</span> got stored as a single
-                            artist row (we surface both <span className="font-mono">&amp;</span> and{' '}
-                            <span className="font-mono">+</span> separators). The first half of the credit already exists
-                            as its own artist row in your library — that&rsquo;s the canonical individual to merge into.
-                            Tracks and attachments move across, but the credit row&rsquo;s MBID/image/etc. are <em>not</em>
-                            copied (they belong to the credit string, not the individual). Album collaborations like
-                            Cheek to Cheek will then show under primary releases on both collaborators&rsquo; pages, because
-                            ArtistDetail treats &ge;50% credited tracks as a co-primary album.
-                        </p>
-                    </div>
-                </div>
-                <div className="flex items-start gap-2 pt-1">
-                    <AlertCircle size={14} className="text-[var(--color-text-muted)] mt-0.5 shrink-0" />
-                    <p className="text-xs leading-relaxed text-[var(--color-text-muted)]">
-                        Genuine duos (Nik &amp; Jay, Chase &amp; Status, Demons &amp; Wizards) are not surfaced because their
-                        first half doesn&rsquo;t exist as a separate artist row. If you do see a candidate that&rsquo;s
-                        actually a real group, click <em>Dismiss</em> — the dismissal is signature-keyed by current track
-                        and album counts, so the candidate stays hidden until the underlying data changes.
-                    </p>
-                </div>
-            </div>
-
-            {/* Header row with refresh + counts */}
-            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between mb-3">
-                <div className="text-xs text-[var(--color-text-muted)]">
-                    {loading
-                        ? 'Checking artist identity keys...'
-                        : `${candidates.length} candidate${candidates.length === 1 ? '' : 's'} (${sameIdentityCount} same identity, ${compoundCount} compound)`}
+        <div className="settings-section artist-entities-settings">
+            <header className="artist-entities-settings__header">
+                <div>
+                    <p className="artist-entities-settings__eyebrow">Library Hygiene</p>
+                    <h3>Artist Entities</h3>
+                    <p>Review duplicate rows and compound credit strings before they shape artist pages.</p>
                 </div>
                 <button
-                    className="btn btn-ghost btn-sm flex items-center gap-1.5 self-start sm:self-auto"
+                    type="button"
+                    className="btn btn-ghost btn-sm"
                     onClick={fetchCandidates}
                     disabled={loading}
                 >
-                    <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+                    <RefreshCw size={14} className={loading ? 'animate-spin' : ''} aria-hidden="true" />
                     Refresh
                 </button>
-            </div>
+            </header>
 
-            {/* Candidate list */}
+            <section className="artist-entities-overview" aria-label="Artist entity review summary">
+                <div className="artist-entities-overview__item">
+                    <span>Candidates</span>
+                    <strong>{candidates.length}</strong>
+                </div>
+                <div className="artist-entities-overview__item">
+                    <span>Same identity</span>
+                    <strong>{sameIdentityCount}</strong>
+                </div>
+                <div className="artist-entities-overview__item">
+                    <span>Compound</span>
+                    <strong>{compoundCount}</strong>
+                </div>
+            </section>
+
+            <section className="artist-entities-guide">
+                <div className="artist-entities-guide__item">
+                    <KindBadge kind="same-identity" />
+                    <div>
+                        <h4>Same identity duplicates</h4>
+                        <p>
+                            Name variants normalize to the same key, for example <code>Tiësto</code> and <code>Tiesto</code>.
+                            Choose the best display name, then merge tracks, subscriptions, events, and missing metadata into it.
+                        </p>
+                    </div>
+                </div>
+                <div className="artist-entities-guide__item">
+                    <KindBadge kind="compound-credit" />
+                    <div>
+                        <h4>Compound credits</h4>
+                        <p>
+                            Credits such as <code>Tony Bennett &amp; Lady Gaga</code> or <code>The Chainsmokers + Kygo</code>
+                            can be folded into the canonical artist row. Tracks move across, but credit-string metadata stays behind.
+                        </p>
+                    </div>
+                </div>
+                <div className="artist-entities-guide__note">
+                    <AlertCircle size={15} aria-hidden="true" />
+                    <p>
+                        Genuine duos are intentionally skipped when their first half is not already a separate artist row.
+                        Dismiss real groups you do see; dismissals return only when track or album counts change.
+                    </p>
+                </div>
+            </section>
+
+            <section className="artist-entities-queue">
+                <div className="artist-entities-queue__header">
+                    <div>
+                        <h4>Review Queue</h4>
+                        <p>
+                            {loading
+                                ? 'Checking artist identity keys...'
+                                : `${candidates.length} candidate${candidates.length === 1 ? '' : 's'} ready for review`}
+                        </p>
+                    </div>
+                </div>
+
             {loading ? (
-                <div className="p-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-sm text-[var(--color-text-muted)]">
-                    Checking artist identity keys...
+                <div className="artist-entities-empty" role="status">
+                    <Loader2 size={17} className="animate-spin" aria-hidden="true" />
+                    <span>Checking artist identity keys...</span>
                 </div>
             ) : candidates.length === 0 ? (
-                <div className="p-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-sm text-[var(--color-text-muted)]">
-                    No artist candidates need review.
+                <div className="artist-entities-empty" role="status">
+                    <GitMerge size={17} aria-hidden="true" />
+                    <span>No artist candidates need review.</span>
                 </div>
             ) : (
-                <div className="flex flex-col gap-3">
+                <div className="artist-candidate-list">
                     {candidates.map(candidate => {
                         const canonicalArtistId = canonicalByKey[candidate.candidateKey] || candidate.artists[0]?.id || '';
                         const busy = busyKey === candidate.candidateKey;
                         const kind = candidateKind(candidate);
                         return (
-                            <div key={`${candidate.candidateKey}:${candidate.signature}`} className="p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)]">
-                                <div className="flex flex-col gap-3">
-                                    <div className="min-w-0">
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <KindBadge kind={kind} />
-                                            <span className="text-sm font-semibold text-[var(--color-text-primary)] break-words">{candidate.normalizedKey}</span>
-                                            <span className="text-xs text-[var(--color-text-muted)]">{candidate.artists.length} artists · {candidate.totalTracks} tracks</span>
-                                        </div>
-                                        <div className="mt-2 flex flex-col gap-2">
-                                            {candidate.artists.map(artist => (
-                                                <label key={artist.id} className={`flex items-start gap-3 rounded-lg border p-2 transition-colors ${canonicalArtistId === artist.id ? 'border-[var(--color-primary)] bg-[var(--color-primary)]/10' : 'border-[var(--glass-border)] bg-[var(--color-surface)]'}`}>
-                                                    <input
-                                                        type="radio"
-                                                        name={`canonical-${candidate.candidateKey}`}
-                                                        checked={canonicalArtistId === artist.id}
-                                                        onChange={() => setCanonicalByKey(prev => ({ ...prev, [candidate.candidateKey]: artist.id }))}
-                                                        className="mt-1 accent-[var(--color-primary)]"
-                                                    />
-                                                    <div className="min-w-0 flex-1">
-                                                        <div className="text-sm font-medium text-[var(--color-text-primary)] break-words">{artist.name}</div>
-                                                        <div className="mt-0.5 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-[var(--color-text-muted)]">
-                                                            <span>{artist.trackCount} tracks</span>
-                                                            <span>{artist.albumCount} albums</span>
-                                                            {artist.mbid && <span className="font-mono">MBID {artist.mbid.slice(0, 8)}</span>}
-                                                        </div>
-                                                    </div>
-                                                </label>
-                                            ))}
-                                        </div>
+                            <article key={`${candidate.candidateKey}:${candidate.signature}`} className="artist-candidate">
+                                <div className="artist-candidate__head">
+                                    <div className="artist-candidate__title">
+                                        <KindBadge kind={kind} />
+                                        <h5>{candidate.normalizedKey}</h5>
                                     </div>
-                                    <div className="flex flex-col gap-2">
+                                    <div className="artist-candidate__meta">
+                                        <span>{candidate.artists.length} artists</span>
+                                        <span>{candidate.totalTracks} tracks</span>
+                                    </div>
+                                </div>
+
+                                <div className="artist-candidate__body">
+                                    <div className="artist-choice-list">
+                                        {candidate.artists.map(artist => (
+                                            <label key={artist.id} className="artist-choice" data-selected={canonicalArtistId === artist.id ? 'true' : 'false'}>
+                                                <input
+                                                    type="radio"
+                                                    name={`canonical-${candidate.candidateKey}`}
+                                                    checked={canonicalArtistId === artist.id}
+                                                    onChange={() => setCanonicalByKey(prev => ({ ...prev, [candidate.candidateKey]: artist.id }))}
+                                                />
+                                                <span className="artist-choice__copy">
+                                                    <span className="artist-choice__name">{artist.name}</span>
+                                                    <span className="artist-choice__meta">
+                                                        <span>{artist.trackCount} tracks</span>
+                                                        <span>{artist.albumCount} albums</span>
+                                                        {artist.mbid && <code>MBID {artist.mbid.slice(0, 8)}</code>}
+                                                    </span>
+                                                </span>
+                                            </label>
+                                        ))}
+                                    </div>
+
+                                    <div className="artist-candidate__actions">
                                         <button
-                                            className="btn btn-primary btn-sm flex items-center justify-center gap-1.5"
+                                            type="button"
+                                            className="btn btn-primary btn-sm"
                                             onClick={() => handleMerge(candidate)}
                                             disabled={busy}
                                         >
-                                            {busy ? <Loader2 size={13} className="animate-spin" /> : <GitMerge size={13} />}
+                                            {busy ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <GitMerge size={13} aria-hidden="true" />}
                                             Merge into selected
                                         </button>
                                         <button
-                                            className="btn btn-ghost btn-sm flex items-center justify-center gap-1.5"
+                                            type="button"
+                                            className="btn btn-ghost btn-sm"
                                             onClick={() => handleDismiss(candidate)}
                                             disabled={busy}
                                         >
-                                            <EyeOff size={13} />
+                                            <EyeOff size={13} aria-hidden="true" />
                                             Dismiss
                                         </button>
                                     </div>
                                 </div>
-                            </div>
+                            </article>
                         );
                     })}
                 </div>
             )}
+            </section>
 
             {confirmDialog && (
                 <ConfirmModal

@@ -1,7 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useToast } from '../../hooks/useToast';
-import { Folder, Download, CheckCircle2, AlertCircle, Loader2 } from 'lucide-react';
+import { Activity, AlertCircle, BarChart3, BrainCircuit, CheckCircle2, Download, Folder, FolderPlus, Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import { PromptModal } from '../PromptModal';
 import { ConfirmModal } from '../ConfirmModal';
 
@@ -268,127 +268,225 @@ export const LibraryTab: React.FC = () => {
         });
     };
 
-    return (
-        <div className="settings-section mb-8">
+    const totalStats = Object.values(dirStats).reduce(
+        (acc, s) => ({
+            totalTracks: acc.totalTracks + s.totalTracks,
+            withMetadata: acc.withMetadata + s.withMetadata,
+            analyzed: acc.analyzed + s.analyzed
+        }),
+        { totalTracks: 0, withMetadata: 0, analyzed: 0 }
+    );
+    const analysisPct = totalStats.totalTracks > 0 ? Math.round((totalStats.analyzed / totalStats.totalTracks) * 100) : 0;
+    const hasModels = modelStatus.length > 0;
+    const allModelsCached = hasModels && modelStatus.every(m => m.cached);
 
-                    <div className="settings-section-header flex justify-between items-center mb-4">
-                        <h3 className="text-lg font-bold text-[var(--color-text-primary)]">Mapped Folders</h3>
-                        <button className="btn btn-sm" onClick={handleAddFolder}>+ Map Folder Path</button>
+    return (
+        <div className="settings-section library-settings">
+            <header className="library-settings__header">
+                <div>
+                    <p className="library-settings__eyebrow">Library</p>
+                    <h3>Library Sources</h3>
+                    <p>Map server folders, scan tracks, and prepare audio analysis models.</p>
+                </div>
+                <button type="button" className="btn btn-primary btn-sm" onClick={handleAddFolder}>
+                    <FolderPlus size={15} aria-hidden="true" />
+                    Map Folder
+                </button>
+            </header>
+
+            <section className="library-overview" aria-label="Library coverage">
+                <div className="library-overview__item">
+                    <span>Folders</span>
+                    <strong>{libraryFolders.length}</strong>
+                </div>
+                <div className="library-overview__item">
+                    <span>Tracks</span>
+                    <strong>{totalStats.totalTracks}</strong>
+                </div>
+                <div className="library-overview__item">
+                    <span>Metadata</span>
+                    <strong>{totalStats.withMetadata}</strong>
+                </div>
+                <div className="library-overview__item">
+                    <span>Analyzed</span>
+                    <strong>{analysisPct}%</strong>
+                </div>
+            </section>
+
+            <section className="library-panel library-panel--folders">
+                <div className="library-panel__header">
+                    <div className="library-panel__title">
+                        <Folder size={17} aria-hidden="true" />
+                        <h4>Mapped Folders</h4>
                     </div>
-                    <p className="text-sm text-[var(--color-text-muted)] mb-4">Folders mapped here will be automatically scanned.</p>
-                    <ul className="flex flex-col gap-3">
-                        {libraryFolders.length === 0 ? (
-                            <li className="p-4 rounded-xl border border-dashed border-[var(--glass-border)] bg-[var(--glass-bg)] text-center text-sm text-[var(--color-text-muted)] backdrop-blur-sm">No folders mapped yet.</li>
-                        ) : (
-                            libraryFolders.map((folderPath) => {
-                                const stats = dirStats[folderPath];
-                                return (
-                                    <li key={folderPath} className="p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] shadow-sm backdrop-blur-sm">
-                                        <div className="flex justify-between items-center mb-2">
-                                            <span className="text-sm truncate mr-4 text-[var(--color-text-primary)] font-medium flex items-center gap-2"><Folder size={16} className="shrink-0 text-[var(--color-text-muted)]" /> {folderPath}</span>
-                                            <div className="flex gap-2 shrink-0">
-                                                <button className="btn btn-primary btn-sm" onClick={() => handleRescanFolder(folderPath)}>Rescan</button>
-                                                <button className="btn btn-ghost btn-sm" onClick={() => handleRefreshMetadata(folderPath)} disabled={isScanning}>Refresh Metadata</button>
-                                                <button className="btn btn-danger-fill btn-sm" onClick={() => handleRemoveFolder(folderPath)}>Remove</button>
-                                            </div>
+                    <p>Folders here are scanned from the server filesystem.</p>
+                </div>
+
+                <ul className="library-folder-list">
+                    {libraryFolders.length === 0 ? (
+                        <li className="library-empty-state">
+                            <FolderPlus size={18} aria-hidden="true" />
+                            <span>No folders mapped yet.</span>
+                        </li>
+                    ) : (
+                        libraryFolders.map((folderPath) => {
+                            const stats = dirStats[folderPath];
+                            const analysisState = stats && stats.totalTracks > 0 && stats.analyzed === stats.totalTracks ? 'complete' : 'partial';
+                            return (
+                                <li key={folderPath} className="library-folder-row">
+                                    <div className="library-folder-row__main">
+                                        <div className="library-folder-row__path">
+                                            <Folder size={16} aria-hidden="true" />
+                                            <span title={folderPath}>{folderPath}</span>
                                         </div>
-                                        {stats && stats.totalTracks > 0 && (
-                                            <div className="flex gap-4 text-xs text-[var(--color-text-secondary)] pl-1">
-                                                <span>{stats.totalTracks} tracks</span><span>·</span><span>{stats.withMetadata} with metadata</span><span>·</span>
-                                                <span className={stats.analyzed === stats.totalTracks ? 'text-green-600 dark:text-green-500' : 'text-amber-600 dark:text-amber-500'}>{stats.analyzed} analyzed</span>
-                                            </div>
-                                        )}
-                                        {stats && stats.totalTracks === 0 && (<div className="text-xs text-[var(--color-text-muted)] pl-1">No tracks found. Click Rescan to index this folder.</div>)}
-                                    </li>
-                                );
-                            })
-                        )}
-                    </ul>
-                    <div className="mt-4 flex items-center justify-between p-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)]">
-                        <div>
-                            <p className="text-sm font-medium text-[var(--color-text-primary)]">Automatic Folder Walk</p>
-                            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">Re-walk all folders every 30 minutes to detect renamed or deleted files.</p>
-                        </div>
-                        <button onClick={() => setSettings({ autoFolderWalk: !autoFolderWalk })} className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ml-4 ${autoFolderWalk ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}>
-                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${autoFolderWalk ? 'translate-x-6' : 'translate-x-1'}`} />
+                                        <div className="library-folder-row__actions">
+                                            <button type="button" className="btn btn-primary btn-sm" onClick={() => handleRescanFolder(folderPath)}>
+                                                <RefreshCw size={14} aria-hidden="true" />
+                                                Rescan
+                                            </button>
+                                            <button type="button" className="btn btn-ghost btn-sm" onClick={() => handleRefreshMetadata(folderPath)} disabled={isScanning}>
+                                                Refresh Metadata
+                                            </button>
+                                            <button type="button" className="btn btn-danger-fill btn-sm" onClick={() => handleRemoveFolder(folderPath)}>
+                                                <Trash2 size={14} aria-hidden="true" />
+                                                Remove
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    {stats && stats.totalTracks > 0 && (
+                                        <div className="library-folder-row__stats">
+                                            <span>{stats.totalTracks} tracks</span>
+                                            <span>{stats.withMetadata} with metadata</span>
+                                            <span data-state={analysisState}>{stats.analyzed} analyzed</span>
+                                        </div>
+                                    )}
+                                    {stats && stats.totalTracks === 0 && (
+                                        <div className="library-folder-row__empty">No tracks found. Rescan to index this folder.</div>
+                                    )}
+                                </li>
+                            );
+                        })
+                    )}
+                </ul>
+
+                <div className="library-toggle-row">
+                    <div>
+                        <h5>Automatic Folder Walk</h5>
+                        <p>Re-walk all folders every 30 minutes to detect renamed or deleted files.</p>
+                    </div>
+                    <button
+                        type="button"
+                        role="switch"
+                        aria-checked={autoFolderWalk}
+                        onClick={() => setSettings({ autoFolderWalk: !autoFolderWalk })}
+                        className="account-switch"
+                        data-state={autoFolderWalk ? 'on' : 'off'}
+                    >
+                        <span className="account-switch__thumb" />
+                    </button>
+                </div>
+            </section>
+
+            <section className="library-panel library-panel--analysis">
+                <div className="library-panel__header">
+                    <div className="library-panel__title">
+                        <Activity size={17} aria-hidden="true" />
+                        <h4>Audio Analysis</h4>
+                    </div>
+                    <div className="library-panel__actions">
+                        <button type="button" className="btn btn-primary btn-sm" onClick={handleAnalyze} disabled={isScanning}>
+                            {isScanning ? 'Analyzing...' : 'Analyze Missing'}
+                        </button>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={handleForceAnalyze} disabled={isScanning}>
+                            Re-analyze All
                         </button>
                     </div>
-                    <div className="mt-6 pt-4 border-t border-[var(--glass-border)]">
-                        <div className="flex justify-between items-center mb-3">
-                            <h4 className="text-lg font-semibold text-[var(--color-text-primary)]">Audio Analysis</h4>
-                            <div className="flex gap-2">
-                                <button className="btn btn-primary btn-sm" onClick={handleAnalyze} disabled={isScanning}>{isScanning ? 'Analyzing...' : 'Analyze Missing'}</button>
-                                <button className="btn btn-ghost btn-sm" onClick={handleForceAnalyze} disabled={isScanning}>Re-analyze All</button>
-                            </div>
+                </div>
+                <p className="library-panel__description">Runs native Essentia feature extraction on tracks that have not been analyzed yet. Requires ML models below.</p>
+                {dirStatsLoading ? (
+                    <div className="library-progress" aria-live="polite">
+                        <div className="library-progress__label">
+                            <span>Library Coverage</span>
+                            <span className="library-progress__loading">Loading...</span>
                         </div>
-                        <p className="text-xs text-[var(--color-text-muted)]">Runs native Essentia audio feature extraction on tracks that haven't been analyzed yet. Requires ML models below.</p>
-                        {(() => {
-                            const totalStats = Object.values(dirStats).reduce((acc, s) => ({ totalTracks: acc.totalTracks + s.totalTracks, withMetadata: acc.withMetadata + s.withMetadata, analyzed: acc.analyzed + s.analyzed }), { totalTracks: 0, withMetadata: 0, analyzed: 0 });
-                            if (dirStatsLoading) { return (<div className="mt-2"><div className="flex justify-between text-xs text-[var(--color-text-secondary)] mb-1"><span>Library Coverage</span><span className="animate-pulse">Loading...</span></div><div className="w-full h-2 rounded-full bg-[var(--glass-border)] overflow-hidden" /></div>); }
-                            if (totalStats.totalTracks === 0) return null;
-                            const pct = Math.round((totalStats.analyzed / totalStats.totalTracks) * 100);
-                            return (<div className="mt-2"><div className="flex justify-between text-xs text-[var(--color-text-secondary)] mb-1"><span>Library Coverage</span><span>{totalStats.analyzed} / {totalStats.totalTracks} tracks ({pct}%)</span></div><div className="w-full h-2 rounded-full bg-[var(--glass-border)] overflow-hidden"><div className="h-full rounded-full transition-[width,background-color] duration-500" style={{ width: `${pct}%`, backgroundColor: pct === 100 ? '#22c55e' : pct > 50 ? '#f59e0b' : '#ef4444' }} /></div></div>);
-                        })()}
-	                    </div>
-
-	                    {/* ML Models */}
-	                    <div className="mt-6 pt-4 border-t border-[var(--glass-border)]">
-                        <div className="flex justify-between items-center mb-3">
-                            <div>
-                                <h4 className="text-lg font-semibold text-[var(--color-text-primary)]">ML Models</h4>
-                                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">Discogs-EffNet (1280D) and MusiCNN (.pb) files used by the Python extractor.</p>
-                            </div>
-                            <button
-                                className="btn btn-primary btn-sm flex items-center gap-1.5"
-                                onClick={handleDownloadModels}
-                                disabled={isModelDownloading}
-                            >
-                                {isModelDownloading
-                                    ? <><Loader2 size={13} className="animate-spin" /> Downloading...</>
-                                    : <><Download size={13} /> {modelStatus.every(m => m.cached) ? 'Re-download' : 'Download Models'}</>
-                                }
-                            </button>
-                        </div>
-                        <ul className="flex flex-col gap-2">
-                            {modelStatus.length === 0 ? (
-                                <li className="text-xs text-[var(--color-text-muted)] italic">Checking model status...</li>
-                            ) : modelStatus.map(m => {
-                                const prog = modelDownloadProgress[m.filename];
-                                const isActive = prog && prog.status === 'downloading';
-                                const pct = isActive && prog.total > 0 ? Math.round((prog.bytes / prog.total) * 100) : null;
-                                return (
-                                    <li key={m.filename} className="flex flex-col gap-1 p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)]">
-                                        <div className="flex items-center justify-between">
-                                            <div className="flex items-center gap-2">
-                                                {m.cached
-                                                    ? <CheckCircle2 size={14} className="text-green-500 shrink-0" />
-                                                    : <AlertCircle size={14} className="text-amber-500 shrink-0" />
-                                                }
-                                                <span className="text-sm font-medium text-[var(--color-text-primary)]">{m.name}</span>
-                                                <span className="text-xs text-[var(--color-text-muted)] font-mono">{m.filename}</span>
-                                            </div>
-                                            <span className="text-xs text-[var(--color-text-secondary)] shrink-0 ml-2">
-                                                {m.cached ? formatBytes(m.size) : 'Not downloaded'}
-                                            </span>
-                                        </div>
-                                        {isActive && (
-                                            <div className="mt-1">
-                                                <div className="flex justify-between text-xs text-[var(--color-text-muted)] mb-0.5">
-                                                    <span>Downloading...</span>
-                                                    <span>{pct !== null ? `${pct}%` : `${formatBytes(prog.bytes)}`}</span>
-                                                </div>
-                                                <div className="w-full h-1.5 rounded-full bg-[var(--glass-border)] overflow-hidden">
-                                                    <div className="h-full rounded-full bg-[var(--color-primary)] transition-[width] duration-300" style={{ width: pct !== null ? `${pct}%` : '0%' }} />
-                                                </div>
-                                            </div>
-                                        )}
-                                    </li>
-                                );
-                            })}
-                        </ul>
+                        <div className="library-progress__track" />
                     </div>
+                ) : totalStats.totalTracks > 0 ? (
+                    <div className="library-progress">
+                        <div className="library-progress__label">
+                            <span>Library Coverage</span>
+                            <span>{totalStats.analyzed} / {totalStats.totalTracks} tracks ({analysisPct}%)</span>
+                        </div>
+                        <div className="library-progress__track">
+                            <div className="library-progress__fill" data-state={analysisPct === 100 ? 'complete' : analysisPct > 50 ? 'partial' : 'low'} style={{ width: `${analysisPct}%` }} />
+                        </div>
+                    </div>
+                ) : null}
+            </section>
 
-            
+            <section className="library-panel library-panel--models">
+                <div className="library-panel__header">
+                    <div className="library-panel__title">
+                        <BrainCircuit size={17} aria-hidden="true" />
+                        <h4>ML Models</h4>
+                    </div>
+                    <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={handleDownloadModels}
+                        disabled={isModelDownloading}
+                    >
+                        {isModelDownloading
+                            ? <><Loader2 size={14} className="animate-spin" aria-hidden="true" /> Downloading...</>
+                            : <><Download size={14} aria-hidden="true" /> {allModelsCached ? 'Re-download' : 'Download Models'}</>
+                        }
+                    </button>
+                </div>
+                <p className="library-panel__description">Discogs-EffNet and MusiCNN files used by the Python extractor.</p>
+
+                <ul className="library-model-list">
+                    {modelStatus.length === 0 ? (
+                        <li className="library-empty-state library-empty-state--inline">
+                            <BarChart3 size={16} aria-hidden="true" />
+                            <span>Checking model status...</span>
+                        </li>
+                    ) : modelStatus.map(m => {
+                        const prog = modelDownloadProgress[m.filename];
+                        const isActive = prog && prog.status === 'downloading';
+                        const pct = isActive && prog.total > 0 ? Math.round((prog.bytes / prog.total) * 100) : null;
+                        return (
+                            <li key={m.filename} className="library-model-row">
+                                <div className="library-model-row__main">
+                                    <div className="library-model-row__name">
+                                        {m.cached
+                                            ? <CheckCircle2 size={15} className="library-model-row__icon library-model-row__icon--ready" aria-hidden="true" />
+                                            : <AlertCircle size={15} className="library-model-row__icon library-model-row__icon--missing" aria-hidden="true" />
+                                        }
+                                        <span>{m.name}</span>
+                                        <code>{m.filename}</code>
+                                    </div>
+                                    <span className="library-model-row__size">
+                                        {m.cached ? formatBytes(m.size) : 'Not downloaded'}
+                                    </span>
+                                </div>
+                                {isActive && (
+                                    <div className="library-model-row__progress">
+                                        <div className="library-progress__label">
+                                            <span>Downloading...</span>
+                                            <span>{pct !== null ? `${pct}%` : `${formatBytes(prog.bytes)}`}</span>
+                                        </div>
+                                        <div className="library-progress__track library-progress__track--compact">
+                                            <div className="library-progress__fill" data-state="partial" style={{ width: pct !== null ? `${pct}%` : '0%' }} />
+                                        </div>
+                                    </div>
+                                )}
+                            </li>
+                        );
+                    })}
+                </ul>
+            </section>
+
             {promptDialog && (
                 <PromptModal
                     title={promptDialog.title}
