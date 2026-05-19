@@ -228,6 +228,7 @@ const App: React.FC = () => {
   React.useEffect(() => {
     installAuthExpirationFetchInterceptor();
     usePlayerStore.getState().setTheme(usePlayerStore.getState().theme);
+    usePlayerStore.getState().setReducedMotion(usePlayerStore.getState().reducedMotion);
 
     const performInitialChecks = async () => {
       const ok = await checkHealth();
