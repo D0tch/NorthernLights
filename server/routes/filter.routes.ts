@@ -229,7 +229,7 @@ router.post('/artists', async (req, res) => {
     if (!sql) return res.json({ ids: [] });
 
     const db = await initDB();
-    const query = `SELECT id FROM artists WHERE 1=1${sql} LIMIT ${MAX_RESULT_IDS}`;
+    const query = `SELECT id FROM artists WHERE merged_into IS NULL${sql} LIMIT ${MAX_RESULT_IDS}`;
     const dbResult = await db.query(query, params);
     res.json({ ids: dbResult.rows.map((r: any) => r.id) });
   } catch (error) {

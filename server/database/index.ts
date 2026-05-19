@@ -458,6 +458,16 @@ export async function initDB(): Promise<Pool> {
         CREATE INDEX IF NOT EXISTS artists_normalized_key_idx ON artists(normalized_key);
         CREATE INDEX IF NOT EXISTS artists_mbid_idx ON artists(mbid);
 
+        -- Persistent merge redirect. Set by mergeArtistRows on the duplicate
+        -- row; getOrCreateArtist follows it so refreshes can't recreate the
+        -- merged-away credit string as a fresh row.
+        DO $$
+        BEGIN
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS merged_into UUID REFERENCES artists(id) ON DELETE SET NULL;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+        CREATE INDEX IF NOT EXISTS artists_merged_into_idx ON artists(merged_into);
+
         -- Extended artist metadata cache (MusicBrainz fields + Last.fm stats)
         DO $$
         BEGIN
@@ -730,7 +740,7 @@ export async function getDatabaseStats() {
       tables: "SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'",
       indexes: "SELECT count(*) FROM pg_indexes WHERE schemaname = 'public'",
       tracks: "SELECT count(*) FROM tracks",
-      artists: "SELECT count(*) FROM artists",
+      artists: "SELECT count(*) FROM artists WHERE merged_into IS NULL",
       albums: "SELECT count(*) FROM albums",
       genres: "SELECT count(*) FROM genres",
       playlists: "SELECT count(*) FROM playlists"
@@ -1204,7 +1214,8 @@ export async function purgeOrphanedEntities(): Promise<{ albums: number; artists
         ) AS credited_artist(name)
       )
       DELETE FROM artists a
-      WHERE NOT EXISTS (
+      WHERE a.merged_into IS NULL
+      AND NOT EXISTS (
         SELECT 1
         FROM tracks t
         WHERE t.artist_id = a.id
@@ -1213,6 +1224,11 @@ export async function purgeOrphanedEntities(): Promise<{ albums: number; artists
         SELECT 1
         FROM credited_artist_names credited
         WHERE credited.name = lower(btrim(a.name))
+      )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM artists redirect
+        WHERE redirect.merged_into = a.id
       )
       RETURNING id
     `),
@@ -1401,13 +1417,24 @@ function clearEntityCaches() {
 // Sanitize strings to remove null bytes which crash Postgres
 const sanitizeString = (str: any) => typeof str === 'string' ? str.replace(/\x00/g, '') : str;
 
+async function resolveMergedArtist(db: Pool, id: string): Promise<string> {
+  let currentId = id;
+  for (let i = 0; i < 8; i++) {
+    const row = await db.query('SELECT merged_into FROM artists WHERE id = $1', [currentId]);
+    const next = row.rows[0]?.merged_into;
+    if (!next || next === currentId) return currentId;
+    currentId = next;
+  }
+  return currentId;
+}
+
 export async function getOrCreateArtist(name?: string | null, mbid?: string | null): Promise<string> {
   const safeName = sanitizeString(name)?.trim() || UNKNOWN_ARTIST;
   const lowerName = safeName.toLowerCase();
   const normalizedKey = normalizeArtistIdentityKey(safeName);
   const safeMbid = sanitizeString(mbid)?.trim() || null;
   const cacheKey = safeMbid ? `mbid:${safeMbid}` : `key:${normalizedKey || lowerName}`;
-  
+
   const cached = artistCache.get(cacheKey) || artistCache.get(lowerName);
   if (cached) return cached;
 
@@ -1416,7 +1443,7 @@ export async function getOrCreateArtist(name?: string | null, mbid?: string | nu
   if (safeMbid) {
     const byMbid = await db.query('SELECT id FROM artists WHERE mbid = $1 LIMIT 1', [safeMbid]);
     if (byMbid.rows.length > 0) {
-      const id = byMbid.rows[0].id;
+      const id = await resolveMergedArtist(db, byMbid.rows[0].id);
       await db.query(
         'UPDATE artists SET normalized_key = COALESCE(normalized_key, $2) WHERE id = $1',
         [id, normalizedKey || null]
@@ -1426,7 +1453,7 @@ export async function getOrCreateArtist(name?: string | null, mbid?: string | nu
       return id;
     }
   }
-  
+
   const existing = await db.query(
     `SELECT id
      FROM artists
@@ -1443,7 +1470,7 @@ export async function getOrCreateArtist(name?: string | null, mbid?: string | nu
     [lowerName, normalizedKey || null, safeMbid]
   );
   if (existing.rows.length > 0) {
-    const id = existing.rows[0].id;
+    const id = await resolveMergedArtist(db, existing.rows[0].id);
     await db.query(
       'UPDATE artists SET normalized_key = COALESCE(normalized_key, $2), mbid = COALESCE(mbid, $3) WHERE id = $1',
       [id, normalizedKey || null, safeMbid]
@@ -1462,7 +1489,7 @@ export async function getOrCreateArtist(name?: string | null, mbid?: string | nu
      RETURNING id`,
     [safeName, normalizedKey || null, safeMbid]
   );
-  const id = (res.rows[0] as any).id as string;
+  const id = await resolveMergedArtist(db, (res.rows[0] as any).id as string);
   artistCache.set(cacheKey, id);
   artistCache.set(lowerName, id);
   return id;
@@ -1521,7 +1548,8 @@ export async function getOrCreateGenre(name?: string | null): Promise<string> {
 
 export async function getArtistById(id: string) {
   const db = await initDB();
-  const res = await db.query('SELECT * FROM artists WHERE id = $1', [id]);
+  const canonicalId = await resolveMergedArtist(db, id);
+  const res = await db.query('SELECT * FROM artists WHERE id = $1', [canonicalId]);
   return res.rows[0] || null;
 }
 
@@ -1539,7 +1567,7 @@ export async function getGenreById(id: string) {
 
 export async function getAllArtists() {
   const db = await initDB();
-  const res = await db.query('SELECT * FROM artists ORDER BY name ASC');
+  const res = await db.query('SELECT * FROM artists WHERE merged_into IS NULL ORDER BY name ASC');
   return res.rows;
 }
 
@@ -1732,10 +1760,27 @@ async function mergeArtistRows(db: Pool, canonical: ArtistCanonicalRow, duplicat
         }
       }
       if (!cleanSplit) {
-        await client.query(
-          'UPDATE albums SET artist_name = $1 WHERE LOWER(artist_name) = LOWER($2)',
-          [canonical.name, duplicate.name]
+        // Can't blindly UPDATE artist_name — albums has UNIQUE(title,
+        // artist_name), so if an album with the same title already exists
+        // under the canonical name we'd hit
+        // albums_title_artist_name_key. For each conflicting album, fold
+        // its tracks into the survivor and drop the duplicate row.
+        const dupAlbums = await client.query(
+          'SELECT id, title FROM albums WHERE LOWER(artist_name) = LOWER($1)',
+          [duplicate.name]
         );
+        for (const album of dupAlbums.rows) {
+          const survivor = await client.query(
+            'SELECT id FROM albums WHERE LOWER(title) = LOWER($1) AND LOWER(artist_name) = LOWER($2) AND id <> $3 LIMIT 1',
+            [album.title, canonical.name, album.id]
+          );
+          if (survivor.rows.length > 0) {
+            await client.query('UPDATE tracks SET album_id = $1 WHERE album_id = $2', [survivor.rows[0].id, album.id]);
+            await client.query('DELETE FROM albums WHERE id = $1', [album.id]);
+          } else {
+            await client.query('UPDATE albums SET artist_name = $1 WHERE id = $2', [canonical.name, album.id]);
+          }
+        }
       }
     }
 
@@ -1776,7 +1821,12 @@ async function mergeArtistRows(db: Pool, canonical: ArtistCanonicalRow, duplicat
     `, [canonical.id, duplicate.id]);
     await client.query('DELETE FROM artist_concerts_cache WHERE artist_id = $1', [duplicate.id]);
 
-    await client.query('DELETE FROM artists WHERE id = $1', [duplicate.id]);
+    // Preserve the duplicate row as a merge redirect so refresh-metadata can't
+    // recreate the same credit string as a fresh row (which would re-surface
+    // it as a duplicate candidate). Re-target any existing redirects that
+    // pointed at this duplicate so chains stay flat.
+    await client.query('UPDATE artists SET merged_into = $1 WHERE merged_into = $2', [canonical.id, duplicate.id]);
+    await client.query('UPDATE artists SET merged_into = $1 WHERE id = $2', [canonical.id, duplicate.id]);
     await client.query('COMMIT');
   } catch (error) {
     await client.query('ROLLBACK');
@@ -2032,6 +2082,7 @@ export async function getArtistDuplicateCandidates(): Promise<ArtistDuplicateCan
     LEFT JOIN tracks t ON t.artist_id = a.id
     WHERE a.normalized_key IS NOT NULL
       AND length(a.normalized_key) >= 3
+      AND a.merged_into IS NULL
     GROUP BY a.id, a.name, a.mbid, a.normalized_key, a.image_url
     ORDER BY a.normalized_key ASC, COUNT(t.id) DESC, a.name ASC
   `);
