@@ -4,8 +4,10 @@ import { X } from 'lucide-react';
 
 interface ConfirmModalProps {
   title: string;
-  message: string;
+  message?: string;
+  body?: React.ReactNode;
   confirmLabel?: string;
+  confirmTone?: 'danger' | 'primary';
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -13,7 +15,9 @@ interface ConfirmModalProps {
 export const ConfirmModal: React.FC<ConfirmModalProps> = ({
   title,
   message,
+  body,
   confirmLabel = 'Confirm',
+  confirmTone = 'danger',
   onConfirm,
   onCancel,
 }) => {
@@ -74,7 +78,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
         aria-modal="true"
         aria-labelledby={titleId}
         aria-describedby={descriptionId}
-        className="relative z-10 w-full max-w-md bg-[var(--color-background)] border border-[var(--glass-border)] rounded-2xl p-6 shadow-2xl space-y-4 animate-slide-up"
+        className={`relative z-10 w-full ${body ? 'max-w-2xl' : 'max-w-md'} bg-[var(--color-background)] border border-[var(--glass-border)] rounded-2xl p-6 shadow-2xl space-y-4 animate-slide-up`}
         onClick={e => e.stopPropagation()}
       >
         <button
@@ -88,14 +92,26 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
 
         <div>
           <h2 id={titleId} className="text-lg font-bold text-[var(--color-text-primary)]">{title}</h2>
-          <p id={descriptionId} className="text-sm text-[var(--color-text-secondary)] mt-2">{message}</p>
+          {message && (
+            <p id={descriptionId} className="text-sm text-[var(--color-text-secondary)] mt-2">{message}</p>
+          )}
         </div>
+
+        {body && (
+          <div id={message ? undefined : descriptionId} className="text-sm text-[var(--color-text-secondary)]">
+            {body}
+          </div>
+        )}
 
         <div className="flex gap-3 pt-2">
           <button
             type="button"
             onClick={onConfirm}
-            className="flex-1 py-2.5 rounded-xl bg-[var(--color-error)]/80 hover:bg-[var(--color-error)] text-[var(--color-bg-primary)] font-semibold transition-ui active:scale-[0.98]"
+            className={`flex-1 py-2.5 rounded-xl font-semibold transition-ui active:scale-[0.98] ${
+              confirmTone === 'primary'
+                ? 'bg-[var(--color-accent)] hover:bg-[var(--color-accent)]/90 text-[var(--color-bg-primary)]'
+                : 'bg-[var(--color-error)]/80 hover:bg-[var(--color-error)] text-[var(--color-bg-primary)]'
+            }`}
           >
             {confirmLabel}
           </button>
