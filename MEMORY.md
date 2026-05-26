@@ -1,5 +1,19 @@
 # Project Memory / Changelog
 
+## [2026-05-26] V1.0.0-rc.4: OpenSubsonic API, View Transitions, Hero Skeletons, Search Polish
+
+- **OpenSubsonic `/rest` Surface**: Full Subsonic-compatible API for third-party clients. API-key-only authentication (rejects u/p and token/salt with proper error codes). Covers library browsing, search (2/3), playlists CRUD, stream/download/HLS media, cover art, star/rate/scrobble, and empty compatibility stubs. Keys are SHA-256–hashed with prefix-based lookup and last-used-at tracking.
+- **Subsonic Key Management**: CRUD endpoints under `/api/auth/subsonic-api-keys` with rate limiting. Frontend Account settings section for creating, copying (one-time reveal), and revoking keys.
+- **Single-Playlist Fetch**: `GET /api/playlists/:id` avoids N+1 by fetching one playlist with tracks in two queries. Dashboard detail view uses `fetchPlaylistFromServer(id)` as the primary path, falls back to bulk refresh on 404.
+- **View-Transition Morphing**: `withViewTransition` wrapper using `document.startViewTransition` + `flushSync` for SPA page morphing. Per-entity `view-transition-name` on album covers, artist avatars, and playlist mosaic grids so the browser animates the element between list and detail views.
+- **Hero State Skeletons**: Typed `AlbumHeroState`, `ArtistHeroState`, `PlaylistHeroState` passed via React Router `state` so detail pages render title, art, and metadata instantly before store data arrives. Skeletons use hero data when available and fall back to pulse placeholders.
+- **Route Prefetch**: Centralised `routePrefetch.ts` exports lazy components and deduplicated prefetch functions triggered on `pointerenter`, `pointerdown`, and `focus` for album/artist/playlist cards, Hub tiles, and search result rows.
+- **GlobalSearch Redesign**: Inline Tailwind replaced with named `global-search-*` CSS classes. Desktop pill expands with `scaleX` animation; mobile opens a full-screen overlay with separate header, field, and results zones. Close animates out with a 180ms reverse before unmounting. Search input uses `type="search"` and `autoComplete="off"`.
+- **Mobile Now Playing Sheet**: Correct exit animation by deferring unmount 340ms past the CSS `slide-down` duration. Uses `data-state="open"|"closing"` on the shell element for enter/exit keyframes. Removed the `animate-slide-up` class in favour of state-driven animations.
+- **Context Menu Cleanup**: Removed unused `showMobileHandle` prop and the drag-handle strip from mobile bottom sheets.
+- **Account API Key Styles**: New CSS for key reveal banner, revoked provider opacity, and create button alignment in settings.
+- **Trigram Indexes**: GIN `gin_trgm_ops` on `tracks(title, artist, album)` for fast ILIKE Subsonic search.
+
 ## [2026-05-19] V1.0.0-rc.3: Library Filters, Artist Merge Redirects, Settings Redesign, Accessibility
 
 - **Filter Bar Spacing**: Wrapped `FilterBar` in a `.filter-zone` container with consistent bottom margin (24px desktop, 18px mobile, 28px touch-coarse) to fix layout compression.

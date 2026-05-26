@@ -1,5 +1,30 @@
 # Changelog
 
+## [v1.0.0-rc.4] - 2026-05-26
+
+### API
+- **OpenSubsonic Compatibility**: Full API-key-only `/rest` surface for Subsonic clients — browsing, search, playlists, stream/download/HLS, cover art, stars, ratings, scrobbling, and compatibility stubs. Legacy u/p and token/salt auth rejected with OpenSubsonic error codes 41/42. Keys are SHA-256–hashed; the raw key is shown once at creation.
+- **Subsonic Key Management**: `GET/POST/DELETE /api/auth/subsonic-api-keys` for listing, creating, and revoking Aurora-managed Subsonic API keys. Includes per-key rate limiting and last-used-at tracking.
+- **Single-Playlist Endpoint**: `GET /api/playlists/:id` returns one playlist with tracks, eliminating the N+1 fetch pattern when opening a single playlist detail view.
+- **Track Rating**: `setTrackRatingForUser` for Subsonic 1–5 star ratings stored in `user_playback_stats`.
+- **Trigram Search Indexes**: GIN `gin_trgm_ops` indexes on `tracks(title, artist, album)` for fast Subsonic search2/search3 ILIKE queries.
+
+### UI
+- **View-Transition Morphing**: All detail pages (album, artist, playlist) now use `document.startViewTransition` + per-entity `view-transition-name` so cover art and avatars morph smoothly between list and detail views. Falls back to instant navigation on browsers without the API or when the user prefers reduced motion.
+- **Hero State Skeletons**: Album, artist, and playlist detail routes receive hero placeholder data via router state, allowing them to render title, art, and metadata instantly before the store hydrates.
+- **Route Prefetch**: Hover, focus, and pointer-down on album cards, artist cards, playlist cards, Hub tiles, and search results warm up the lazy-loaded detail chunk so navigation is near-instant.
+- **GlobalSearch Overhaul**: Replaced inline Tailwind with named CSS classes. Added pill expansion animation, mobile full-screen overlay with 180ms slide-out close, result row hover translate, and `prefers-reduced-motion` guards.
+- **Mobile Now Playing Sheet**: Deferred unmount via `data-state` (`open`/`closing`) with dedicated enter/exit keyframes so the slide-down animation completes before the DOM is removed.
+- **Context Menu Cleanup**: Removed unused `showMobileHandle` prop and the drag-handle strip from mobile sheets.
+- **Hub Navigation**: All Hub card, tile, and unique-collection clicks now pass hero state through `withViewTransition` for morphing cover art. Jump tiles also prefetch their target on hover/focus.
+- **Subsonic API Key UI**: New "OpenSubsonic API Keys" section in Account settings to create, copy, and revoke keys with prefix display, creation date, last-used date, and revoked state.
+
+### Performance
+- **Playlist Single-Fetch**: Detail views use `fetchPlaylistFromServer(id)` to load one playlist instead of refreshing all playlists. Falls back to bulk refresh only on 404.
+- **View-Transition `flushSync`**: Navigation inside `startViewTransition` callbacks uses `flushSync` to commit the DOM synchronously so the browser captures the post-navigation state for the morph.
+
+## [Unreleased]
+
 ## [v1.0.0-rc.3] - 2026-05-19
 
 ### Library
