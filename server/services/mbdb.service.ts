@@ -7,7 +7,8 @@ const copyFrom = require('pg-copy-streams').from;
 import { initDB, disableLeakDetection, enableLeakDetection } from '../database';
 import { mbdbStatus, broadcastMbdbStatus, setMbdbCancelRequested, getMbdbCancelRequested } from '../state';
 
-const MBDB_WORK_DIR = process.env.MBDB_WORK_DIR || path.join(process.cwd(), 'mbdb-data');
+const MBDB_WORK_DIR = path.resolve(process.env.MBDB_WORK_DIR || path.join(process.cwd(), 'mbdb-data'));
+const MBDB_LATEST_TAG_RE = /^\d{8}-\d{6}$/;
 
 function cleanupStaleWorkDir() {
   if (fs.existsSync(MBDB_WORK_DIR)) {
@@ -146,30 +147,46 @@ export class MBDBService {
     const phaseStartTime = Date.now();
     const latestResponse = await fetch('https://data.metabrainz.org/pub/musicbrainz/data/fullexport/LATEST');
     const latestTag = (await latestResponse.text()).trim();
-    if (!latestTag || latestTag.length > 50) throw new Error('Could not fetch MusicBrainz LATEST valid tag');
+    if (!MBDB_LATEST_TAG_RE.test(latestTag)) throw new Error('Could not fetch MusicBrainz LATEST valid tag');
 
     this.updateStatus({ 
       message: `Downloading MusicBrainz dump (${latestTag})...`
     });
 
     return new Promise((resolve, reject) => {
-      const url = `https://data.metabrainz.org/pub/musicbrainz/data/fullexport/${latestTag}/mbdump.tar.bz2`;
+      const url = `https://data.metabrainz.org/pub/musicbrainz/data/fullexport/${encodeURIComponent(latestTag)}/mbdump.tar.bz2`;
       // Use --show-error but not --progress-bar to keep stderr clean for our own status updates
-      const curlCmd = `curl -sL --show-error --retry 5 --retry-delay 10 --retry-all-errors "${url}"`;
+      const curlArgs = ['-sL', '--show-error', '--retry', '5', '--retry-delay', '10', '--retry-all-errors', url];
       // mbdump.tar.bz2 is ~4GB. tar must scan the whole thing. We extract only what we need.
-      const tarCmd = `tar -xjf - -C "${workDir}" mbdump/genre mbdump/genre_alias mbdump/l_genre_genre`;
-      const cmd = `${curlCmd} | ${tarCmd}`;
+      const tarArgs = ['-xjf', '-', '-C', workDir, 'mbdump/genre', 'mbdump/genre_alias', 'mbdump/l_genre_genre'];
       
-      console.log(`[MBDB] Starting download stream: ${cmd}`);
-      const child = spawn('bash', ['-c', cmd], { stdio: ['ignore', 'ignore', 'pipe'] });
+      console.log(`[MBDB] Starting download stream: curl ${curlArgs.join(' ')} | tar ${tarArgs.join(' ')}`);
+      const curl = spawn('curl', curlArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+      const tar = spawn('tar', tarArgs, { stdio: ['pipe', 'ignore', 'pipe'] });
+      curl.stdout.pipe(tar.stdin);
 
       const mbdumpDir = path.join(workDir, 'mbdump');
+      let curlCode: number | null = null;
+      let settled = false;
+      let errorOutput = '';
+
+      const appendError = (data: Buffer) => {
+        errorOutput += data.toString();
+        if (errorOutput.length > 8000) errorOutput = errorOutput.slice(-8000);
+      };
+
+      const failOnce = (error: Error) => {
+        if (settled) return;
+        settled = true;
+        clearInterval(watchdog);
+        reject(error);
+      };
 
       const watchdog = setInterval(() => {
         if (getMbdbCancelRequested()) {
-          clearInterval(watchdog);
-          child.kill();
-          reject(new Error('Import cancelled'));
+          curl.kill();
+          tar.kill();
+          failOnce(new Error('Import cancelled'));
           return;
         }
 
@@ -201,23 +218,43 @@ export class MBDBService {
         } catch (e) {}
       }, 2000);
 
-      let errorOutput = '';
+      curl.stderr.on('data', appendError);
+      tar.stderr.on('data', appendError);
 
-      child.stderr.on('data', (data) => {
-        errorOutput += data.toString();
+      curl.on('error', (err) => {
+        tar.kill();
+        failOnce(err);
       });
 
-      child.on('close', (code) => {
-        clearInterval(watchdog);
-        if (getMbdbCancelRequested()) return;
-        
+      tar.on('error', (err) => {
+        curl.kill();
+        failOnce(err);
+      });
+
+      curl.on('close', (code) => {
+        curlCode = code;
         if (code !== 0 && code !== null) {
-          return reject(new Error(`Command failed with code ${code}: ${errorOutput}`));
+          tar.kill();
+        }
+      });
+
+      tar.on('close', (code) => {
+        if (settled) return;
+        clearInterval(watchdog);
+        if (getMbdbCancelRequested()) {
+          return failOnce(new Error('Import cancelled'));
+        }
+        
+        if (curlCode !== 0 && curlCode !== null) {
+          return failOnce(new Error(`Download failed with code ${curlCode}: ${errorOutput}`));
+        }
+        if (code !== 0 && code !== null) {
+          return failOnce(new Error(`Extraction failed with code ${code}: ${errorOutput}`));
         }
 
         const mbdumpDir = path.join(workDir, 'mbdump');
         if (!fs.existsSync(mbdumpDir) || !fs.existsSync(path.join(mbdumpDir, 'genre')) || !fs.existsSync(path.join(mbdumpDir, 'genre_alias')) || !fs.existsSync(path.join(mbdumpDir, 'l_genre_genre'))) {
-          return reject(new Error('Extraction finished but one or more expected TSV files (genre, genre_alias, l_genre_genre) are missing.'));
+          return failOnce(new Error('Extraction finished but one or more expected TSV files (genre, genre_alias, l_genre_genre) are missing.'));
         }
 
         const elapsed = this.getElapsed(phaseStartTime);
@@ -226,6 +263,7 @@ export class MBDBService {
           completedPhases: [...mbdbStatus.completedPhases, `Downloading... took ${elapsed} seconds`]
         });
 
+        settled = true;
         resolve(latestTag);
       });
     });

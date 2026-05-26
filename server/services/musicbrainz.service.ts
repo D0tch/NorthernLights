@@ -2,6 +2,8 @@ import { getSystemSetting } from '../database';
 
 const MB_USER_AGENT = 'AuroraMediaServer/1.0 (https://github.com/aurora-music)';
 const MB_CLIENT_ID = 'aurora-1.0.0beta3';
+const MB_API_ORIGIN = 'https://musicbrainz.org';
+const MB_API_PATH_PREFIX = '/ws/2/';
 
 let mbLastRequest = 0;
 const mbQueue: { fn: () => Promise<any>; resolve: (val: any) => void; reject: (err: any) => void }[] = [];
@@ -67,6 +69,22 @@ async function processMbQueue() {
 }
 
 export async function mbFetch(url: string): Promise<any> {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('Invalid MusicBrainz URL');
+  }
+
+  if (
+    parsed.origin !== MB_API_ORIGIN ||
+    !parsed.pathname.startsWith(MB_API_PATH_PREFIX) ||
+    parsed.username ||
+    parsed.password
+  ) {
+    throw new Error('MusicBrainz URL not allowed');
+  }
+
   return new Promise((resolve, reject) => {
     mbQueue.push({
       fn: async () => {
@@ -78,7 +96,7 @@ export async function mbFetch(url: string): Promise<any> {
         if (token) {
           headers['Authorization'] = `Bearer ${token}`;
         }
-        const res = await fetch(url, { headers });
+        const res = await fetch(parsed.toString(), { headers });
         if (!res.ok) throw new Error(`MusicBrainz HTTP ${res.status}`);
         return res.json();
       },

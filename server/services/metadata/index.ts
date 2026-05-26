@@ -83,6 +83,12 @@ interface ProviderSettings {
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────
+const MUSICBRAINZ_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function isMusicBrainzUuid(value: string | null | undefined): value is string {
+  return typeof value === 'string' && MUSICBRAINZ_UUID_RE.test(value);
+}
+
 function cleanHtml(text: string): string {
   return text
     .replace(/<[^>]*>/g, '')
@@ -508,9 +514,9 @@ export async function getAlbumImage(
 
   if (settings.musicBrainzEnabled && (mbAlbumId || cached?.mbid)) {
     const mbid = mbAlbumId || cached?.mbid;
-    if (mbid) {
+    if (isMusicBrainzUuid(mbid)) {
       try {
-        const coverUrl = `https://coverartarchive.org/release/${mbid}/front-500`;
+        const coverUrl = `https://coverartarchive.org/release/${encodeURIComponent(mbid)}/front-500`;
         const coverRes = await fetch(coverUrl, { method: 'HEAD' });
         if (coverRes.ok) {
           await upsertAlbumCache(albumName, artistName, coverUrl, mbid);

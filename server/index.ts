@@ -64,14 +64,37 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
 if (process.env.CAST_RECEIVER_ORIGIN && !allowedOrigins.includes(process.env.CAST_RECEIVER_ORIGIN)) {
   allowedOrigins.push(process.env.CAST_RECEIVER_ORIGIN);
 }
+
+function parseBareOrigin(origin: string): URL | null {
+  try {
+    const parsed = new URL(origin);
+    if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+const normalizedAllowedOrigins = new Set(
+  allowedOrigins
+    .map((origin) => parseBareOrigin(origin)?.origin || null)
+    .filter((origin): origin is string => Boolean(origin))
+);
+
+function isAllowedCorsOrigin(origin: string): boolean {
+  const parsed = parseBareOrigin(origin);
+  if (!parsed) return false;
+
+  if (normalizedAllowedOrigins.has(parsed.origin)) return true;
+
+  return parsed.origin === 'https://www.gstatic.com' || parsed.origin === 'https://cast.google.com';
+}
+
 app.use(cors({
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-    if (
-      !origin ||
-      allowedOrigins.includes(origin) ||
-      origin.startsWith('https://www.gstatic.com') ||
-      origin.startsWith('https://cast.google.com')
-    ) {
+    if (!origin || isAllowedCorsOrigin(origin)) {
       callback(null, true);
     } else {
       callback(new Error('Not allowed by CORS'));

@@ -3,6 +3,7 @@ import { hasUsers, createUser, getUserByUsername, getUserById, updateUser, delet
 import { hashPassword, verifyPassword, generateToken, JwtPayload } from '../services/auth.service';
 import { generateScopedToken } from '../services/scopedToken.service';
 import { queueLlmHubRefreshForUser } from '../services/hubRefresh.service';
+import { createRateLimiter } from '../middleware/rateLimit';
 
 const router = Router();
 const MIN_PASSWORD_LENGTH = 12;
@@ -13,6 +14,29 @@ const AUTH_LIMITS: Record<string, number> = {
   register: 5,
   setup: 5,
 };
+const authStatusRateLimit = createRateLimiter({
+  keyPrefix: 'auth:status',
+  windowMs: 60 * 1000,
+  max: 120,
+});
+const authPublicMutationRateLimit = createRateLimiter({
+  keyPrefix: 'auth:public-mutation',
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: 'Too many auth requests. Try again later.',
+});
+const authAccountMutationRateLimit = createRateLimiter({
+  keyPrefix: 'auth:account-mutation',
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: 'Too many account requests. Try again later.',
+});
+const inviteValidationRateLimit = createRateLimiter({
+  keyPrefix: 'auth:invite-validate',
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  message: 'Too many invite checks. Try again later.',
+});
 
 type AuthAttempt = { count: number; firstAt: number; blockedUntil: number };
 const authAttempts = new Map<string, AuthAttempt>();
@@ -68,7 +92,7 @@ async function buildAuthResponse(payload: JwtPayload) {
 }
 
 // Setup: check if initial admin needs to be created
-router.get('/setup/status', async (req, res) => {
+router.get('/setup/status', authStatusRateLimit, async (req, res) => {
   try {
     const usersExist = await hasUsers();
     res.json({ needsSetup: !usersExist, dbConnected: true });
@@ -81,7 +105,7 @@ router.get('/setup/status', async (req, res) => {
 });
 
 // Setup: complete initial admin creation
-router.post('/setup/complete', async (req, res) => {
+router.post('/setup/complete', authPublicMutationRateLimit, async (req, res) => {
   const needsSetup = !(await hasUsers());
   if (!needsSetup) {
     return res.status(403).json({ error: 'Setup is already complete.' });
@@ -106,7 +130,7 @@ router.post('/setup/complete', async (req, res) => {
 });
 
 // Login
-router.post('/login', async (req, res) => {
+router.post('/login', authPublicMutationRateLimit, async (req, res) => {
   try {
     const { username, password } = req.body;
     if (!username || !password) {
@@ -136,7 +160,7 @@ router.post('/login', async (req, res) => {
 });
 
 // Register via invite
-router.post('/register', async (req, res) => {
+router.post('/register', authPublicMutationRateLimit, async (req, res) => {
   try {
     const { inviteToken, username, password } = req.body;
     if (!inviteToken || !username || !password) {
@@ -172,13 +196,13 @@ router.post('/register', async (req, res) => {
 });
 
 // Get current user
-router.get('/me', (req, res) => {
+router.get('/me', authStatusRateLimit, (req, res) => {
   if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
   res.json({ user: req.user });
 });
 
 // Change password
-router.post('/change-password', async (req, res) => {
+router.post('/change-password', authAccountMutationRateLimit, async (req, res) => {
   try {
     if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
     const { currentPassword, newPassword } = req.body;
@@ -201,7 +225,7 @@ router.post('/change-password', async (req, res) => {
 });
 
 // Delete account
-router.delete('/delete-account', async (req, res) => {
+router.delete('/delete-account', authAccountMutationRateLimit, async (req, res) => {
   try {
     if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
     const { password } = req.body;
@@ -232,7 +256,7 @@ router.delete('/delete-account', async (req, res) => {
 });
 
 // Validate invite token — returns rich metadata for the registration UI
-router.get('/invites/:token/validate', async (req, res) => {
+router.get('/invites/:token/validate', inviteValidationRateLimit, async (req, res) => {
   try {
     const token = req.params.token as string;
     const invite = await getInvite(token);

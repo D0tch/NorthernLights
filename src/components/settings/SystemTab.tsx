@@ -1,9 +1,9 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useToast } from '../../hooks/useToast';
 import { ConfirmModal } from '../ConfirmModal';
 
-type SystemSubTab = 'processing' | 'hub' | 'service';
+type SystemSubTab = 'processing' | 'hub' | 'service' | 'logging';
 
 const systemPlaylistOptions = [
     {
@@ -52,12 +52,41 @@ export const SystemTab: React.FC = () => {
     const scannerConcurrency = usePlayerStore(state => state.scannerConcurrency);
     const hubGenerationSchedule = usePlayerStore(state => state.hubGenerationSchedule);
     const systemPlaylistConfig = usePlayerStore(state => state.systemPlaylistConfig);
+    const hlsLoggingEnabled = usePlayerStore(state => state.hlsLoggingEnabled);
+    const ffmpegLoggingEnabled = usePlayerStore(state => state.ffmpegLoggingEnabled);
     const setSettings = usePlayerStore(state => state.setSettings);
     const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
 
     const { addToast } = useToast();
     const [activeSubTab, setActiveSubTab] = useState<SystemSubTab>('processing');
     const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel?: string; onConfirm: () => void } | null>(null);
+
+    type ServiceStatus = {
+        runtime: 'pm2' | 'systemd' | 'manual';
+        pid: number;
+        uptimeSeconds: number;
+        pm2: { active: boolean; configured: boolean; processName: string | null; pmId: string | null; instance: string | null };
+        systemd: { active: boolean; configured: boolean; unitPath: string | null; invocationId: string | null };
+    };
+    const [serviceStatus, setServiceStatus] = useState<ServiceStatus | null>(null);
+    const [serviceStatusLoading, setServiceStatusLoading] = useState(false);
+
+    const fetchServiceStatus = useCallback(async () => {
+        setServiceStatusLoading(true);
+        try {
+            const res = await fetch('/api/admin/service/status', { headers: getAuthHeader() });
+            if (res.ok) setServiceStatus(await res.json());
+            else setServiceStatus(null);
+        } catch {
+            setServiceStatus(null);
+        } finally {
+            setServiceStatusLoading(false);
+        }
+    }, [getAuthHeader]);
+
+    useEffect(() => {
+        if (activeSubTab === 'service') fetchServiceStatus();
+    }, [activeSubTab, fetchServiceStatus]);
 
     const effectiveSystemPlaylistConfig = {
         ...defaultSystemPlaylistConfig,
@@ -123,6 +152,13 @@ export const SystemTab: React.FC = () => {
                     onClick={() => setActiveSubTab('service')}
                 >
                     Service
+                </button>
+                <button
+                    type="button"
+                    className={`btn-tab ${activeSubTab === 'logging' ? 'active' : ''}`}
+                    onClick={() => setActiveSubTab('logging')}
+                >
+                    Logging
                 </button>
             </div>
 
@@ -223,43 +259,164 @@ export const SystemTab: React.FC = () => {
 
             {activeSubTab === 'service' && (
                 <div>
-                    <div className="flex items-center gap-2 mb-3">
+                    <div className="flex items-center justify-between gap-3 mb-3">
                         <h4 className="text-lg font-semibold text-[var(--color-text-primary)]">Aurora Auto-Start</h4>
-                        <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/20 dark:border-amber-500/30">systemd</span>
+                        <button
+                            type="button"
+                            onClick={fetchServiceStatus}
+                            disabled={serviceStatusLoading}
+                            className="text-xs px-3 py-1.5 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] disabled:opacity-50"
+                        >
+                            {serviceStatusLoading ? 'Checking…' : '↻ Refresh'}
+                        </button>
                     </div>
                     <p className="text-sm text-[var(--color-text-muted)] mb-4 leading-relaxed">
-                        Configure Aurora to automatically start when your computer starts. This requires a user-level systemd service.
+                        Configure Aurora to automatically start when your computer starts. Aurora detects whichever process supervisor is managing the running server.
                     </p>
 
-                    <div className="bg-[var(--color-surface)] rounded-xl border border-[var(--glass-border)] p-4">
-                        <div className="flex items-center gap-2 mb-3">
-                            <span className="text-sm font-medium text-[var(--color-text-primary)]">Service Status:</span>
-                            <span className="text-xs px-2 py-1 rounded bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border border-amber-500/20 dark:border-amber-500/30">Not Configured</span>
-                        </div>
-                        <p className="mb-4 text-amber-700 dark:text-amber-200/80 italic">
-                            Note: You must run <b>npm run build</b> once before starting the service.
+                    {(() => {
+                        const pm2Active = serviceStatus?.pm2.active ?? false;
+                        const pm2Configured = serviceStatus?.pm2.configured ?? false;
+                        const systemdActive = serviceStatus?.systemd.active ?? false;
+                        const systemdConfigured = serviceStatus?.systemd.configured ?? false;
+                        const runtime = serviceStatus?.runtime ?? 'manual';
+
+                        const runtimeBadge = runtime === 'pm2'
+                            ? { label: 'Running under PM2', cls: 'bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 dark:border-emerald-500/30' }
+                            : runtime === 'systemd'
+                                ? { label: 'Running under systemd', cls: 'bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 dark:border-emerald-500/30' }
+                                : { label: 'Running manually', cls: 'bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/20 dark:border-amber-500/30' };
+
+                        const statusPill = (active: boolean, configured: boolean) => {
+                            if (active) return { label: 'Active', cls: 'bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/20 dark:border-emerald-500/30' };
+                            if (configured) return { label: 'Configured', cls: 'bg-sky-500/10 dark:bg-sky-500/20 text-sky-600 dark:text-sky-400 border-sky-500/20 dark:border-sky-500/30' };
+                            return { label: 'Not Configured', cls: 'bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/20 dark:border-amber-500/30' };
+                        };
+                        const pm2Pill = statusPill(pm2Active, pm2Configured);
+                        const systemdPill = statusPill(systemdActive, systemdConfigured);
+
+                        return (
+                            <>
+                                <div className="bg-[var(--color-surface)] rounded-xl border border-[var(--glass-border)] p-4 mb-4">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                        <span className="text-sm font-medium text-[var(--color-text-primary)]">Current Runtime:</span>
+                                        <span className={`text-xs px-2 py-1 rounded border ${runtimeBadge.cls}`}>{runtimeBadge.label}</span>
+                                        {serviceStatus && (
+                                            <span className="text-xs text-[var(--color-text-muted)]">
+                                                pid {serviceStatus.pid} · up {Math.floor(serviceStatus.uptimeSeconds / 60)}m
+                                            </span>
+                                        )}
+                                    </div>
+                                </div>
+
+                                <div className={`bg-[var(--color-surface)] rounded-xl border p-4 mb-4 ${runtime === 'pm2' ? 'border-emerald-500/40' : 'border-[var(--glass-border)]'}`}>
+                                    <div className="flex items-center gap-2 mb-3 flex-wrap">
+                                        <span className="text-sm font-medium text-[var(--color-text-primary)]">PM2:</span>
+                                        <span className={`text-xs px-2 py-1 rounded border ${pm2Pill.cls}`}>{pm2Pill.label}</span>
+                                        {pm2Active && serviceStatus?.pm2.processName && (
+                                            <span className="text-xs text-[var(--color-text-muted)]">name: {serviceStatus.pm2.processName}{serviceStatus.pm2.pmId !== null ? ` · pm_id ${serviceStatus.pm2.pmId}` : ''}</span>
+                                        )}
+                                    </div>
+                                    <p className="text-xs text-[var(--color-text-muted)] mb-3 leading-relaxed">
+                                        Cross-platform Node.js process manager. Works on macOS, Linux, and Windows.
+                                    </p>
+                                    <div className="bg-gray-950 dark:bg-black/40 rounded-lg p-3 font-mono text-xs text-green-400 overflow-x-auto border border-black/20 dark:border-white/5 shadow-inner">
+                                        <p className="mb-1">npm install -g pm2</p>
+                                        <p className="mb-1">npm run build</p>
+                                        <p className="mb-1">pm2 start "npx tsx server/index.ts" --name aurora</p>
+                                        <p className="mb-1">pm2 save</p>
+                                        <p className="mb-1">pm2 startup   <span className="text-gray-500"># follow the printed command to enable on boot</span></p>
+                                    </div>
+                                </div>
+
+                                <div className={`bg-[var(--color-surface)] rounded-xl border p-4 ${runtime === 'systemd' ? 'border-emerald-500/40' : 'border-[var(--glass-border)]'}`}>
+                                    <div className="flex items-center gap-2 mb-3 flex-wrap">
+                                        <span className="text-sm font-medium text-[var(--color-text-primary)]">systemd (user unit):</span>
+                                        <span className={`text-xs px-2 py-1 rounded border ${systemdPill.cls}`}>{systemdPill.label}</span>
+                                        {systemdConfigured && serviceStatus?.systemd.unitPath && (
+                                            <span className="text-xs text-[var(--color-text-muted)] break-all">{serviceStatus.systemd.unitPath}</span>
+                                        )}
+                                    </div>
+                                    <p className="mb-3 text-xs text-amber-700 dark:text-amber-200/80 italic">
+                                        Note: You must run <b>npm run build</b> once before starting the service.
+                                    </p>
+                                    <div className="bg-gray-950 dark:bg-black/40 rounded-lg p-3 font-mono text-xs text-green-400 overflow-x-auto border border-black/20 dark:border-white/5 shadow-inner">
+                                        <p className="mb-1">mkdir -p ~/.config/systemd/user</p>
+                                        <p className="mb-1">cat &gt; ~/.config/systemd/user/aurora.service &lt;&lt; 'EOF'</p>
+                                        <p className="mb-1">[Unit]</p>
+                                        <p className="mb-1">Description=Aurora Music Player</p>
+                                        <p className="mb-1">After=default.target</p>
+                                        <p className="mb-1"></p>
+                                        <p className="mb-1">[Service]</p>
+                                        <p className="mb-1">Type=simple</p>
+                                        <p className="mb-1">ExecStart=/bin/bash -c 'cd "/var/home/andreas/VS Code/Music App" && npx tsx server/index.ts'</p>
+                                        <p className="mb-1">Restart=on-failure</p>
+                                        <p className="mb-1">RestartSec=10</p>
+                                        <p className="mb-1"></p>
+                                        <p className="mb-1">[Install]</p>
+                                        <p className="mb-1">WantedBy=default.target</p>
+                                        <p className="mb-1">EOF</p>
+                                        <p className="mb-1"></p>
+                                        <p className="mb-1">systemctl --user daemon-reload</p>
+                                        <p className="mb-1">systemctl --user enable aurora.service</p>
+                                        <p className="mb-1">systemctl --user start aurora.service</p>
+                                    </div>
+                                </div>
+                            </>
+                        );
+                    })()}
+                </div>
+            )}
+
+            {activeSubTab === 'logging' && (
+                <div className="space-y-6">
+                    <div>
+                        <h4 className="text-lg font-semibold text-[var(--color-text-primary)] mb-1">Server Console Logging</h4>
+                        <p className="text-xs text-[var(--color-text-muted)] mb-4 leading-relaxed">
+                            Toggle the noisy streaming pipeline logs that appear on the server console. Errors are always logged regardless of these settings. Defaults can also be set via <code className="text-[var(--color-text-primary)]">LOG_HLS</code> and <code className="text-[var(--color-text-primary)]">LOG_FFMPEG</code> in <code className="text-[var(--color-text-primary)]">.env</code>; changes here override the env defaults at runtime.
                         </p>
-                        <div className="bg-gray-950 dark:bg-black/40 rounded-lg p-3 font-mono text-xs text-green-400 overflow-x-auto border border-black/20 dark:border-white/5 shadow-inner">
-                            <p className="mb-1">mkdir -p ~/.config/systemd/user</p>
-                            <p className="mb-1">cat &gt; ~/.config/systemd/user/aurora.service &lt;&lt; 'EOF'</p>
-                            <p className="mb-1">[Unit]</p>
-                            <p className="mb-1">Description=Aurora Music Player</p>
-                            <p className="mb-1">After=default.target</p>
-                            <p className="mb-1"></p>
-                            <p className="mb-1">[Service]</p>
-                            <p className="mb-1">Type=simple</p>
-                            <p className="mb-1">ExecStart=/bin/bash -c 'cd "/var/home/andreas/VS Code/Music App" && npx tsx server/index.ts'</p>
-                            <p className="mb-1">Restart=on-failure</p>
-                            <p className="mb-1">RestartSec=10</p>
-                            <p className="mb-1"></p>
-                            <p className="mb-1">[Install]</p>
-                            <p className="mb-1">WantedBy=default.target</p>
-                            <p className="mb-1">EOF</p>
-                            <p className="mb-1"></p>
-                            <p className="mb-1">systemctl --user daemon-reload</p>
-                            <p className="mb-1">systemctl --user enable aurora.service</p>
-                            <p className="mb-1">systemctl --user start aurora.service</p>
+
+                        <div className="space-y-3">
+                            <div className="flex items-start justify-between gap-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-4">
+                                <div className="min-w-0">
+                                    <p className="text-sm font-semibold text-[var(--color-text-primary)]">HLS pipeline logs</p>
+                                    <p className="mt-1 text-xs leading-snug text-[var(--color-text-muted)]">
+                                        Verbose <code>[HLS DEBUG]</code> traces — segment requests, session readiness polls, and reaper events.
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    aria-pressed={hlsLoggingEnabled}
+                                    aria-label="Toggle HLS pipeline logs"
+                                    onClick={() => setSettings({ hlsLoggingEnabled: !hlsLoggingEnabled })}
+                                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${hlsLoggingEnabled ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}
+                                >
+                                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${hlsLoggingEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                                </button>
+                            </div>
+
+                            <div className="flex items-start justify-between gap-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-4">
+                                <div className="min-w-0">
+                                    <p className="text-sm font-semibold text-[var(--color-text-primary)]">FFmpeg output</p>
+                                    <p className="mt-1 text-xs leading-snug text-[var(--color-text-muted)]">
+                                        FFmpeg <code>stderr</code> passthrough (the chatty banner/progress output streamed during transcoding and HLS sessions).
+                                    </p>
+                                </div>
+                                <button
+                                    type="button"
+                                    aria-pressed={ffmpegLoggingEnabled}
+                                    aria-label="Toggle FFmpeg output logs"
+                                    onClick={() => setSettings({ ffmpegLoggingEnabled: !ffmpegLoggingEnabled })}
+                                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${ffmpegLoggingEnabled ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}
+                                >
+                                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${ffmpegLoggingEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                                </button>
+                            </div>
                         </div>
+
+                        <p className="text-xs text-[var(--color-text-muted)] mt-4 leading-relaxed">
+                            Per-track HLS session logs are still written to <code>logs/hls-sessions/</code> on disk regardless of these toggles.
+                        </p>
                     </div>
                 </div>
             )}

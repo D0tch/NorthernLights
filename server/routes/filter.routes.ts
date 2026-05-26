@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router, type NextFunction, type Request, type Response } from 'express';
 import { initDB } from '../database';
 
 const router = Router();
@@ -7,6 +7,11 @@ const MAX_GROUPS = 5;
 const MAX_CONDITIONS_PER_GROUP = 10;
 const MAX_VALUE_LENGTH = 200;
 const MAX_RESULT_IDS = 5000;
+const FILTER_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const FILTER_RATE_LIMIT_MAX = 120;
+
+type FilterRateLimitEntry = { count: number; resetAt: number };
+const filterRateLimits = new Map<string, FilterRateLimitEntry>();
 
 const ALLOWED_OPERATORS = new Set([
   'contains', 'equals', 'starts with', 'before', 'after',
@@ -58,6 +63,36 @@ const ALBUM_FIELDS: Record<string, FieldDef> = {
 };
 
 interface BuildResult { sql: string; params: any[]; }
+
+function getClientIp(req: Request): string {
+  return String(req.ip || req.socket?.remoteAddress || 'unknown');
+}
+
+function consumeFilterRateLimit(req: Request, res: Response, next: NextFunction) {
+  const now = Date.now();
+  const routeKey = req.path || req.originalUrl;
+  const userKey = req.user?.userId ? `user:${req.user.userId}` : `ip:${getClientIp(req)}`;
+  const key = `${routeKey}:${userKey}`;
+  const existing = filterRateLimits.get(key);
+
+  for (const [entryKey, entry] of filterRateLimits) {
+    if (entry.resetAt <= now) filterRateLimits.delete(entryKey);
+  }
+
+  const nextEntry: FilterRateLimitEntry = existing && existing.resetAt > now
+    ? { count: existing.count + 1, resetAt: existing.resetAt }
+    : { count: 1, resetAt: now + FILTER_RATE_LIMIT_WINDOW_MS };
+
+  filterRateLimits.set(key, nextEntry);
+
+  if (nextEntry.count > FILTER_RATE_LIMIT_MAX) {
+    const retryAfter = Math.max(1, Math.ceil((nextEntry.resetAt - now) / 1000));
+    res.setHeader('Retry-After', String(retryAfter));
+    return res.status(429).json({ error: 'Too many filter requests. Try again later.' });
+  }
+
+  next();
+}
 
 /** Build the SQL fragment for a single condition relative to its base table.
  *  The fragment references the column by its bare name; the caller wraps in
@@ -218,7 +253,7 @@ function buildSql(view: 'artists' | 'albums', groups: QueryGroup[]): BuildResult
   return { sql: ` AND (${groupClauses.join(' AND ')})`, params };
 }
 
-router.post('/artists', async (req, res) => {
+router.post('/artists', consumeFilterRateLimit, async (req, res) => {
   try {
     const result = validateGroups(req.body.groups);
     if (result.error) return res.status(400).json({ error: result.error });
@@ -238,7 +273,7 @@ router.post('/artists', async (req, res) => {
   }
 });
 
-router.post('/albums', async (req, res) => {
+router.post('/albums', consumeFilterRateLimit, async (req, res) => {
   try {
     const result = validateGroups(req.body.groups);
     if (result.error) return res.status(400).json({ error: result.error });

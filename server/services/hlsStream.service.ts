@@ -1,9 +1,10 @@
-import { spawn, execSync, ChildProcess } from 'child_process';
+import { spawn, execFileSync, ChildProcess } from 'child_process';
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { writeHlsServerLog, writeHlsSessionLog } from './debugLogger.service';
+import { logHls, logFfmpeg } from './loggingConfig';
 
 // ─── Types ──────────────────────────────────────────────────────────────
 
@@ -62,10 +63,12 @@ function countPlaylistSegments(content: string): number {
 
 function inspectTransportSegment(segmentPath: string): string {
   try {
-    const output = execSync(
-      `ffprobe -v error -show_entries format=format_name,duration,size:stream=index,codec_name,codec_type,codec_tag_string,profile,sample_rate,channels -of json "${segmentPath.replace(/"/g, '\\"')}"`,
-      { timeout: 5000 }
-    ).toString().trim();
+    const output = execFileSync('ffprobe', [
+      '-v', 'error',
+      '-show_entries', 'format=format_name,duration,size:stream=index,codec_name,codec_type,codec_tag_string,profile,sample_rate,channels',
+      '-of', 'json',
+      segmentPath,
+    ], { timeout: 5000 }).toString().trim();
     return output || '{"error":"empty ffprobe output"}';
   } catch (err: any) {
     return JSON.stringify({ error: err?.message || String(err) });
@@ -153,8 +156,8 @@ export async function getOrCreateHlsSession(
   activeSessions.set(key, session);
 
   // Spawn FFmpeg with cwd: outputDir so segment filenames in the playlist are relative
-  console.log(`[HLS DEBUG] Spawning FFmpeg: ${ffmpegArgs.join(' ')}`);
-  console.log(`[HLS DEBUG] cwd: ${outputDir}`);
+  logHls(`[HLS DEBUG] Spawning FFmpeg: ${ffmpegArgs.join(' ')}`);
+  logHls(`[HLS DEBUG] cwd: ${outputDir}`);
   const ffmpeg = spawn('ffmpeg', ffmpegArgs, { stdio: ['pipe', 'pipe', 'pipe'], cwd: outputDir });
   session.ffmpegProcess = ffmpeg;
   logHlsSession(trackId, quality, targetCodec, 'FFmpeg process spawned');
@@ -163,7 +166,7 @@ export async function getOrCreateHlsSession(
     // FFmpeg writes ALL output to stderr (config banner, progress, AND errors).
     // Only log lines that look like actual errors, not config/progress noise.
     const msg = data.toString();
-    console.log(`[HLS DEBUG] FFmpeg stderr: ${msg.substring(0, 200)}`);
+    logFfmpeg(`[HLS DEBUG] FFmpeg stderr: ${msg.substring(0, 200)}`);
     logHlsSession(trackId, quality, targetCodec, `FFmpeg stderr: ${msg.trim()}`);
     if (/^\[?error|Error while|Invalid|No such file|could not|Cannot/mi.test(msg)) {
       console.error(`[HLS] FFmpeg error for ${trackId}:`, msg.trim());
@@ -203,12 +206,12 @@ export async function getOrCreateHlsSession(
         const content = fs.readFileSync(playlistPath, 'utf8');
         const segmentCount = countPlaylistSegments(content);
         session.segmentCount = segmentCount;
-        console.log(`[HLS DEBUG] Poll: playlist exists, content: ${JSON.stringify(content.substring(0, 200))}`);
+        logHls(`[HLS DEBUG] Poll: playlist exists, content: ${JSON.stringify(content.substring(0, 200))}`);
         logHlsSession(trackId, quality, targetCodec, `Playlist poll snapshot (${segmentCount} segments): ${summarizePlaylist(content)}`);
         if (segmentCount >= 2 || (segmentCount >= 1 && content.includes('#EXT-X-ENDLIST'))) {
           clearInterval(pollInterval);
           session.ready = true;
-          console.log(`[HLS DEBUG] Session ready for track ${trackId}`);
+          logHls(`[HLS DEBUG] Session ready for track ${trackId}`);
           const firstSegmentPath = path.join(outputDir, 'segment000.ts');
           if (fs.existsSync(firstSegmentPath)) {
             logHlsSession(trackId, quality, targetCodec, `First segment probe: ${inspectTransportSegment(firstSegmentPath)}`);
@@ -379,10 +382,13 @@ const NOT_TS_COMPATIBLE = new Set([
  */
 function detectActualCodec(filePath: string): string | null {
   try {
-    const output = execSync(
-      `ffprobe -v quiet -select_streams a:0 -show_entries stream=codec_name -of csv=p=0 "${filePath.replace(/"/g, '\\"')}"`,
-      { timeout: 5000 }
-    ).toString().trim();
+    const output = execFileSync('ffprobe', [
+      '-v', 'quiet',
+      '-select_streams', 'a:0',
+      '-show_entries', 'stream=codec_name',
+      '-of', 'csv=p=0',
+      filePath,
+    ], { timeout: 5000 }).toString().trim();
     return output || null;
   } catch {
     return null;
@@ -513,7 +519,7 @@ function startCleanupTimer(): void {
     const now = Date.now();
     for (const [key, session] of activeSessions) {
       if (now - session.lastAccessedAt > SESSION_TTL_MS) {
-        console.log(`[HLS] Reaping expired session: ${key}`);
+        logHls(`[HLS] Reaping expired session: ${key}`);
         logHlsSession(session.trackId, session.quality, session.codec, 'Reaping expired session due to TTL');
         cleanupSession(session.trackId, session.quality);
       }

@@ -69,11 +69,56 @@ function maskLastFmApiKey(value: unknown): string {
   return `${value.slice(0, 6)}...${value.slice(-4)}`;
 }
 
+function sanitizeProviderLogValue(value: unknown): string {
+  return String(value ?? '')
+    .replace(/[\r\n]+/g, ' ')
+    .replace(/([?&](?:token|code|state|cb_state|api_key|api_sig|client_secret|access_token|refresh_token|session_key)=)[^&\s]+/gi, '$1[redacted]')
+    .replace(/\b(?:token|code|state|cb_state|apiKey|api_key|apiSig|api_sig|clientSecret|client_secret|sharedSecret|shared_secret|sessionKey|session_key|accessToken|access_token|refreshToken|refresh_token|key)=\S+/gi, (match) => {
+      const separator = match.includes('=') ? '=' : ':';
+      return `${match.split(separator)[0]}${separator}[redacted]`;
+    })
+    .replace(/"((?:token|code|state|cb_state|apiKey|api_key|apiSig|api_sig|clientSecret|client_secret|sharedSecret|shared_secret|sessionKey|session_key|accessToken|access_token|refreshToken|refresh_token|key))"\s*:\s*"[^"]*"/gi, '"$1":"[redacted]"')
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, 'Bearer [redacted]')
+    .replace(/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/g, '[jwt-redacted]')
+    .slice(0, 1000);
+}
+
 function logLastFmOAuth(line: string) {
-  console.log(`[Last.fm OAuth] ${line}`);
+  const safeLine = sanitizeProviderLogValue(line);
+  console.log(`[Last.fm OAuth] ${safeLine}`);
   try {
-    writeDebugLog('lastfm-oauth.log', line);
+    writeDebugLog('lastfm-oauth.log', safeLine);
   } catch {}
+}
+
+function isPositiveIntegerString(value: unknown): value is string {
+  return typeof value === 'string' && /^[1-9]\d*$/.test(value);
+}
+
+function isAllowedProxyImageUrl(parsed: URL): boolean {
+  if (parsed.protocol !== 'https:' || parsed.username || parsed.password) {
+    return false;
+  }
+
+  // Only allow known external image domains. Match exact hosts or real
+  // subdomains with a dot boundary so lookalikes like evilcoverartarchive.org
+  // cannot pass the suffix check.
+  const allowedHosts = [
+    'lastfm.freetls.fastly.net',
+    'images.genius.com',
+    'filepicker-images.genius.com',
+    'assets.genius.com',
+    'coverartarchive.org',
+    'e.snmc.io',
+    'is1-ssl.mzstatic.com',
+    'is2-ssl.mzstatic.com',
+    'is3-ssl.mzstatic.com',
+    'is4-ssl.mzstatic.com',
+    'is5-ssl.mzstatic.com',
+  ];
+
+  const hostname = parsed.hostname.toLowerCase();
+  return allowedHosts.some((host) => hostname === host || hostname.endsWith(`.${host}`));
 }
 
 function finishLastFmCallback(
@@ -278,7 +323,7 @@ router.get('/providers/musicbrainz/callback', async (req, res) => {
 
     if (!tokenRes.ok) {
       const errText = await tokenRes.text();
-      console.error('[MusicBrainz OAuth] Token exchange failed:', tokenRes.status, errText);
+      console.error('[MusicBrainz OAuth] Token exchange failed:', tokenRes.status, sanitizeProviderLogValue(errText));
       return res.redirect(`${returnBase}/?mb_error=token_exchange_failed`);
     }
 
@@ -398,10 +443,14 @@ router.post('/providers/genius/search', async (req, res) => {
 router.post('/providers/genius/artist/:id', async (req, res) => {
   try {
     const { id } = req.params;
+    if (!isPositiveIntegerString(id)) {
+      return res.status(400).json({ error: 'Invalid artist id' });
+    }
+
     const apiKey = req.body.apiKey || await getSystemSetting('geniusApiKey');
     if (!apiKey) return res.status(400).json({ error: 'Genius API key not configured' });
 
-    const geniusRes = await fetch(`https://api.genius.com/artists/${id}`, {
+    const geniusRes = await fetch(`https://api.genius.com/artists/${encodeURIComponent(id)}`, {
       headers: { 'Authorization': `Bearer ${apiKey}` }
     });
 
@@ -961,21 +1010,17 @@ router.get('/providers/external/proxy-image', async (req, res) => {
     const url = req.query.url as string;
     if (!url) return res.status(400).json({ error: 'Missing url parameter' });
 
-    // Only allow known external image domains
-    const allowed = ['lastfm.freetls.fastly.net', 'images.genius.com', 'filepicker-images.genius.com', 'assets.genius.com', 'coverartarchive.org',
-      'e.snmc.io', 'is1-ssl.mzstatic.com', 'is2-ssl.mzstatic.com', 'is3-ssl.mzstatic.com',
-      'is4-ssl.mzstatic.com', 'is5-ssl.mzstatic.com'];
     let parsed: URL;
     try {
       parsed = new URL(url);
     } catch {
       return res.status(400).json({ error: 'Invalid URL' });
     }
-    if (!allowed.some(d => parsed.hostname.endsWith(d) || parsed.hostname === d)) {
+    if (!isAllowedProxyImageUrl(parsed)) {
       return res.status(403).json({ error: 'Domain not allowed' });
     }
 
-    const imageRes = await fetch(url, {
+    const imageRes = await fetch(parsed.toString(), {
       headers: { 'User-Agent': 'AuroraMediaServer/1.0' },
       signal: AbortSignal.timeout(10000),
     });

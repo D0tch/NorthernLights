@@ -8,9 +8,28 @@ import { mbdbService } from '../services/mbdb.service';
 import { verifyToken } from '../services/auth.service';
 import { Request, Response, NextFunction } from 'express';
 import crypto from 'crypto';
+import { createRateLimiter } from '../middleware/rateLimit';
 
 const router = Router();
 const MIN_PASSWORD_LENGTH = 12;
+const adminReadRateLimit = createRateLimiter({
+  keyPrefix: 'admin:read',
+  windowMs: 60 * 1000,
+  max: 240,
+  message: 'Too many admin requests. Try again later.',
+});
+const adminMutationRateLimit = createRateLimiter({
+  keyPrefix: 'admin:mutation',
+  windowMs: 15 * 60 * 1000,
+  max: 80,
+  message: 'Too many admin changes. Try again later.',
+});
+const dbRecoveryRateLimit = createRateLimiter({
+  keyPrefix: 'admin:db-recovery',
+  windowMs: 15 * 60 * 1000,
+  max: 30,
+  message: 'Too many database recovery requests. Try again later.',
+});
 
 function getRecoveryTokenFromRequest(req: Request): string | null {
   const header = req.get('x-aurora-recovery-token') || req.get('x-db-recovery-token');
@@ -70,7 +89,7 @@ const requireAdminOrDbRecovery = async (req: Request, res: Response, next: NextF
 
 // ─── User Management ────────────────────────────────────────────────
 
-router.get('/users', requireAdmin, async (req, res) => {
+router.get('/users', adminReadRateLimit, requireAdmin, async (req, res) => {
   try {
     const users = await listUsers();
     res.json({ users });
@@ -80,7 +99,7 @@ router.get('/users', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/users', requireAdmin, async (req, res) => {
+router.post('/users', adminMutationRateLimit, requireAdmin, async (req, res) => {
   try {
     const { username, password, role } = req.body;
     if (!username || !password) {
@@ -107,7 +126,7 @@ router.post('/users', requireAdmin, async (req, res) => {
   }
 });
 
-router.put('/users/:id', requireAdmin, async (req, res) => {
+router.put('/users/:id', adminMutationRateLimit, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { username, password, role } = req.body;
@@ -135,7 +154,7 @@ router.put('/users/:id', requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/users/:id', requireAdmin, async (req, res) => {
+router.delete('/users/:id', adminMutationRateLimit, requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     if (id === req.user!.userId) {
@@ -151,7 +170,7 @@ router.delete('/users/:id', requireAdmin, async (req, res) => {
 
 // ─── Invite Management ──────────────────────────────────────────────
 
-router.get('/invites', requireAdmin, async (req, res) => {
+router.get('/invites', adminReadRateLimit, requireAdmin, async (req, res) => {
   try {
     const invites = await listInvites();
     res.json({ invites });
@@ -161,7 +180,7 @@ router.get('/invites', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/invites', requireAdmin, async (req, res) => {
+router.post('/invites', adminMutationRateLimit, requireAdmin, async (req, res) => {
   try {
     const { role, maxUses, expiresIn } = req.body;
     const expiresAt = expiresIn ? Date.now() + (parseInt(expiresIn, 10) * 1000) : null;
@@ -177,7 +196,7 @@ router.post('/invites', requireAdmin, async (req, res) => {
   }
 });
 
-router.delete('/invites/:token', requireAdmin, async (req, res) => {
+router.delete('/invites/:token', adminMutationRateLimit, requireAdmin, async (req, res) => {
   try {
     await deleteInvite(req.params.token as string);
     res.json({ status: 'revoked' });
@@ -188,7 +207,7 @@ router.delete('/invites/:token', requireAdmin, async (req, res) => {
 });
 
 // Cleanup orphaned playlists
-router.post('/cleanup-playlists', requireAdmin, async (req, res) => {
+router.post('/cleanup-playlists', adminMutationRateLimit, requireAdmin, async (req, res) => {
   try {
     const deletedCount = await cleanupOrphanedPlaylists();
     res.json({ status: 'ok', deletedCount });
@@ -200,7 +219,7 @@ router.post('/cleanup-playlists', requireAdmin, async (req, res) => {
 
 // ─── Database Container Control ─────────────────────────────────────
 
-router.get('/db/status', requireAdminOrDbRecovery, async (req, res) => {
+router.get('/db/status', dbRecoveryRateLimit, requireAdminOrDbRecovery, async (req, res) => {
   try {
     const containerName = process.env.DB_CONTAINER_NAME || 'music-postgres';
     const status = await getContainerStatus(containerName);
@@ -212,7 +231,7 @@ router.get('/db/status', requireAdminOrDbRecovery, async (req, res) => {
   }
 });
 
-router.get('/db/stats', requireAdminOrDbRecovery, async (req, res) => {
+router.get('/db/stats', dbRecoveryRateLimit, requireAdminOrDbRecovery, async (req, res) => {
   try {
     const stats = await getDatabaseStats();
     const poolStats = await getPoolStats();
@@ -223,7 +242,7 @@ router.get('/db/stats', requireAdminOrDbRecovery, async (req, res) => {
   }
 });
 
-router.post('/db/start', requireAdminOrDbRecovery, async (req, res) => {
+router.post('/db/start', dbRecoveryRateLimit, requireAdminOrDbRecovery, async (req, res) => {
   try {
     const containerName = process.env.DB_CONTAINER_NAME || 'music-postgres';
     const result = await startContainer(containerName);
@@ -235,7 +254,7 @@ router.post('/db/start', requireAdminOrDbRecovery, async (req, res) => {
   }
 });
 
-router.post('/db/stop', requireAdmin, async (req, res) => {
+router.post('/db/stop', adminMutationRateLimit, requireAdmin, async (req, res) => {
   try {
     const containerName = process.env.DB_CONTAINER_NAME || 'music-postgres';
     const result = await stopContainer(containerName);
@@ -247,7 +266,7 @@ router.post('/db/stop', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/db/create', requireAdminOrDbRecovery, async (req, res) => {
+router.post('/db/create', dbRecoveryRateLimit, requireAdminOrDbRecovery, async (req, res) => {
   try {
     const dbPort = process.env.DB_PORT || '5432';
     const dataDir = process.env.DB_DATA_DIR || './postgres-data';
@@ -272,7 +291,7 @@ router.post('/db/create', requireAdminOrDbRecovery, async (req, res) => {
   }
 });
 
-router.post('/db/recreate', requireAdminOrDbRecovery, async (req, res) => {
+router.post('/db/recreate', dbRecoveryRateLimit, requireAdminOrDbRecovery, async (req, res) => {
   try {
     const dbPort = process.env.DB_PORT || '5432';
     const dataDir = process.env.DB_DATA_DIR || './postgres-data';
@@ -299,7 +318,7 @@ router.post('/db/recreate', requireAdminOrDbRecovery, async (req, res) => {
 
 // ─── MBDB Endpoints ───────────────────────────────────────────────────
 
-router.get('/mbdb/status', requireAdmin, (req, res) => {
+router.get('/mbdb/status', adminReadRateLimit, requireAdmin, (req, res) => {
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
@@ -312,7 +331,7 @@ router.get('/mbdb/status', requireAdmin, (req, res) => {
   });
 });
 
-router.post('/mbdb/import', requireAdmin, async (req, res) => {
+router.post('/mbdb/import', adminMutationRateLimit, requireAdmin, async (req, res) => {
   if (mbdbStatus.isImporting) {
     return res.status(400).json({ error: 'Import already in progress' });
   }
@@ -323,7 +342,7 @@ router.post('/mbdb/import', requireAdmin, async (req, res) => {
   res.json({ message: 'MBDB Import started' });
 });
 
-router.post('/mbdb/cancel', requireAdmin, async (req, res) => {
+router.post('/mbdb/cancel', adminMutationRateLimit, requireAdmin, async (req, res) => {
   if (!mbdbStatus.isImporting) {
     return res.status(400).json({ error: 'No import in progress' });
   }
@@ -332,7 +351,7 @@ router.post('/mbdb/cancel', requireAdmin, async (req, res) => {
   res.json({ message: 'Import cancellation requested' });
 });
 
-router.get('/mbdb/check-update', requireAdmin, async (req, res) => {
+router.get('/mbdb/check-update', adminReadRateLimit, requireAdmin, async (req, res) => {
   try {
     const latestResponse = await fetch('https://data.metabrainz.org/pub/musicbrainz/data/fullexport/LATEST');
     const latestTag = (await latestResponse.text()).trim();
@@ -367,7 +386,7 @@ router.get('/mbdb/check-update', requireAdmin, async (req, res) => {
 
 // ─── Unified Health Endpoint ──────────────────────────────────────────
 
-router.get('/health', requireAdmin, async (req, res) => {
+router.get('/health', adminReadRateLimit, requireAdmin, async (req, res) => {
   try {
     const containerName = process.env.DB_CONTAINER_NAME || 'music-postgres';
     const containerStatus = await getContainerStatus(containerName);
@@ -401,6 +420,68 @@ router.get('/health', requireAdmin, async (req, res) => {
     console.error('Admin health check error:', error);
     res.status(500).json({ error: error.message || 'Failed to fetch health metrics' });
   }
+});
+
+// ─── Service / Runtime Status ──────────────────────────────────────────
+// Detects whether this Node process is currently being managed by pm2 or
+// systemd (via well-known env vars set by each supervisor). Also reports
+// filesystem presence of known config files so we can show "Configured"
+// even when the user is currently running manually.
+router.get('/service/status', adminReadRateLimit, requireAdmin, async (_req, res) => {
+  const env = process.env;
+  const fs = await import('fs');
+  const os = await import('os');
+  const path = await import('path');
+
+  const pm2Active = !!(env.pm_id || env.PM_ID || env.PM2_HOME || env.pm2_id);
+  const systemdActive = !!(env.INVOCATION_ID || env.JOURNAL_STREAM);
+
+  let pm2Configured = false;
+  try {
+    const dumpPath = path.join(os.homedir(), '.pm2', 'dump.pm2');
+    if (fs.existsSync(dumpPath)) {
+      const dump = fs.readFileSync(dumpPath, 'utf8');
+      if (/aurora/i.test(dump)) pm2Configured = true;
+    }
+  } catch { /* ignore */ }
+
+  let systemdConfigured = false;
+  let systemdUnitPath: string | null = null;
+  try {
+    const candidates = [
+      path.join(os.homedir(), '.config', 'systemd', 'user', 'aurora.service'),
+      '/etc/systemd/system/aurora.service',
+      '/lib/systemd/system/aurora.service',
+    ];
+    for (const p of candidates) {
+      if (fs.existsSync(p)) { systemdConfigured = true; systemdUnitPath = p; break; }
+    }
+  } catch { /* ignore */ }
+
+  const runtime: 'pm2' | 'systemd' | 'manual' = pm2Active
+    ? 'pm2'
+    : systemdActive
+      ? 'systemd'
+      : 'manual';
+
+  res.json({
+    runtime,
+    pid: process.pid,
+    uptimeSeconds: Math.floor(process.uptime()),
+    pm2: {
+      active: pm2Active,
+      configured: pm2Configured,
+      processName: env.name || env.PM2_NAME || null,
+      pmId: env.pm_id || env.PM_ID || null,
+      instance: env.NODE_APP_INSTANCE || null,
+    },
+    systemd: {
+      active: systemdActive,
+      configured: systemdConfigured,
+      unitPath: systemdUnitPath,
+      invocationId: env.INVOCATION_ID || null,
+    },
+  });
 });
 
 export default router;
