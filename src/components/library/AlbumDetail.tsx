@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
@@ -9,13 +9,18 @@ import { formatTime } from '../../utils/formatTime';
 import { BackButton } from './BackButton';
 import { useAlbumData } from '../../hooks/useAlbumData';
 import { LoveButton } from '../LoveButton';
-import { ContextMenuFrame, ContextMenuHeader, ContextMenuLink, ContextMenuList, ContextMenuPortal } from '../ContextMenu';
+import { ContextMenuFrame, ContextMenuHeader, ContextMenuLink, ContextMenuList, ContextMenuPortal, ContextMenuButton, ContextMenuDivider } from '../ContextMenu';
 import type { TrackInfo } from '../../utils/fileSystem';
 import { useIsCurrentCollection, useIsCurrentTrack, useNowPlayingState } from '../../hooks/useNowPlaying';
 import { NowPlayingBadge } from '../now-playing/NowPlayingBadge';
 import { NowPlayingBars } from '../now-playing/NowPlayingBars';
 
-import { MoreHorizontal, Play, Clock, ExternalLink, Headphones, BarChart2, Link2, Music2, Calendar, Gauge } from 'lucide-react';
+import { MoreHorizontal, Play, Clock, ExternalLink, Headphones, BarChart2, Link2, Music2, Calendar, Gauge, Disc3, X, Search, Plus, Users, Layers, Settings } from 'lucide-react';
+import type { AlbumInfo, TrackCredit } from '../../store/index';
+
+interface EditionRow extends AlbumInfo {
+    track_count?: number;
+}
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -118,7 +123,17 @@ interface AlbumTrackRowProps {
     onPlay: (index: number) => void;
     onContextMenu: (track: TrackInfo, x: number, y: number) => void;
     playbackState: 'playing' | 'paused' | 'stopped';
+    inlineCredits?: Array<{ role: string; name: string; artistId: string }>;
 }
+
+// Headline roles surfaced on the track row. Ordering precedence when
+// more than two are tagged: remixer > composer > producer > conductor
+// > lyricist. The genre-driven tagging conventions almost never collide
+// in practice (a trance track has no composer; a Brahms track has no
+// remixer) so this ordering serves both audiences cleanly.
+const INLINE_ROLE_ORDER = ['remixer', 'composer', 'producer', 'conductor', 'lyricist'] as const;
+type InlineRole = typeof INLINE_ROLE_ORDER[number];
+const INLINE_ROLE_SET = new Set<string>(INLINE_ROLE_ORDER);
 
 const AlbumDiscHeader = memo(({ disc }: { disc: number }) => (
     <div className="px-2 md:px-4 pt-4 pb-1 text-xs font-semibold uppercase tracking-widest text-[var(--color-primary)] border-b border-black/5 dark:border-white/10 mb-1">
@@ -136,6 +151,7 @@ const AlbumTrackRow = memo(({
     onPlay,
     onContextMenu,
     playbackState,
+    inlineCredits,
 }: AlbumTrackRowProps) => {
     const knownArtistKeys = useKnownArtistKeys();
     const isCurrent = useIsCurrentTrack(track.id);
@@ -171,7 +187,7 @@ const AlbumTrackRow = memo(({
             </div>
             <div className="font-medium truncate text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)] transition-colors min-w-0">
                 <span className="block truncate text-sm md:text-base">{track.title || track.path.split(/[\/\\]/).pop()}</span>
-                {artistNames.length > 0 && (
+                {(artistNames.length > 0 || (inlineCredits && inlineCredits.length > 0)) && (
                     <span className="block text-xs text-[var(--color-text-muted)] mt-0.5 truncate">
                         {artistNames.map((a, j) => {
                             const link = getArtistLink(a);
@@ -188,6 +204,31 @@ const AlbumTrackRow = memo(({
                                     ) : (
                                         <span>{a}</span>
                                     )}
+                                </React.Fragment>
+                            );
+                        })}
+                        {/* Per-track headline credits (remixer / composer /
+                            producer / conductor / lyricist) appended to the
+                            artists line, each followed by a small lowercase
+                            role suffix. Suppression rules in the parent stop
+                            the primary artist from duplicating themselves. */}
+                        {inlineCredits && inlineCredits.map((c, i) => {
+                            const link = getArtistLink(c.name) || (c.artistId ? `/library/artist/${c.artistId}` : null);
+                            const needsSep = artistNames.length > 0 || i > 0;
+                            return (
+                                <React.Fragment key={`cred-${c.role}-${c.name}-${i}`}>
+                                    {needsSep && ' · '}
+                                    {link ? (
+                                        <Link
+                                            to={link}
+                                            state={{ backLabel: 'Back to Album' }}
+                                            onClick={(e) => e.stopPropagation()}
+                                            className="hover:text-[var(--color-primary)] transition-colors no-underline text-inherit"
+                                        >{c.name}</Link>
+                                    ) : (
+                                        <span>{c.name}</span>
+                                    )}
+                                    <span className="opacity-60"> ({c.role})</span>
                                 </React.Fragment>
                             );
                         })}
@@ -220,6 +261,215 @@ const AlbumTrackRow = memo(({
 
 AlbumTrackRow.displayName = 'AlbumTrackRow';
 
+// ─── Per-edition cover art (Cover Art Archive when MB is connected) ─────────
+// Thumbnail in the "Other editions" strip prefers the per-release cover
+// from the Cover Art Archive over the album row's image_url, since CAA
+// reliably differentiates editions (remaster, deluxe, etc.) that often
+// share an album-level image_url cached from another provider. The
+// network request only fires when the user has opted into MusicBrainz —
+// per Aurora's "usable without 3rd-party integrations" constraint.
+
+interface EditionArtProps {
+    mbReleaseId?: string | null;
+    fallbackArtUrl?: string;
+    artist: string;
+    title: string;
+}
+
+const EditionArt: React.FC<EditionArtProps> = ({ mbReleaseId, fallbackArtUrl, artist, title }) => {
+    const mbConnected = usePlayerStore(state => state.musicBrainzConnected);
+    const [caaFailed, setCaaFailed] = useState(false);
+
+    useEffect(() => { setCaaFailed(false); }, [mbReleaseId]);
+
+    const caaUrl = mbConnected && mbReleaseId
+        ? `https://coverartarchive.org/release/${encodeURIComponent(mbReleaseId)}/front-250`
+        : null;
+
+    if (caaUrl && !caaFailed) {
+        return (
+            <img
+                src={caaUrl}
+                alt=""
+                loading="lazy"
+                onError={() => setCaaFailed(true)}
+                className="w-full h-full object-cover"
+            />
+        );
+    }
+
+    return (
+        <AlbumArt
+            artUrl={fallbackArtUrl}
+            artist={artist}
+            album={title}
+            size={64}
+            className="w-full h-full object-cover"
+        />
+    );
+};
+
+// ─── Manage editions modal ────────────────────────────────────────────────────
+// Lets an admin pull another album into this album's release-group (merge)
+// or split an edition out of the current group (unmerge). Server endpoints
+// pin manual_group_override = TRUE so future rescans don't undo the call.
+
+interface ManageEditionsModalProps {
+    open: boolean;
+    onClose: () => void;
+    sourceAlbumId: string;
+    sourceArtist: string;
+    sourceTitle: string;
+    editions: EditionRow[];
+    onChanged: () => void;
+    getAuthHeader: () => Record<string, string>;
+}
+
+const ManageEditionsModal: React.FC<ManageEditionsModalProps> = ({
+    open, onClose, sourceAlbumId, sourceArtist, sourceTitle, editions, onChanged, getAuthHeader,
+}) => {
+    const allAlbums = usePlayerStore(state => state.albums);
+    const [query, setQuery] = useState('');
+    const [busy, setBusy] = useState(false);
+
+    // Candidate list: same artist as the current album, not already in this
+    // release-group. We don't restrict by normalized title — the whole point
+    // of manual merge is to catch cases the heuristic missed.
+    const candidates = useMemo(() => {
+        const inGroup = new Set(editions.map(e => e.id));
+        const q = query.trim().toLowerCase();
+        const sameArtist = allAlbums.filter(al =>
+            !inGroup.has(al.id) &&
+            (al.artist_name || '').toLowerCase() === sourceArtist.toLowerCase() &&
+            (q === '' || (al.title || '').toLowerCase().includes(q)),
+        );
+        return sameArtist.slice(0, 20);
+    }, [allAlbums, editions, sourceArtist, query]);
+
+    const handleMerge = async (targetAlbumId: string) => {
+        if (busy) return;
+        setBusy(true);
+        try {
+            const res = await fetch(`/api/albums/${targetAlbumId}/merge-into`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                body: JSON.stringify({ targetAlbumId: sourceAlbumId }),
+            });
+            if (res.ok) onChanged();
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const handleUnmerge = async (albumIdToSplit: string) => {
+        if (busy) return;
+        setBusy(true);
+        try {
+            const res = await fetch(`/api/albums/${albumIdToSplit}/unmerge`, {
+                method: 'POST',
+                headers: getAuthHeader(),
+            });
+            if (res.ok) onChanged();
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    if (!open) return null;
+
+    return (
+        <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
+            onClick={onClose}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Manage editions"
+        >
+            <div
+                className="w-full max-w-lg max-h-[80vh] flex flex-col rounded-2xl border border-[var(--glass-border)] bg-[var(--color-surface)] shadow-2xl overflow-hidden"
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--glass-border)]">
+                    <div>
+                        <h2 className="font-semibold text-lg text-[var(--color-text-primary)]">manage editions</h2>
+                        <p className="text-xs text-[var(--color-text-muted)] mt-0.5 truncate">{sourceTitle} · {sourceArtist}</p>
+                    </div>
+                    <button onClick={onClose} aria-label="Close" className="p-1.5 rounded-md hover:bg-black/5 dark:hover:bg-white/10 text-[var(--color-text-muted)]">
+                        <X className="w-4 h-4" />
+                    </button>
+                </div>
+
+                <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+                    <section>
+                        <h3 className="text-xs uppercase tracking-wider text-[var(--color-text-muted)] mb-2">in this group</h3>
+                        <div className="space-y-1.5">
+                            {editions.map(ed => (
+                                <div key={ed.id} className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg bg-black/5 dark:bg-white/5">
+                                    <div className="min-w-0">
+                                        <div className="text-sm text-[var(--color-text-primary)] truncate">{ed.title}</div>
+                                        <div className="text-xs text-[var(--color-text-muted)] truncate">
+                                            {ed.edition_label ? `${ed.edition_label.toLowerCase()} · ` : ''}
+                                            {ed.release_year || ''}
+                                            {typeof ed.track_count === 'number' ? ` · ${ed.track_count} track${ed.track_count !== 1 ? 's' : ''}` : ''}
+                                        </div>
+                                    </div>
+                                    {editions.length > 1 && (
+                                        <button
+                                            type="button"
+                                            disabled={busy}
+                                            onClick={() => handleUnmerge(ed.id)}
+                                            className="text-xs px-2 py-1 rounded-md border border-[var(--glass-border)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)] text-[var(--color-text-secondary)] transition-ui disabled:opacity-50"
+                                        >
+                                            split out
+                                        </button>
+                                    )}
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+
+                    <section>
+                        <h3 className="text-xs uppercase tracking-wider text-[var(--color-text-muted)] mb-2">add another edition</h3>
+                        <div className="relative mb-2">
+                            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-[var(--color-text-muted)]" />
+                            <input
+                                type="text"
+                                value={query}
+                                onChange={(e) => setQuery(e.target.value)}
+                                placeholder={`Search ${sourceArtist}'s albums…`}
+                                className="w-full pl-8 pr-3 py-2 rounded-lg bg-black/5 dark:bg-white/5 border border-[var(--glass-border)] text-sm focus:outline-none focus:border-[var(--color-primary)] text-[var(--color-text-primary)]"
+                            />
+                        </div>
+                        <div className="space-y-1.5 max-h-60 overflow-y-auto">
+                            {candidates.length === 0 && (
+                                <div className="text-xs text-[var(--color-text-muted)] px-3 py-2">No matching albums.</div>
+                            )}
+                            {candidates.map(c => (
+                                <button
+                                    key={c.id}
+                                    type="button"
+                                    disabled={busy}
+                                    onClick={() => handleMerge(c.id)}
+                                    className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-lg hover:bg-black/5 dark:hover:bg-white/5 transition-ui text-left disabled:opacity-50"
+                                >
+                                    <div className="min-w-0">
+                                        <div className="text-sm text-[var(--color-text-primary)] truncate">{c.title}</div>
+                                        <div className="text-xs text-[var(--color-text-muted)] truncate">
+                                            {c.edition_label ? `${c.edition_label.toLowerCase()} · ` : ''}
+                                            {c.release_year || ''}
+                                        </div>
+                                    </div>
+                                    <Plus className="w-4 h-4 text-[var(--color-text-muted)] shrink-0" />
+                                </button>
+                            ))}
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </div>
+    );
+};
+
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export const AlbumDetail: React.FC = () => {
@@ -232,14 +482,152 @@ export const AlbumDetail: React.FC = () => {
     const artists = usePlayerStore(state => state.artists);
     const setPlaylist = usePlayerStore(state => state.setPlaylist);
     const openContextMenu = usePlayerStore(state => state.openContextMenu);
+    const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
+    const currentUser = usePlayerStore(state => state.currentUser);
     const knownArtistKeys = useKnownArtistKeys();
     const [linksMenuOpen, setLinksMenuOpen] = useState(false);
+    const [editions, setEditions] = useState<EditionRow[]>([]);
+    const [editionsModalOpen, setEditionsModalOpen] = useState(false);
+    // Album-wide credits keyed by track_id. Loaded lazily on album open
+    // so the main library payload stays lean; consequences for cold-open
+    // latency are minimal because the credits panel and per-track chips
+    // only render after this resolves.
+    const [albumCredits, setAlbumCredits] = useState<Record<string, TrackCredit[]>>({});
+    const [creditsPanelOpen, setCreditsPanelOpen] = useState(false);
     const isAlbumPlaying = useIsCurrentCollection({ albumId: albumId ?? undefined });
     const playbackState = useNowPlayingState();
     const linksButtonRef = useRef<HTMLButtonElement>(null);
+    const creditsButtonRef = useRef<HTMLButtonElement>(null);
+    const editionsButtonRef = useRef<HTMLButtonElement>(null);
+    const [editionsMenuOpen, setEditionsMenuOpen] = useState(false);
     const trackListRef = useRef<HTMLDivElement>(null);
 
     const albumInfo = useMemo(() => albums.find(a => a.id === albumId), [albums, albumId]);
+
+    // Fetch sibling editions whenever the visible album changes. Editions
+    // are albums that share this album's release_group_id; the canonical
+    // entry (most tracks, earliest year) is always first in the list.
+    useEffect(() => {
+        if (!albumId) { setEditions([]); return; }
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await fetch(`/api/albums/${albumId}/editions`, { headers: getAuthHeader() });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!cancelled) setEditions(Array.isArray(data.editions) ? data.editions : []);
+            } catch {
+                if (!cancelled) setEditions([]);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [albumId, getAuthHeader]);
+
+    const otherEditions = useMemo(
+        () => editions.filter(e => e.id !== albumId),
+        [editions, albumId],
+    );
+
+    // Pull multi-role credits for the whole album in one request. Per-track
+    // chips and the expanded credits panel both read from this map.
+    useEffect(() => {
+        if (!albumId) { setAlbumCredits({}); return; }
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await fetch(`/api/albums/${albumId}/credits`, { headers: getAuthHeader() });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!cancelled) setAlbumCredits(data?.credits || {});
+            } catch {
+                if (!cancelled) setAlbumCredits({});
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [albumId, getAuthHeader]);
+
+    // Picks at most two headline credits per track, applying the
+    // suppression guards from the plan:
+    //   - never show a credit that matches the primary artist (catches
+    //     DJ-self-producer, singer-songwriter, band-wrote-it-themselves).
+    //   - remixer always shows when present (the original artist is by
+    //     definition different from the remixer).
+    //   - composer only shows when it adds info beyond the primary artist.
+    const selectInlineCredits = useCallback((track: TrackInfo): Array<{ role: string; name: string; artistId: string }> => {
+        const list = albumCredits[track.id];
+        if (!list || list.length === 0) return [];
+        const primaryNameKey = (track.artist || track.albumArtist || '').trim().toLowerCase();
+        const matchesPrimary = (c: TrackCredit) =>
+            c.artistName.trim().toLowerCase() === primaryNameKey;
+
+        const byRole = new Map<string, TrackCredit[]>();
+        for (const c of list) {
+            if (!INLINE_ROLE_SET.has(c.role)) continue;
+            if (matchesPrimary(c) && c.role !== 'remixer') continue;
+            const arr = byRole.get(c.role) || [];
+            arr.push(c);
+            byRole.set(c.role, arr);
+        }
+
+        const picked: Array<{ role: string; name: string; artistId: string }> = [];
+        for (const role of INLINE_ROLE_ORDER) {
+            const credits = byRole.get(role);
+            if (!credits || credits.length === 0) continue;
+            // Use the first (lowest position) credit per role; if a track
+            // is co-composed, the second composer surfaces in the panel.
+            const first = credits[0];
+            picked.push({ role, name: first.artistName, artistId: first.artistId });
+            if (picked.length >= 2) break;
+        }
+        return picked;
+    }, [albumCredits]);
+
+    // Album-wide credits aggregated for the "view credits" panel.
+    // Ordered: performer · composer · conductor · lyricist · producer ·
+    // remixer · arranger · engineer · mixer · dj-mixer · writer ·
+    // original-artist (per the plan's E2.2 spec).
+    const albumCreditRoleOrder = useMemo(() => [
+        'performer', 'composer', 'conductor', 'lyricist', 'producer', 'remixer',
+        'arranger', 'engineer', 'mixer', 'dj-mixer', 'writer', 'original-artist',
+    ], []);
+    const albumCreditsGrouped = useMemo(() => {
+        const byRole = new Map<string, Map<string, { name: string; artistId: string; details: Set<string> }>>();
+        for (const credits of Object.values(albumCredits)) {
+            for (const c of credits) {
+                if (!byRole.has(c.role)) byRole.set(c.role, new Map());
+                const inner = byRole.get(c.role)!;
+                const key = c.artistId;
+                if (!inner.has(key)) inner.set(key, { name: c.artistName, artistId: c.artistId, details: new Set() });
+                if (c.detail) inner.get(key)!.details.add(c.detail);
+            }
+        }
+        const out: Array<{ role: string; people: Array<{ name: string; artistId: string; details: string[] }> }> = [];
+        for (const role of albumCreditRoleOrder) {
+            const inner = byRole.get(role);
+            if (!inner) continue;
+            out.push({
+                role,
+                people: Array.from(inner.values()).map(p => ({
+                    name: p.name,
+                    artistId: p.artistId,
+                    details: Array.from(p.details),
+                })),
+            });
+        }
+        // Any unrecognized roles tail-append (shouldn't happen given the
+        // server-side canonicalization, but defensive in case enrichment
+        // ever writes a new role we didn't preregister).
+        for (const [role, inner] of byRole) {
+            if (albumCreditRoleOrder.includes(role)) continue;
+            out.push({
+                role,
+                people: Array.from(inner.values()).map(p => ({
+                    name: p.name, artistId: p.artistId, details: Array.from(p.details),
+                })),
+            });
+        }
+        return out;
+    }, [albumCredits, albumCreditRoleOrder]);
 
     const albumTracks = useMemo(() => {
         if (!albumId) return [];
@@ -507,6 +895,11 @@ export const AlbumDetail: React.FC = () => {
                             PLAY {releaseType.toUpperCase()}
                         </button>
 
+                        {/* Icon-button group — sits pinned top-right on mobile
+                            and inline next to the play button on desktop, so
+                            links, credits, and editions stay together at every
+                            breakpoint instead of just the links button. */}
+                        <div className="absolute right-4 top-4 z-20 flex gap-2 md:static md:z-auto md:flex md:gap-3">
                         <button
                             ref={linksButtonRef}
                             type="button"
@@ -516,7 +909,7 @@ export const AlbumDetail: React.FC = () => {
                             aria-haspopup="menu"
                             aria-expanded={linksMenuOpen}
                             title={fileLinks.length > 0 ? 'Album links' : 'No album links available'}
-                            className="absolute right-4 top-4 z-20 inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] text-[var(--color-text-secondary)] shadow-[var(--shadow-sm)] transition-ui hover:border-[var(--glass-border-hover)] hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none md:static md:z-auto md:h-12 md:w-12"
+                            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] text-[var(--color-text-secondary)] shadow-[var(--shadow-sm)] transition-ui hover:border-[var(--glass-border-hover)] hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none md:h-12 md:w-12"
                         >
                             <Link2 className="w-5 h-5" />
                         </button>
@@ -527,6 +920,7 @@ export const AlbumDetail: React.FC = () => {
                             anchorRef={linksButtonRef}
                             desktopWidth={248}
                             desktopHeight={320}
+                            menuAlign="left"
                         >
                             {({ isMobile }) => (
                                 <ContextMenuFrame isMobile={isMobile}>
@@ -549,6 +943,153 @@ export const AlbumDetail: React.FC = () => {
                                 </ContextMenuFrame>
                             )}
                         </ContextMenuPortal>
+
+                        {/* Credits button — same circular treatment as the
+                            links button. Disabled when the album has no
+                            credits at all (tag-derived or provider-enriched). */}
+                        <button
+                            ref={creditsButtonRef}
+                            type="button"
+                            onClick={() => setCreditsPanelOpen(open => !open)}
+                            disabled={albumCreditsGrouped.length === 0}
+                            aria-label="Album credits"
+                            aria-haspopup="menu"
+                            aria-expanded={creditsPanelOpen}
+                            title={albumCreditsGrouped.length > 0 ? 'Album credits' : 'No credits available'}
+                            className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] text-[var(--color-text-secondary)] shadow-[var(--shadow-sm)] transition-ui hover:border-[var(--glass-border-hover)] hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] disabled:cursor-not-allowed disabled:opacity-45 motion-reduce:transition-none md:h-12 md:w-12"
+                        >
+                            <Users className="w-5 h-5" />
+                        </button>
+
+                        <ContextMenuPortal
+                            open={creditsPanelOpen && albumCreditsGrouped.length > 0}
+                            onClose={() => setCreditsPanelOpen(false)}
+                            anchorRef={creditsButtonRef}
+                            desktopWidth={320}
+                            desktopHeight={420}
+                            menuAlign="left"
+                        >
+                            {({ isMobile }) => (
+                                <ContextMenuFrame isMobile={isMobile}>
+                                    <ContextMenuHeader
+                                        title="Album credits"
+                                        subtitle={`${albumCreditsGrouped.reduce((n, g) => n + g.people.length, 0)} credit${albumCreditsGrouped.reduce((n, g) => n + g.people.length, 0) === 1 ? '' : 's'} · ${albumCreditsGrouped.length} role${albumCreditsGrouped.length === 1 ? '' : 's'}`}
+                                    />
+                                    <ContextMenuList className="max-h-[60vh] overflow-y-auto py-1">
+                                        {albumCreditsGrouped.map(group => (
+                                            <div key={group.role} className="px-4 py-2">
+                                                <div className="text-[10px] font-bold uppercase tracking-[0.15em] text-[var(--color-text-muted)] mb-1">
+                                                    {group.role}
+                                                </div>
+                                                <div className="space-y-0.5">
+                                                    {group.people.map((p, i) => (
+                                                        <Link
+                                                            key={p.artistId + i}
+                                                            to={`/library/artist/${p.artistId}`}
+                                                            state={{ backLabel: 'Back to Album' }}
+                                                            onClick={() => setCreditsPanelOpen(false)}
+                                                            className="block text-sm text-[var(--color-text-primary)] hover:text-[var(--color-primary)] transition-colors no-underline truncate"
+                                                        >
+                                                            {p.name}
+                                                            {p.details.length > 0 && (
+                                                                <span className="text-[var(--color-text-muted)]"> — {p.details.join(', ')}</span>
+                                                            )}
+                                                        </Link>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </ContextMenuList>
+                                </ContextMenuFrame>
+                            )}
+                        </ContextMenuPortal>
+
+                        {/* Editions button — circular icon button matching
+                            links/credits. Opens a context menu listing the
+                            other editions in this release group, with an
+                            admin-only "Manage editions…" entry at the bottom
+                            that opens the existing merge/split modal. */}
+                        {(otherEditions.length > 0 || currentUser?.role === 'admin') && (
+                            <>
+                                <button
+                                    ref={editionsButtonRef}
+                                    type="button"
+                                    onClick={() => setEditionsMenuOpen(open => !open)}
+                                    aria-label="Other editions"
+                                    aria-haspopup="menu"
+                                    aria-expanded={editionsMenuOpen}
+                                    title={otherEditions.length > 0 ? `${otherEditions.length + 1} editions` : 'Manage editions'}
+                                    className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] text-[var(--color-text-secondary)] shadow-[var(--shadow-sm)] transition-ui hover:border-[var(--glass-border-hover)] hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-primary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)] motion-reduce:transition-none md:h-12 md:w-12"
+                                >
+                                    <Layers className="w-5 h-5" />
+                                </button>
+
+                                <ContextMenuPortal
+                                    open={editionsMenuOpen}
+                                    onClose={() => setEditionsMenuOpen(false)}
+                                    anchorRef={editionsButtonRef}
+                                    desktopWidth={296}
+                                    desktopHeight={360}
+                                    menuAlign="left"
+                                >
+                                    {({ isMobile }) => (
+                                        <ContextMenuFrame isMobile={isMobile}>
+                                            <ContextMenuHeader
+                                                title="Other editions"
+                                                subtitle={otherEditions.length > 0
+                                                    ? `${otherEditions.length} other ${otherEditions.length === 1 ? 'edition' : 'editions'}`
+                                                    : 'No other editions'}
+                                            />
+                                            <ContextMenuList className="max-h-[60vh] overflow-y-auto">
+                                                {otherEditions.map(ed => (
+                                                    <Link
+                                                        key={ed.id}
+                                                        to={`/library/album/${ed.id}`}
+                                                        state={{ backLabel: 'Back to Album' }}
+                                                        onClick={() => setEditionsMenuOpen(false)}
+                                                        role="menuitem"
+                                                        className="flex w-full items-center gap-3 px-4 py-2.5 text-sm text-[var(--color-text-primary)] transition-colors hover:bg-white/5 focus:bg-white/5 focus:outline-none no-underline"
+                                                    >
+                                                        <span className="relative w-8 h-8 shrink-0 overflow-hidden rounded-sm bg-black/10 dark:bg-white/5">
+                                                            <EditionArt
+                                                                mbReleaseId={ed.mbid}
+                                                                fallbackArtUrl={(ed as any).image_url}
+                                                                artist={ed.artist_name || ''}
+                                                                title={ed.title || ''}
+                                                            />
+                                                        </span>
+                                                        <span className="min-w-0 flex-1">
+                                                            <span className="block truncate">
+                                                                {ed.edition_label || ed.title}
+                                                            </span>
+                                                            <span className="block truncate text-xs text-[var(--color-text-muted)]">
+                                                                {[ed.release_year, (ed as any).track_count
+                                                                    ? `${(ed as any).track_count} track${(ed as any).track_count === 1 ? '' : 's'}`
+                                                                    : null].filter(Boolean).join(' · ')}
+                                                            </span>
+                                                        </span>
+                                                    </Link>
+                                                ))}
+                                                {currentUser?.role === 'admin' && (
+                                                    <>
+                                                        {otherEditions.length > 0 && <ContextMenuDivider />}
+                                                        <ContextMenuButton
+                                                            icon={<Settings className="w-[15px] h-[15px]" />}
+                                                            label="Manage editions…"
+                                                            onClick={() => {
+                                                                setEditionsMenuOpen(false);
+                                                                setEditionsModalOpen(true);
+                                                            }}
+                                                        />
+                                                    </>
+                                                )}
+                                            </ContextMenuList>
+                                        </ContextMenuFrame>
+                                    )}
+                                </ContextMenuPortal>
+                            </>
+                        )}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -626,6 +1167,7 @@ export const AlbumDetail: React.FC = () => {
                                                 onPlay={handlePlayTrack}
                                                 onContextMenu={handleTrackContextMenu}
                                                 playbackState={playbackState}
+                                                inlineCredits={selectInlineCredits(row.track)}
                                             />
                                         )}
                                     </div>
@@ -645,11 +1187,30 @@ export const AlbumDetail: React.FC = () => {
                                 onPlay={handlePlayTrack}
                                 onContextMenu={handleTrackContextMenu}
                                 playbackState={playbackState}
+                                inlineCredits={selectInlineCredits(row.track)}
                             />
                         ))
                     )}
                 </div>
             </div>
+
+            <ManageEditionsModal
+                open={editionsModalOpen}
+                onClose={() => setEditionsModalOpen(false)}
+                sourceAlbumId={albumId!}
+                sourceArtist={albumArtist}
+                sourceTitle={albumTitle}
+                editions={editions}
+                getAuthHeader={getAuthHeader}
+                onChanged={() => {
+                    // Re-fetch editions; modal stays open so admin can stack
+                    // multiple merge/split actions in one pass.
+                    if (!albumId) return;
+                    fetch(`/api/albums/${albumId}/editions`, { headers: getAuthHeader() })
+                        .then(r => r.ok ? r.json() : null)
+                        .then(d => { if (d?.editions) setEditions(d.editions); });
+                }}
+            />
         </div>
     );
 };

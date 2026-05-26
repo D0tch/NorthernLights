@@ -35,6 +35,21 @@ export async function initDatabaseConnection(retries = 15, initialDelay = 1000) 
       } catch (e: any) {
         console.error('[DB] Entity migration failed (non-fatal):', e.message || e);
       }
+      // Backfill release-group + edition + compilation columns on albums.
+      // Runs once (gated by a system setting), then keeps is_va_pseudo
+      // fresh on every boot for libraries scanned since the last run.
+      try {
+        const { migrateReleaseGroups } = await import('./database');
+        await migrateReleaseGroups();
+      } catch (e: any) {
+        console.error('[DB] Release-group migration failed (non-fatal):', e.message || e);
+      }
+      try {
+        const { loadLoggingSettingsFromDB } = await import('./services/loggingConfig');
+        await loadLoggingSettingsFromDB();
+      } catch (e: any) {
+        console.error('[DB] Logging settings load failed (non-fatal):', e.message || e);
+      }
       isInitializing = false;
       return;
     } catch (e: any) {

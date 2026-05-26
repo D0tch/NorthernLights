@@ -175,6 +175,16 @@ export interface ArtistInfo extends EntityInfo {
   links?: string;
   members?: string;
   created_at?: string;
+  rolesInLibrary?: Array<{ role: string; credits: number }>;
+}
+
+export interface TrackCredit {
+  artistId: string;
+  artistName: string;
+  role: string;
+  position?: number;
+  detail?: string;
+  source?: string;
 }
 
 export interface AlbumInfo extends EntityInfo {
@@ -185,6 +195,18 @@ export interface AlbumInfo extends EntityInfo {
   listeners?: string;
   playcount?: string;
   created_at?: string;
+  release_group_id?: string;
+  mb_release_group_id?: string;
+  edition_label?: string | null;
+  normalized_title?: string;
+  release_year?: number | null;
+  is_compilation?: boolean;
+  manual_group_override?: boolean;
+}
+
+export interface AlbumEditionsResponse {
+  canonical: AlbumInfo & { track_count?: number };
+  editions: Array<AlbumInfo & { track_count?: number }>;
 }
 
 export type SortOption = 'name' | 'recentlyAdded' | 'year';
@@ -214,7 +236,7 @@ export interface FilterState {
   queryResultIds: string[] | null;
 }
 
-export type PlaybackLoadPath = 'none' | 'cast' | 'direct' | 'prepared-hls' | 'fallback-hls';
+export type PlaybackLoadPath = 'none' | 'cast' | 'direct' | 'prepared-hls' | 'fallback-hls' | 'lossless-passthrough';
 export type PlaybackPrepareStatus = 'idle' | 'preparing' | 'ready' | 'failed';
 export type PlaybackRecoveryPath = 'none' | 'normal-hls-after-prepare-failure' | 'normal-hls-after-promotion-failure';
 export type PrebufferPolicy = 'off' | 'conservative' | 'aggressive';
@@ -364,6 +386,8 @@ export interface PlayerState {
   scannerConcurrency: string;
   hubGenerationSchedule: string;
   systemPlaylistConfig: Record<string, boolean>;
+  hlsLoggingEnabled: boolean;
+  ffmpegLoggingEnabled: boolean;
   llmBaseUrl: string;
   llmApiKey: string;
   llmModelName: string;
@@ -866,6 +890,8 @@ export const usePlayerStore = create<PlayerState>()(
         scannerConcurrency: 'SSD',
         hubGenerationSchedule: 'Daily',
         systemPlaylistConfig: { ...defaultSystemPlaylistConfig },
+        hlsLoggingEnabled: false,
+        ffmpegLoggingEnabled: false,
         llmBaseUrl: '',
         llmApiKey: '',
         llmModelName: '',
@@ -1079,6 +1105,8 @@ export const usePlayerStore = create<PlayerState>()(
                 scannerConcurrency: data.scannerConcurrency || 'SSD',
                 hubGenerationSchedule: normalizeHubGenerationSchedule(data.hubGenerationSchedule),
                 systemPlaylistConfig: normalizeSystemPlaylistConfig(data.systemPlaylistConfig),
+                hlsLoggingEnabled: data.hlsLoggingEnabled === true,
+                ffmpegLoggingEnabled: data.ffmpegLoggingEnabled === true,
                 llmBaseUrl: data.llmBaseUrl || '',
                 llmApiKey: data.llmApiKey || '',
                 llmModelName: data.llmModelName || '',
@@ -1160,6 +1188,8 @@ export const usePlayerStore = create<PlayerState>()(
                 scannerConcurrency: state.scannerConcurrency,
                 hubGenerationSchedule: state.hubGenerationSchedule,
                 systemPlaylistConfig: state.systemPlaylistConfig,
+                hlsLoggingEnabled: state.hlsLoggingEnabled,
+                ffmpegLoggingEnabled: state.ffmpegLoggingEnabled,
                 llmBaseUrl: state.llmBaseUrl,
                 llmApiKey: state.llmApiKey,
                 llmModelName: state.llmModelName,

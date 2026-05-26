@@ -8,6 +8,7 @@ interface AlbumCardProps {
     artist: string;
     artUrl?: string;
     subtitle?: string;
+    editionLabel?: string | null;
     onPlay: (e: React.MouseEvent) => void;
     onOpen?: () => void;
     linkTo?: string;
@@ -24,7 +25,7 @@ export const AlbumCardSkeleton: React.FC = () => (
     </div>
 );
 
-export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl, subtitle, onPlay, onOpen, linkTo, linkState }) => {
+export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl, subtitle, editionLabel, onPlay, onOpen, linkTo, linkState }) => {
     return (
         <div
             className="group flex flex-col relative cursor-pointer"
@@ -57,6 +58,13 @@ export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl
                     size={400}
                     className="w-full h-full object-cover"
                 />
+
+                {/* Edition badge (matches Hub "Uniquely yours" pill) */}
+                {editionLabel && (
+                    <span className="absolute top-2.5 left-2.5 z-20 text-[10px] font-bold uppercase tracking-[0.15em] text-white/95 bg-black/35 backdrop-blur-sm px-2 py-0.5 rounded-full pointer-events-none">
+                        {editionLabel.toLowerCase()}
+                    </span>
+                )}
 
                 {/* Hover overlay */}
                 <div className="absolute inset-0 bg-transparent group-hover:bg-black/40 transition-colors duration-300 flex items-center justify-center z-10 pointer-events-none rounded-2xl">

@@ -131,9 +131,12 @@ export async function initDB(): Promise<Pool> {
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS mb_album_artist_id TEXT;
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS mb_release_group_id TEXT;
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS mb_work_id TEXT;
-        EXCEPTION 
-          WHEN OTHERS THEN null; 
+          ALTER TABLE tracks ADD COLUMN IF NOT EXISTS genius_song_id TEXT;
+        EXCEPTION
+          WHEN OTHERS THEN null;
         END $$;
+        CREATE INDEX IF NOT EXISTS tracks_genius_song_id_idx ON tracks(genius_song_id);
+        CREATE INDEX IF NOT EXISTS tracks_mb_recording_id_idx ON tracks(mb_recording_id);
 
         CREATE TABLE IF NOT EXISTS track_features (
           track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE PRIMARY KEY,
@@ -507,6 +510,65 @@ export async function initDB(): Promise<Pool> {
           ALTER TABLE albums ADD COLUMN IF NOT EXISTS playcount TEXT;
         EXCEPTION WHEN OTHERS THEN null;
         END $$;
+
+        -- Release-group / edition model. release_group_id is Aurora's own
+        -- UUID so manual-merge works for albums without MusicBrainz tags.
+        -- mb_release_group_id mirrors the MBID when present; the heuristic
+        -- and MBID grouping both write the same release_group_id so the
+        -- API can answer "what editions exist?" with a single lookup.
+        DO $$
+        BEGIN
+          ALTER TABLE albums ADD COLUMN IF NOT EXISTS release_group_id UUID;
+          ALTER TABLE albums ADD COLUMN IF NOT EXISTS mb_release_group_id TEXT;
+          ALTER TABLE albums ADD COLUMN IF NOT EXISTS edition_label TEXT;
+          ALTER TABLE albums ADD COLUMN IF NOT EXISTS normalized_title TEXT;
+          ALTER TABLE albums ADD COLUMN IF NOT EXISTS release_year INTEGER;
+          ALTER TABLE albums ADD COLUMN IF NOT EXISTS manual_group_override BOOLEAN DEFAULT FALSE;
+          ALTER TABLE albums ADD COLUMN IF NOT EXISTS is_compilation BOOLEAN DEFAULT FALSE;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+        CREATE INDEX IF NOT EXISTS albums_release_group_id_idx ON albums(release_group_id);
+        CREATE INDEX IF NOT EXISTS albums_mb_release_group_id_idx ON albums(mb_release_group_id);
+        CREATE INDEX IF NOT EXISTS albums_normalized_title_idx ON albums(normalized_title);
+
+        -- Pseudo-entity flag for "Various Artists" and similar. Derived
+        -- at upsert time as: all of this artist's tracks live on albums
+        -- whose is_compilation = TRUE. Replaces the deprecated name-list
+        -- filter that previously hard-coded ('various artists','va',...).
+        DO $$
+        BEGIN
+          ALTER TABLE artists ADD COLUMN IF NOT EXISTS is_va_pseudo BOOLEAN DEFAULT FALSE;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+        CREATE INDEX IF NOT EXISTS artists_is_va_pseudo_idx ON artists(is_va_pseudo);
+
+        -- Multi-valued artist credits per track. The existing tracks.artist_id
+        -- + tracks.artists JSON keep their meaning ("the primary credit" and
+        -- "all credited names as one display string"). This join table layers
+        -- role-specific credits on top: composer, conductor, performer (with
+        -- instrument), lyricist, producer, remixer, engineer, etc.
+        --
+        -- source = 'tag' for credits parsed from on-disk metadata (the only
+        -- path in v1). A future MusicBrainz enrichment can append rows with
+        -- source = 'musicbrainz' without colliding, and the rescan-delete
+        -- below is scoped to source = 'tag' so MB rows survive rescans.
+        --
+        -- detail is the empty string by default (not NULL) so it can be part
+        -- of the primary key without needing COALESCE() — Postgres requires
+        -- PK columns to be NOT NULL.
+        CREATE TABLE IF NOT EXISTS track_artist_credits (
+          track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+          artist_id UUID NOT NULL REFERENCES artists(id) ON DELETE CASCADE,
+          role TEXT NOT NULL,
+          position INTEGER NOT NULL DEFAULT 0,
+          source TEXT NOT NULL DEFAULT 'tag',
+          detail TEXT NOT NULL DEFAULT '',
+          PRIMARY KEY (track_id, artist_id, role, detail)
+        );
+        CREATE INDEX IF NOT EXISTS track_artist_credits_artist_role_idx
+          ON track_artist_credits(artist_id, role);
+        CREATE INDEX IF NOT EXISTS track_artist_credits_track_idx
+          ON track_artist_credits(track_id);
 
         -- ==========================================
         -- MULTI-USER TABLES
@@ -1060,6 +1122,57 @@ export async function getTracksWithoutFeatures(): Promise<{ id: string; filePath
   }));
 }
 
+export async function getTracksWithSimulatedFeatures(): Promise<{ id: string; filePath: Buffer; title: string; artist: string | null }[]> {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT t.id, t.path, t.title, t.artist
+    FROM tracks t
+    JOIN track_features tf ON t.id = tf.track_id
+    WHERE tf.is_simulated = TRUE
+    ORDER BY t.title
+  `);
+  return res.rows.map((r: any) => ({
+    id: r.id,
+    filePath: Buffer.from(r.path, 'base64'),
+    title: r.title,
+    artist: r.artist || null,
+  }));
+}
+
+export async function getSimulatedFeatureTracks(limit = 50): Promise<Array<{
+  id: string;
+  title: string;
+  artist: string | null;
+  album: string | null;
+  filename: string;
+  filePath: string;
+  bpm: number | null;
+}>> {
+  const db = await initDB();
+  const safeLimit = Math.max(1, Math.min(200, Math.floor(limit) || 50));
+  const res = await db.query(`
+    SELECT t.id, t.title, t.artist, t.album, t.path, tf.bpm
+    FROM tracks t
+    JOIN track_features tf ON t.id = tf.track_id
+    WHERE tf.is_simulated = TRUE
+    ORDER BY t.artist NULLS LAST, t.title NULLS LAST
+    LIMIT $1
+  `, [safeLimit]);
+
+  return res.rows.map((r: any) => {
+    const decodedPath = Buffer.from(r.path, 'base64').toString('utf8');
+    return {
+      id: r.id,
+      title: r.title,
+      artist: r.artist || null,
+      album: r.album || null,
+      filename: path.basename(decodedPath),
+      filePath: decodedPath,
+      bpm: r.bpm === null || r.bpm === undefined ? null : Number(r.bpm),
+    };
+  });
+}
+
 export async function getTrackCountWithFeatures(): Promise<{ withFeatures: number; total: number }> {
   const db = await initDB();
   const res = await db.query(`
@@ -1495,31 +1608,191 @@ export async function getOrCreateArtist(name?: string | null, mbid?: string | nu
   return id;
 }
 
-export async function getOrCreateAlbum(title?: string | null, artistName?: string | null): Promise<string> {
+export interface AlbumUpsertOpts {
+  mbReleaseGroupId?: string | null;
+  year?: number | null;
+  releaseType?: string | null;
+  isCompilation?: boolean | null;
+}
+
+// Decides whether a track signals a compilation. Primary source is the
+// MusicBrainz RELEASETYPE / MUSICBRAINZ_ALBUMTYPE tag containing
+// "compilation" as a secondary release-group type — that's what Picard
+// writes today. The legacy iTunes TCMP/cpil/COMPILATION=1 flag is a
+// fallback because it's frequently mis-set on box sets that aren't
+// actually compilations.
+function inferCompilationFromTrack(
+  releaseType?: string | null,
+  isCompilationFlag?: boolean | null,
+): boolean {
+  const rt = (releaseType || '').toLowerCase();
+  if (rt.includes('compilation')) return true;
+  return !!isCompilationFlag;
+}
+
+export async function getOrCreateAlbum(
+  title?: string | null,
+  artistName?: string | null,
+  opts: AlbumUpsertOpts = {},
+): Promise<string> {
   const safeTitle = sanitizeString(title)?.trim() || UNKNOWN_ALBUM;
   const safeArtist = sanitizeString(artistName)?.trim() || UNKNOWN_ARTIST;
   const lowerTitle = safeTitle.toLowerCase();
   const lowerArtist = safeArtist.toLowerCase();
   const key = `${lowerTitle}::::${lowerArtist}`;
-  
-  const cached = albumCache.get(key);
-  if (cached) return cached;
 
   const db = await initDB();
 
-  const existing = await db.query('SELECT id FROM albums WHERE LOWER(title) = $1 AND LOWER(artist_name) = $2', [lowerTitle, lowerArtist]);
-  if (existing.rows.length > 0) {
-    albumCache.set(key, existing.rows[0].id);
-    return existing.rows[0].id;
+  const cached = albumCache.get(key);
+  if (cached) {
+    await updateAlbumFlags(cached, opts);
+    return cached;
   }
 
+  const existing = await db.query('SELECT id FROM albums WHERE LOWER(title) = $1 AND LOWER(artist_name) = $2', [lowerTitle, lowerArtist]);
+  if (existing.rows.length > 0) {
+    const id = existing.rows[0].id as string;
+    albumCache.set(key, id);
+    await updateAlbumFlags(id, opts);
+    return id;
+  }
+
+  const { extractEditionSuffix } = await import('../utils/editionSuffix');
+  const { normalizedTitle, editionLabel } = extractEditionSuffix(safeTitle);
+  const lowerNormalized = (normalizedTitle || safeTitle).toLowerCase();
+
+  // Resolve release_group_id: MBID first, then normalized-title heuristic,
+  // then mint a fresh UUID. We never auto-regroup albums whose owner
+  // already chose to merge or split them manually.
+  let releaseGroupId: string | null = null;
+  const mbReleaseGroupId = opts.mbReleaseGroupId || null;
+
+  if (mbReleaseGroupId) {
+    const mbidHit = await db.query(
+      `SELECT release_group_id FROM albums WHERE mb_release_group_id = $1 AND release_group_id IS NOT NULL LIMIT 1`,
+      [mbReleaseGroupId]
+    );
+    if (mbidHit.rows.length > 0) {
+      releaseGroupId = mbidHit.rows[0].release_group_id;
+    }
+  }
+
+  if (!releaseGroupId) {
+    const heuristicHit = await db.query(
+      `SELECT release_group_id FROM albums
+       WHERE LOWER(normalized_title) = $1
+         AND LOWER(artist_name) = $2
+         AND release_group_id IS NOT NULL
+         AND manual_group_override = FALSE
+       LIMIT 1`,
+      [lowerNormalized, lowerArtist]
+    );
+    if (heuristicHit.rows.length > 0) {
+      releaseGroupId = heuristicHit.rows[0].release_group_id;
+    }
+  }
+
+  const isCompilation = inferCompilationFromTrack(opts.releaseType, opts.isCompilation);
+
   const res = await db.query(
-    `INSERT INTO albums (title, artist_name) VALUES ($1, $2) ON CONFLICT (title, artist_name) DO UPDATE SET title = EXCLUDED.title RETURNING id`,
-    [safeTitle, safeArtist]
+    `INSERT INTO albums (
+       title, artist_name, normalized_title, edition_label,
+       mb_release_group_id, release_group_id, release_year, is_compilation
+     )
+     VALUES ($1, $2, $3, $4, $5, COALESCE($6::uuid, gen_random_uuid()), $7, $8)
+     ON CONFLICT (title, artist_name) DO UPDATE SET
+       normalized_title = COALESCE(albums.normalized_title, EXCLUDED.normalized_title),
+       edition_label = COALESCE(albums.edition_label, EXCLUDED.edition_label),
+       mb_release_group_id = COALESCE(albums.mb_release_group_id, EXCLUDED.mb_release_group_id),
+       release_group_id = COALESCE(albums.release_group_id, EXCLUDED.release_group_id),
+       release_year = COALESCE(albums.release_year, EXCLUDED.release_year),
+       is_compilation = albums.is_compilation OR EXCLUDED.is_compilation
+     RETURNING id`,
+    [
+      safeTitle,
+      safeArtist,
+      normalizedTitle || safeTitle,
+      editionLabel,
+      mbReleaseGroupId,
+      releaseGroupId,
+      opts.year || null,
+      isCompilation,
+    ]
   );
   const id = (res.rows[0] as any).id as string;
   albumCache.set(key, id);
   return id;
+}
+
+// Idempotent OR-merge of per-track signals onto an existing album row.
+// Called on every getOrCreateAlbum hit (including cache hits) so that
+// each subsequent track in the same album can promote the album-level
+// is_compilation, mb_release_group_id, and release_year fields.
+export async function updateAlbumFlags(albumId: string, opts: AlbumUpsertOpts): Promise<void> {
+  if (!opts) return;
+  const isCompilation = inferCompilationFromTrack(opts.releaseType, opts.isCompilation);
+  const mbRgid = opts.mbReleaseGroupId || null;
+  const year = opts.year || null;
+  if (!isCompilation && !mbRgid && !year) return;
+
+  const db = await initDB();
+  await db.query(
+    `UPDATE albums SET
+       is_compilation = is_compilation OR $2,
+       mb_release_group_id = COALESCE(mb_release_group_id, $3),
+       release_year = LEAST(COALESCE(release_year, $4), COALESCE($4, release_year))
+     WHERE id = $1`,
+    [albumId, isCompilation, mbRgid, year]
+  );
+
+  // If we just learned an MBID and the album has no group yet (or shares
+  // its group with no one else), try to merge into an existing group.
+  if (mbRgid) {
+    await db.query(
+      `UPDATE albums dst SET release_group_id = src.release_group_id
+       FROM (
+         SELECT release_group_id FROM albums
+         WHERE mb_release_group_id = $2 AND release_group_id IS NOT NULL
+           AND id <> $1
+         LIMIT 1
+       ) src
+       WHERE dst.id = $1
+         AND dst.manual_group_override = FALSE
+         AND dst.release_group_id IS DISTINCT FROM src.release_group_id`,
+      [albumId, mbRgid]
+    );
+  }
+}
+
+// Recomputes artists.is_va_pseudo: TRUE when EVERY track for this artist
+// lives on a compilation album. Used to suppress "Various Artists" and
+// similar pseudo-entities from artist-facing surfaces without resorting
+// to the legacy name-list match.
+export async function recomputeIsVaPseudo(artistId?: string | null): Promise<void> {
+  const db = await initDB();
+  if (artistId) {
+    await db.query(
+      `UPDATE artists a SET is_va_pseudo = (
+         SELECT COUNT(*) > 0 AND BOOL_AND(COALESCE(al.is_compilation, FALSE))
+         FROM tracks t LEFT JOIN albums al ON al.id = t.album_id
+         WHERE t.artist_id = a.id
+       )
+       WHERE a.id = $1`,
+      [artistId]
+    );
+  } else {
+    await db.query(
+      `UPDATE artists a SET is_va_pseudo = sub.flag
+       FROM (
+         SELECT t.artist_id AS id,
+                COUNT(*) > 0 AND BOOL_AND(COALESCE(al.is_compilation, FALSE)) AS flag
+         FROM tracks t LEFT JOIN albums al ON al.id = t.album_id
+         WHERE t.artist_id IS NOT NULL
+         GROUP BY t.artist_id
+       ) sub
+       WHERE a.id = sub.id`
+    );
+  }
 }
 
 export async function getOrCreateGenre(name?: string | null): Promise<string> {
@@ -1557,6 +1830,285 @@ export async function getAlbumById(id: string) {
   const db = await initDB();
   const res = await db.query('SELECT * FROM albums WHERE id = $1', [id]);
   return res.rows[0] || null;
+}
+
+// All editions in the same release-group, ordered by canonical-first
+// (most tracks → earliest release_year → earliest created_at).
+export async function getReleaseGroupEditions(releaseGroupId: string) {
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT al.*, COUNT(t.id)::int AS track_count
+     FROM albums al
+     LEFT JOIN tracks t ON t.album_id = al.id
+     WHERE al.release_group_id = $1
+     GROUP BY al.id
+     ORDER BY track_count DESC,
+              COALESCE(al.release_year, 9999) ASC,
+              al.created_at ASC`,
+    [releaseGroupId]
+  );
+  return res.rows;
+}
+
+// Manual merge: move `sourceAlbumId` into the release group of
+// `targetAlbumId`. Sets manual_group_override on the source so future
+// rescans can't pull it back into a heuristic group.
+export async function mergeAlbumIntoGroup(sourceAlbumId: string, targetAlbumId: string) {
+  if (sourceAlbumId === targetAlbumId) return;
+  const db = await initDB();
+  const target = await db.query('SELECT release_group_id FROM albums WHERE id = $1', [targetAlbumId]);
+  if (target.rows.length === 0) throw new Error('Target album not found');
+  const rgid = target.rows[0].release_group_id;
+  if (!rgid) throw new Error('Target album has no release group');
+  await db.query(
+    `UPDATE albums SET release_group_id = $2, manual_group_override = TRUE WHERE id = $1`,
+    [sourceAlbumId, rgid]
+  );
+  await db.query(`UPDATE albums SET manual_group_override = TRUE WHERE id = $1`, [targetAlbumId]);
+}
+
+// Manual split: give this album a fresh release group of its own, and
+// pin the override so heuristics won't re-merge it on the next scan.
+export async function unmergeAlbumFromGroup(albumId: string) {
+  const db = await initDB();
+  await db.query(
+    `UPDATE albums SET release_group_id = gen_random_uuid(), manual_group_override = TRUE WHERE id = $1`,
+    [albumId]
+  );
+}
+
+// ==========================================
+// MULTI-VALUED ARTIST CREDITS (composer, conductor, performer, …)
+// ==========================================
+
+export interface ScannedCredit {
+  role: string;
+  name: string;
+  detail?: string;
+}
+
+// Writes the tag-derived credits for a single track. The DELETE is
+// scoped to source='tag' so MusicBrainz-sourced rows (future opt-in
+// enrichment) survive rescans. Idempotent: calling this twice with the
+// same input leaves the same set of rows.
+export async function setTrackCredits(trackId: string, credits: ScannedCredit[]): Promise<void> {
+  if (!trackId) return;
+  const db = await initDB();
+  await db.query(
+    `DELETE FROM track_artist_credits WHERE track_id = $1 AND source = 'tag'`,
+    [trackId]
+  );
+  if (!Array.isArray(credits) || credits.length === 0) return;
+
+  // Group by (role) so per-role positions are zero-based and meaningful
+  // for ordering "Composer 1 / Composer 2".
+  const positionByRole = new Map<string, number>();
+  for (const c of credits) {
+    const role = (c.role || '').trim().toLowerCase();
+    const name = (c.name || '').trim();
+    if (!role || !name) continue;
+    const detail = (c.detail || '').trim();
+    let artistId: string | null;
+    try {
+      artistId = await getOrCreateArtist(name, null);
+    } catch {
+      continue;
+    }
+    if (!artistId) continue;
+    const position = positionByRole.get(role) ?? 0;
+    positionByRole.set(role, position + 1);
+    await db.query(
+      `INSERT INTO track_artist_credits
+         (track_id, artist_id, role, position, source, detail)
+       VALUES ($1, $2, $3, $4, 'tag', $5)
+       ON CONFLICT (track_id, artist_id, role, detail) DO UPDATE SET position = EXCLUDED.position`,
+      [trackId, artistId, role, position, detail]
+    );
+  }
+}
+
+// Writes credits from an external provider for a single track. The DELETE
+// is scoped to (track_id, source) so each provider owns its own slice
+// independently and re-running an enrichment overwrites only that
+// provider's rows. Tag-derived credits (source = 'tag') are never
+// touched by this path.
+export async function setEnrichedTrackCredits(
+  trackId: string,
+  source: string,
+  credits: ScannedCredit[],
+): Promise<void> {
+  if (!trackId || !source || source === 'tag') return;
+  const db = await initDB();
+  await db.query(
+    `DELETE FROM track_artist_credits WHERE track_id = $1 AND source = $2`,
+    [trackId, source]
+  );
+  if (!Array.isArray(credits) || credits.length === 0) return;
+
+  const positionByRole = new Map<string, number>();
+  for (const c of credits) {
+    const role = (c.role || '').trim().toLowerCase();
+    const name = (c.name || '').trim();
+    if (!role || !name) continue;
+    const detail = (c.detail || '').trim();
+    let artistId: string | null;
+    try {
+      artistId = await getOrCreateArtist(name, null);
+    } catch {
+      continue;
+    }
+    if (!artistId) continue;
+    const position = positionByRole.get(role) ?? 0;
+    positionByRole.set(role, position + 1);
+    await db.query(
+      `INSERT INTO track_artist_credits
+         (track_id, artist_id, role, position, source, detail)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (track_id, artist_id, role, detail) DO UPDATE SET position = EXCLUDED.position, source = EXCLUDED.source`,
+      [trackId, artistId, role, position, source, detail]
+    );
+  }
+}
+
+export async function setTrackGeniusSongId(trackId: string, geniusSongId: string | null): Promise<void> {
+  const db = await initDB();
+  await db.query(`UPDATE tracks SET genius_song_id = $2 WHERE id = $1`, [trackId, geniusSongId]);
+}
+
+// Counts of credit rows by source so the settings UI can show "73 rows
+// from tags, 18 from MusicBrainz, 5 from Genius" — a passive progress
+// indicator since the import job is admin-triggered, not scheduled.
+export async function getCreditsStatus(): Promise<{ total: number; bySource: Record<string, number>; tracksWithCredits: number; eligibleMusicbrainz: number; eligibleGenius: number; alreadyMusicbrainz: number; alreadyGenius: number }> {
+  const db = await initDB();
+  const [byRole, eligibleMb, eligibleGenius, distinctTracks, alreadyMb, alreadyGenius] = await Promise.all([
+    db.query(`SELECT source, COUNT(*)::int AS c FROM track_artist_credits GROUP BY source`),
+    db.query(`SELECT COUNT(*)::int AS c FROM tracks WHERE mb_recording_id IS NOT NULL`),
+    db.query(`SELECT COUNT(*)::int AS c FROM tracks WHERE COALESCE(title, '') <> '' AND COALESCE(artist, album_artist, '') <> ''`),
+    db.query(`SELECT COUNT(DISTINCT track_id)::int AS c FROM track_artist_credits`),
+    db.query(`SELECT COUNT(DISTINCT track_id)::int AS c FROM track_artist_credits WHERE source = 'musicbrainz'`),
+    db.query(`SELECT COUNT(DISTINCT track_id)::int AS c FROM track_artist_credits WHERE source = 'genius'`),
+  ]);
+  const bySource: Record<string, number> = {};
+  let total = 0;
+  for (const row of byRole.rows as any[]) {
+    bySource[row.source] = row.c;
+    total += row.c;
+  }
+  return {
+    total,
+    bySource,
+    tracksWithCredits: distinctTracks.rows[0]?.c || 0,
+    eligibleMusicbrainz: eligibleMb.rows[0]?.c || 0,
+    eligibleGenius: eligibleGenius.rows[0]?.c || 0,
+    alreadyMusicbrainz: alreadyMb.rows[0]?.c || 0,
+    alreadyGenius: alreadyGenius.rows[0]?.c || 0,
+  };
+}
+
+// Returns up to `limit` tracks that have an mb_recording_id but no
+// credits from MusicBrainz yet. Powers the MB enrichment job.
+export async function getTracksNeedingMbCredits(limit: number): Promise<Array<{ id: string; mb_recording_id: string; title: string; artist: string }>> {
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT t.id, t.mb_recording_id, t.title, COALESCE(t.artist, t.album_artist) AS artist
+     FROM tracks t
+     WHERE t.mb_recording_id IS NOT NULL
+       AND NOT EXISTS (
+         SELECT 1 FROM track_artist_credits tac
+         WHERE tac.track_id = t.id AND tac.source = 'musicbrainz'
+       )
+     LIMIT $1`,
+    [Math.max(1, Math.min(5000, limit))]
+  );
+  return res.rows as any[];
+}
+
+// Returns up to `limit` tracks that don't yet have Genius credits.
+// Prefers tracks with a cached genius_song_id so they skip the search
+// round-trip; falls back to (title, artist) for new tracks.
+export async function getTracksNeedingGeniusCredits(limit: number): Promise<Array<{ id: string; title: string; artist: string; genius_song_id: string | null }>> {
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT t.id, t.title, COALESCE(t.artist, t.album_artist) AS artist, t.genius_song_id
+     FROM tracks t
+     WHERE COALESCE(t.title, '') <> ''
+       AND COALESCE(t.artist, t.album_artist, '') <> ''
+       AND NOT EXISTS (
+         SELECT 1 FROM track_artist_credits tac
+         WHERE tac.track_id = t.id AND tac.source = 'genius'
+       )
+     ORDER BY (t.genius_song_id IS NOT NULL) DESC
+     LIMIT $1`,
+    [Math.max(1, Math.min(5000, limit))]
+  );
+  return res.rows as any[];
+}
+
+// Aggregated role list for an artist: roles ordered by frequency, plus
+// total credit count. Used by the Artist detail page to drive the role
+// filter chip row and the "roles in your library" header line.
+export async function getArtistRolesInLibrary(artistId: string): Promise<{ role: string; credits: number }[]> {
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT role, COUNT(*)::int AS credits
+     FROM track_artist_credits
+     WHERE artist_id = $1
+     GROUP BY role
+     ORDER BY credits DESC, role ASC`,
+    [artistId]
+  );
+  return res.rows as { role: string; credits: number }[];
+}
+
+// For an artist + role, returns the albums where they hold that credit.
+// Powers the role-filtered album view on the Artist detail page.
+export async function getArtistAlbumsByRole(artistId: string, role: string): Promise<any[]> {
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT al.*, COUNT(DISTINCT t.id)::int AS credited_track_count
+     FROM track_artist_credits tac
+     JOIN tracks t ON t.id = tac.track_id
+     JOIN albums al ON al.id = t.album_id
+     WHERE tac.artist_id = $1 AND tac.role = $2
+     GROUP BY al.id
+     ORDER BY COALESCE(al.release_year, 9999) DESC, al.title ASC`,
+    [artistId, role]
+  );
+  return res.rows;
+}
+
+// All credits for every track on an album, keyed by track_id. Returned
+// as a flat list (the route handler shapes it into a map). Includes the
+// artist's display name so the UI doesn't need a second round-trip.
+export async function getAlbumCredits(albumId: string): Promise<any[]> {
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT tac.track_id, tac.artist_id, tac.role, tac.position, tac.detail, tac.source,
+            a.name AS artist_name
+     FROM track_artist_credits tac
+     JOIN tracks t ON t.id = tac.track_id
+     JOIN artists a ON a.id = tac.artist_id
+     WHERE t.album_id = $1
+     ORDER BY tac.track_id, tac.role, tac.position`,
+    [albumId]
+  );
+  return res.rows;
+}
+
+// Credits for a single track. Used by the track context menu's
+// "view credits" sub-panel.
+export async function getTrackCredits(trackId: string): Promise<any[]> {
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT tac.artist_id, tac.role, tac.position, tac.detail, tac.source,
+            a.name AS artist_name
+     FROM track_artist_credits tac
+     JOIN artists a ON a.id = tac.artist_id
+     WHERE tac.track_id = $1
+     ORDER BY tac.role, tac.position`,
+    [trackId]
+  );
+  return res.rows;
 }
 
 export async function getGenreById(id: string) {
@@ -1602,7 +2154,7 @@ export async function getSimilarArtistsByAudioProfile(artistId: string, limit: n
       JOIN track_features tf ON tf.track_id = t.id
       WHERE t.artist_id = $1
         AND tf.acoustic_vector_8d IS NOT NULL
-        AND LOWER(TRIM(COALESCE(t.album_artist, t.artist, ''))) NOT IN ('various artists', 'various', 'unknown artist', '???')
+        AND LOWER(TRIM(COALESCE(t.album_artist, t.artist, ''))) NOT IN ('unknown artist', '???')
     ),
     candidates AS (
       SELECT
@@ -1619,7 +2171,8 @@ export async function getSimilarArtistsByAudioProfile(artistId: string, limit: n
       JOIN track_features tf ON tf.track_id = t.id
       WHERE a.id <> $1
         AND tf.acoustic_vector_8d IS NOT NULL
-        AND LOWER(TRIM(a.name)) NOT IN ('various artists', 'various', 'unknown artist', '???')
+        AND COALESCE(a.is_va_pseudo, FALSE) = FALSE
+        AND LOWER(TRIM(a.name)) NOT IN ('unknown artist', '???')
       GROUP BY a.id, a.name, a.image_url
       HAVING COUNT(tf.acoustic_vector_8d) >= 2
     ),
@@ -2351,7 +2904,8 @@ export async function migrateEntityIds() {
     : '';
 
   const res = await db.query(`
-    SELECT id, artist, album_artist, artists, album, genre, genres, mb_artist_id, mb_album_artist_id
+    SELECT id, artist, album_artist, artists, album, genre, genres, mb_artist_id, mb_album_artist_id,
+           mb_release_group_id, release_type, is_compilation, year
     FROM tracks
     WHERE artist_id IS NULL
       OR album_id IS NULL
@@ -2407,7 +2961,12 @@ export async function migrateEntityIds() {
     // 2. Fetch or create canonical entities, ensuring valid strings
     const primaryArtistKey = normalizeArtistIdentityKey(albumArtistName);
     const artistId = await getOrCreateArtist(albumArtistName, safePrimaryMbid);
-    const albumId = await getOrCreateAlbum(albumTitle, albumArtistName);
+    const albumId = await getOrCreateAlbum(albumTitle, albumArtistName, {
+      mbReleaseGroupId: (row as any).mb_release_group_id || null,
+      year: (row as any).year || null,
+      releaseType: (row as any).release_type || null,
+      isCompilation: (row as any).is_compilation || false,
+    });
     const genreId = await getOrCreateGenre(primaryGenreName);
 
     // Create/update entities for all individual artists to ensure they exist for 'Also appears on'
@@ -2440,6 +2999,136 @@ export async function migrateEntityIds() {
   if (!compoundCreditSplitDone) {
     await setSystemSetting(COMPOUND_CREDIT_SPLIT_SETTING, true);
   }
+}
+
+const RELEASE_GROUP_BACKFILL_SETTING = 'releaseGroupBackfillV1';
+
+// One-shot migration that populates the release-group columns on existing
+// album rows. Idempotent: skips when the system setting is set, and any
+// row that already has a release_group_id is left alone. Designed to run
+// after migrateEntityIds(), since it depends on albums being upserted.
+export async function migrateReleaseGroups() {
+  const done = await getSystemSetting(RELEASE_GROUP_BACKFILL_SETTING) === true;
+  if (done) {
+    // Even when the backfill has run before, keep is_va_pseudo current
+    // for libraries that have been mutated by scans since.
+    await recomputeIsVaPseudo();
+    return;
+  }
+
+  const db = await initDB();
+  console.log('[DB Migration] Backfilling release groups, edition labels, and compilation flags...');
+
+  // 1. Album-level is_compilation from tracks. Primary signal: any track
+  //    whose release_type contains "compilation" (MusicBrainz RELEASETYPE
+  //    secondary type). Fallback: any track with the legacy is_compilation
+  //    flag (TCMP/cpil/COMPILATION=1). Final fallback below at step 4
+  //    handles VA-named album_artist for legacies with neither tag.
+  await db.query(`
+    UPDATE albums al SET is_compilation = TRUE
+    WHERE al.is_compilation = FALSE
+      AND EXISTS (
+        SELECT 1 FROM tracks t
+        WHERE t.album_id = al.id
+          AND (LOWER(COALESCE(t.release_type, '')) LIKE '%compilation%'
+               OR t.is_compilation = TRUE)
+      )
+  `);
+
+  // 2. Copy mb_release_group_id from any track in the album that has one.
+  await db.query(`
+    UPDATE albums al SET mb_release_group_id = sub.rgid
+    FROM (
+      SELECT DISTINCT ON (album_id) album_id, mb_release_group_id AS rgid
+      FROM tracks
+      WHERE mb_release_group_id IS NOT NULL AND album_id IS NOT NULL
+      ORDER BY album_id, mb_release_group_id
+    ) sub
+    WHERE al.id = sub.album_id AND al.mb_release_group_id IS NULL
+  `);
+
+  // 3. Copy release_year (min track year) for any album lacking one.
+  await db.query(`
+    UPDATE albums al SET release_year = sub.y
+    FROM (
+      SELECT album_id, MIN(year) AS y
+      FROM tracks
+      WHERE year IS NOT NULL AND year > 0 AND album_id IS NOT NULL
+      GROUP BY album_id
+    ) sub
+    WHERE al.id = sub.album_id AND al.release_year IS NULL
+  `);
+
+  // 4. Last-resort compilation: album_artist literally is "Various Artists"
+  //    or its short forms. Only used for albums where neither RELEASETYPE
+  //    nor TCMP triggered. This is the legacy name-match precedence, kept
+  //    here (not in user-facing query filters) for poorly-tagged libraries.
+  await db.query(`
+    UPDATE albums al SET is_compilation = TRUE
+    WHERE al.is_compilation = FALSE
+      AND LOWER(COALESCE(al.artist_name, '')) IN ('various artists', 'various', 'va', 'compilation', 'compilations')
+  `);
+
+  // 5. JS-side: extract edition labels and normalized titles for any
+  //    album that doesn't have them yet. Albums table is typically small
+  //    (single-digit thousands at most) so a JS loop is fine.
+  const { extractEditionSuffix } = await import('../utils/editionSuffix');
+  const albumsForEdition = await db.query(
+    `SELECT id, title FROM albums WHERE normalized_title IS NULL`
+  );
+  for (const row of albumsForEdition.rows) {
+    const { normalizedTitle, editionLabel } = extractEditionSuffix(row.title || '');
+    await db.query(
+      `UPDATE albums SET normalized_title = $2, edition_label = $3 WHERE id = $1`,
+      [row.id, normalizedTitle || row.title || '', editionLabel]
+    );
+  }
+
+  // 6. Assign release_group_id by MBID for any album that lacks one.
+  //    Postgres has no MAX(uuid), so we cast through text to pick a
+  //    deterministic representative when albums already share an MBID.
+  await db.query(`
+    UPDATE albums dst SET release_group_id = src.rgid
+    FROM (
+      SELECT mb_release_group_id,
+             COALESCE(MIN(release_group_id::text)::uuid, gen_random_uuid()) AS rgid
+      FROM albums
+      WHERE mb_release_group_id IS NOT NULL
+      GROUP BY mb_release_group_id
+    ) src
+    WHERE dst.mb_release_group_id = src.mb_release_group_id
+      AND dst.release_group_id IS NULL
+  `);
+
+  // 7. Assign release_group_id by (normalized_title, artist_name) heuristic
+  //    for remaining albums. Albums sharing the same normalized title and
+  //    artist get the same UUID.
+  await db.query(`
+    UPDATE albums dst SET release_group_id = src.rgid
+    FROM (
+      SELECT LOWER(normalized_title) AS nt, LOWER(artist_name) AS an,
+             COALESCE(MIN(release_group_id::text)::uuid, gen_random_uuid()) AS rgid
+      FROM albums
+      WHERE manual_group_override = FALSE
+      GROUP BY LOWER(normalized_title), LOWER(artist_name)
+    ) src
+    WHERE LOWER(dst.normalized_title) = src.nt
+      AND LOWER(COALESCE(dst.artist_name, '')) = src.an
+      AND dst.release_group_id IS NULL
+      AND dst.manual_group_override = FALSE
+  `);
+
+  // 8. Mint a fresh release_group_id for any remaining orphans.
+  await db.query(`
+    UPDATE albums SET release_group_id = gen_random_uuid()
+    WHERE release_group_id IS NULL
+  `);
+
+  // 9. Refresh derived artist flag.
+  await recomputeIsVaPseudo();
+
+  await setSystemSetting(RELEASE_GROUP_BACKFILL_SETTING, true);
+  console.log('[DB Migration] Release-group backfill complete.');
 }
 
 // ==========================================
@@ -3211,7 +3900,7 @@ export async function getAutoAddCandidates(userId: string, limit: number = 20) {
     WHERE ups.user_id = $1
       AND s.artist_id IS NULL
       AND d.artist_id IS NULL
-      AND LOWER(a.name) NOT IN ('various artists', 'various', 'va', 'compilation', 'compilations')
+      AND COALESCE(a.is_va_pseudo, FALSE) = FALSE
     GROUP BY a.id, a.name, a.image_url, a.mbid
     HAVING SUM(ups.play_count) >= 3
     ORDER BY user_plays DESC
@@ -3243,7 +3932,7 @@ export async function searchLibraryArtists(userId: string, query: string, limit:
     JOIN tracks t ON t.artist_id = a.id
     LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
     WHERE (LOWER(a.name) LIKE $2 OR ($4::text IS NOT NULL AND a.normalized_key LIKE $4))
-      AND LOWER(a.name) NOT IN ('various artists', 'various', 'va', 'compilation', 'compilations')
+      AND COALESCE(a.is_va_pseudo, FALSE) = FALSE
     GROUP BY a.id, a.name, a.image_url, a.mbid
     ORDER BY user_plays DESC, a.name ASC
     LIMIT $3
@@ -3263,7 +3952,7 @@ export async function getUserTopArtists(userId: string, limit: number = 10) {
     JOIN tracks t ON t.id = ups.track_id
     JOIN artists a ON a.id = t.artist_id
     WHERE ups.user_id = $1
-      AND LOWER(a.name) NOT IN ('various artists', 'various', 'va', 'compilation', 'compilations')
+      AND COALESCE(a.is_va_pseudo, FALSE) = FALSE
     GROUP BY a.id, a.name, a.image_url, a.mbid
     ORDER BY user_plays DESC
     LIMIT $2
