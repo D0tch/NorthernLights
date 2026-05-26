@@ -16,19 +16,11 @@ The Hub is the listener's home: daily mixes, artist radios, and the time-of-day 
 
 ![Hub](docs/screenshots/NorthernLights-hub.png)
 
-![Hub — alternative layout](docs/screenshots/NorthernLights-hub2.png)
+The phone layout adapts the same surfaces — Hub, single album, artist detail, albums grid, and playlists — to a portrait, gesture-driven shell.
 
-Album, artist, and library views — full-bleed artwork, popular local tracks, and upcoming shows where available.
-
-![Album detail](docs/screenshots/NorthernLights-singleAlbum.png)
-
-![Artist detail](docs/screenshots/NorthernLights-artist.png)
-
-![Albums grid](docs/screenshots/NorthernLights-albums.png)
-
-Playlists — manual, prompt-generated, and system-generated all live alongside each other.
-
-![Playlists](docs/screenshots/NorthernLights-playlists.png)
+| Hub | Album | Artist | Albums | Playlists |
+| :---: | :---: | :---: | :---: | :---: |
+| ![Hub (phone)](docs/screenshots/NorthernLights-hub2.png) | ![Album detail (phone)](docs/screenshots/NorthernLights-singleAlbum.png) | ![Artist detail (phone)](docs/screenshots/NorthernLights-artist.png) | ![Albums grid (phone)](docs/screenshots/NorthernLights-albums.png) | ![Playlists (phone)](docs/screenshots/NorthernLights-playlists.png) |
 
 Settings cover library scanning, metadata providers, playback, LLM credentials, and user administration.
 
