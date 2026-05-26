@@ -370,9 +370,10 @@ export function mapTrackToSubsonic(track: any, userId?: string) {
   };
 }
 
-function mapAlbum(row: any, songCount?: number, duration?: number) {
+export function mapAlbum(row: any, songCount?: number, duration?: number) {
   return {
     id: subsonicAlbumId(row.id),
+    album: row.title || 'Unknown Album',
     name: row.title || 'Unknown Album',
     title: row.title || 'Unknown Album',
     artist: row.artist_name || undefined,
@@ -380,6 +381,7 @@ function mapAlbum(row: any, songCount?: number, duration?: number) {
     coverArt: subsonicAlbumId(row.id),
     songCount: Number(songCount || row.song_count || 0),
     duration: Number(duration || row.duration || 0),
+    playCount: Number(row.play_count || 0),
     created: toIso(row.created_at),
     year: row.release_year || undefined,
     genre: row.genre || undefined,
@@ -572,6 +574,7 @@ async function getAlbumSummaries(userId: string, where = '', params: unknown[] =
 }
 
 async function handleSystem(req: Request, res: Response, method: string, ctx: SubsonicContext) {
+  const db = await initDB();
   switch (method) {
     case 'ping':
       return sendSubsonic(req, res, subsonicSuccess({}));
@@ -594,6 +597,24 @@ async function handleSystem(req: Request, res: Response, method: string, ctx: Su
           role: ctx.role,
         },
       }));
+    case 'getscanstatus': {
+      const count = await db.query('SELECT COUNT(*)::int AS count FROM tracks');
+      return sendSubsonic(req, res, subsonicSuccess({
+        scanStatus: {
+          scanning: false,
+          count: Number(count.rows[0]?.count || 0),
+        },
+      }));
+    }
+    case 'startscan': {
+      const count = await db.query('SELECT COUNT(*)::int AS count FROM tracks');
+      return sendSubsonic(req, res, subsonicSuccess({
+        scanStatus: {
+          scanning: false,
+          count: Number(count.rows[0]?.count || 0),
+        },
+      }));
+    }
     default:
       return false;
   }
@@ -718,21 +739,37 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
     case 'getalbumlist2': {
       const type = (getParam(req, 'type') || 'alphabeticalByName').toLowerCase();
       const size = Math.max(1, Math.min(500, parseInt(getParam(req, 'size') || '10', 10) || 10));
+      const offset = Math.max(0, parseInt(getParam(req, 'offset') || '0', 10) || 0);
       const genre = getParam(req, 'genre');
+      const fromYear = parseInt(getParam(req, 'fromYear') || '', 10);
+      const toYear = parseInt(getParam(req, 'toYear') || '', 10);
       let order = 'a.title ASC';
       if (type === 'newest' || type === 'recent') order = 'a.created_at DESC';
-      if (type === 'random') order = 'RANDOM()';
+      if (type === 'random') order = 'md5(a.id::text)';
       if (type === 'alphabeticalbyartist') order = 'a.artist_name ASC, a.title ASC';
+      if (type === 'byyear') order = fromYear > toYear ? 'a.release_year DESC NULLS LAST, a.title ASC' : 'a.release_year ASC NULLS LAST, a.title ASC';
+      if (type === 'highest' || type === 'frequent') order = 'play_count DESC, a.title ASC';
+      if (type === 'starred') order = 'a.title ASC';
       const params: unknown[] = [];
-      const where = genre ? 'WHERE LOWER(t.genre) = LOWER($1)' : '';
-      if (genre) params.push(genre);
+      const conditions: string[] = [];
+      if (genre || type === 'bygenre') {
+        params.push(genre || '');
+        conditions.push(`LOWER(t.genre) = LOWER($${params.length})`);
+      }
+      if (type === 'byyear' && Number.isFinite(fromYear) && Number.isFinite(toYear)) {
+        params.push(Math.min(fromYear, toYear), Math.max(fromYear, toYear));
+        conditions.push(`a.release_year BETWEEN $${params.length - 1} AND $${params.length}`);
+      }
+      params.push(size, offset);
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
       const albums = await db.query(`
-        SELECT a.*, COUNT(t.id)::int AS song_count, COALESCE(SUM(t.duration), 0)::int AS duration, MIN(t.artist_id::text) AS artist_id, MIN(t.genre) AS genre
+        SELECT a.*, COUNT(t.id)::int AS song_count, COALESCE(SUM(t.duration), 0)::int AS duration,
+               MIN(t.artist_id::text) AS artist_id, MIN(t.genre) AS genre, COALESCE(SUM(t.play_count), 0)::int AS play_count
         FROM albums a LEFT JOIN tracks t ON t.album_id = a.id
         ${where}
         GROUP BY a.id
         ORDER BY ${order}
-        LIMIT ${size}
+        LIMIT $${params.length - 1} OFFSET $${params.length}
       `, params);
       return sendSubsonic(req, res, subsonicSuccess(buildAlbumListPayload(method, albums.rows)));
     }
