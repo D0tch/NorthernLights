@@ -89,7 +89,7 @@ These are Aurora JWT endpoints, not `/rest` endpoints.
 | Annotation/playback | `star`, `unstar`, `setRating`, `scrobble` |
 | Empty compatibility stubs | Podcasts, shares, internet radio, chat, bookmarks, videos, captions, avatar, and jukebox probes return successful empty payloads where Aurora has no equivalent feature. |
 
-Aurora exposes opaque Subsonic IDs as `artist:<uuid>`, `album:<uuid>`, and `song:<trackId>`. Use IDs returned by browsing/search/list endpoints instead of constructing IDs manually.
+Aurora exposes opaque Subsonic IDs as `artist:<uuid>`, `album:<uuid>`, and URL-safe `song:v1:<encodedTrackId>` values. Use IDs returned by browsing/search/list endpoints instead of constructing IDs manually. Older `song:<rawTrackId>` IDs are still accepted for compatibility.
 
 For compatibility with clients such as Symfonium, each versioned endpoint returns only its matching response root. For example, `getAlbumList2` returns `albumList2` only, and `search3` returns `searchResult3` only. Directory browsing responses from `getMusicDirectory` include Subsonic `child` entries with `title`, `parent`, and `isDir` fields for artist and album folders. `getAlbumList`/`getAlbumList2` honor `size` and `offset` pagination for full-library syncs. Empty-query `search3` is supported for fast full-track syncs and honors `artistOffset`, `albumOffset`, `songOffset`, `artistCount`, `albumCount`, and `songCount`.
 
