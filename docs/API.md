@@ -61,7 +61,7 @@ Every structured response includes:
     "status": "ok",
     "version": "1.16.1",
     "type": "aurora",
-    "serverVersion": "1.0.0-rc.3",
+    "serverVersion": "Aurora 1.0.0-rc.3",
     "openSubsonic": true
   }
 }
@@ -82,8 +82,8 @@ These are Aurora JWT endpoints, not `/rest` endpoints.
 | Group | Endpoints |
 | --- | --- |
 | System | `ping`, `getLicense`, `getOpenSubsonicExtensions`, `tokenInfo`, `getScanStatus`, `startScan` |
-| Browsing/library | `getMusicFolders`, `getIndexes`, `getMusicDirectory`, `getGenres`, `getArtists`, `getArtist`, `getAlbum`, `getSong` |
-| Lists/search | `getAlbumList`, `getAlbumList2`, `getRandomSongs`, `getSongsByGenre`, `getStarred`, `getStarred2`, `search`, `search2`, `search3` |
+| Browsing/library | `getMusicFolders`, `getIndexes`, `getMusicDirectory`, `getGenres`, `getArtists`, `getArtist`, `getAlbum`, `getSong`, empty `getArtistInfo`/`getArtistInfo2`/`getAlbumInfo`/`getAlbumInfo2` |
+| Lists/search | `getAlbumList`, `getAlbumList2`, `getRandomSongs`, `getSongsByGenre`, `getStarred`, `getStarred2`, `getNowPlaying`, `getTopSongs`, `search`, `search2`, `search3` |
 | Playlists | `getPlaylists`, `getPlaylist`, `createPlaylist`, `updatePlaylist`, `deletePlaylist` |
 | Media | `stream`, `download`, `hls`, internal `hlsSegment`, `getCoverArt` |
 | Annotation/playback | `star`, `unstar`, `setRating`, `scrobble` |
@@ -91,7 +91,7 @@ These are Aurora JWT endpoints, not `/rest` endpoints.
 
 Aurora exposes opaque Subsonic IDs as `artist:<uuid>`, `album:<uuid>`, and `song:<trackId>`. Use IDs returned by browsing/search/list endpoints instead of constructing IDs manually.
 
-For compatibility with clients such as Symfonium, each versioned endpoint returns only its matching response root. For example, `getAlbumList2` returns `albumList2` only, and `search3` returns `searchResult3` only. Directory browsing responses from `getMusicDirectory` include Subsonic `child` entries with `title`, `parent`, and `isDir` fields for artist and album folders. `getAlbumList`/`getAlbumList2` honor `size` and `offset` pagination for full-library syncs.
+For compatibility with clients such as Symfonium, each versioned endpoint returns only its matching response root. For example, `getAlbumList2` returns `albumList2` only, and `search3` returns `searchResult3` only. Directory browsing responses from `getMusicDirectory` include Subsonic `child` entries with `title`, `parent`, and `isDir` fields for artist and album folders. `getAlbumList`/`getAlbumList2` honor `size` and `offset` pagination for full-library syncs. Empty-query `search3` is supported for fast full-track syncs and honors `artistOffset`, `albumOffset`, `songOffset`, `artistCount`, `albumCount`, and `songCount`.
 
 ### Examples
 
@@ -113,7 +113,10 @@ Search:
 
 ```text
 GET /rest/search3.view?query=burial&apiKey=aurora_sub_...&f=json
+GET /rest/search3.view?query=&songCount=500&songOffset=0&artistCount=0&albumCount=0&apiKey=aurora_sub_...&f=json
 ```
+
+Subsonic request diagnostics are written to `logs/subsonic-api.log` with secrets omitted. Use this file when a third-party client reports a successful sync with no tracks.
 
 Media:
 
