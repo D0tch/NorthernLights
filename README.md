@@ -10,6 +10,30 @@ Current release: `1.0.0-rc.3`
 
 Aurora is ready for early self-hosted production use. Expect fast iteration and occasional migrations before the first stable `1.0.0` release.
 
+## Screenshots
+
+The Hub is the listener's home: daily mixes, artist radios, and the time-of-day daylist all live here.
+
+![Hub](docs/screenshots/NorthernLights-hub.png)
+
+![Hub — alternative layout](docs/screenshots/NorthernLights-hub2.png)
+
+Album, artist, and library views — full-bleed artwork, popular local tracks, and upcoming shows where available.
+
+![Album detail](docs/screenshots/NorthernLights-singleAlbum.png)
+
+![Artist detail](docs/screenshots/NorthernLights-artist.png)
+
+![Albums grid](docs/screenshots/NorthernLights-albums.png)
+
+Playlists — manual, prompt-generated, and system-generated all live alongside each other.
+
+![Playlists](docs/screenshots/NorthernLights-playlists.png)
+
+Settings cover library scanning, metadata providers, playback, LLM credentials, and user administration.
+
+![Settings](docs/screenshots/NorthernLights-settings.png)
+
 ## Quick Install
 
 Ubuntu and Debian users can install the runtime dependencies, clone the repository, build the app, create the Python ML environment, and start Aurora under PM2 with:
