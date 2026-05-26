@@ -13,11 +13,31 @@ import {
   getActiveSessionVariants,
 } from '../services/hlsStream.service';
 import { writeCastReceiverLog, writeHlsServerLog, writeHlsSessionLog } from '../services/debugLogger.service';
+import { logHls, logFfmpeg } from '../services/loggingConfig';
 
 const router = Router();
 const HLS_SEGMENT_LINE = /^(segment\d+\.ts)$/gm;
 const HLS_MEDIA_PLAYLIST_NAME = 'media.m3u8';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Scan for the first JPEG/PNG/GIF/WebP/BMP signature in `buf`. Returns the
+// offset, or -1 if none found within the first 4 KiB. Used to recover the
+// real image data when music-metadata's WMA WM/Picture parser slices the
+// buffer at the wrong offset (the description terminator is skipped),
+// leaving a small UTF-16LE prefix in front of the actual image bytes.
+function findImageStart(buf: Uint8Array): number {
+  const maxScan = Math.min(buf.length - 12, 4096);
+  for (let i = 0; i <= maxScan; i++) {
+    const b0 = buf[i], b1 = buf[i + 1], b2 = buf[i + 2], b3 = buf[i + 3];
+    if (b0 === 0xFF && b1 === 0xD8 && b2 === 0xFF) return i;
+    if (b0 === 0x89 && b1 === 0x50 && b2 === 0x4E && b3 === 0x47) return i;
+    if (b0 === 0x47 && b1 === 0x49 && b2 === 0x46 && b3 === 0x38) return i;
+    if (b0 === 0x52 && b1 === 0x49 && b2 === 0x46 && b3 === 0x46
+        && buf[i + 8] === 0x57 && buf[i + 9] === 0x45 && buf[i + 10] === 0x42 && buf[i + 11] === 0x50) return i;
+    if (b0 === 0x42 && b1 === 0x4D) return i;
+  }
+  return -1;
+}
 
 // Mime type map
 const MIME_TYPES: Record<string, string> = {
@@ -43,15 +63,37 @@ const setCorsHeaders = (req: any, res: any) => {
 };
 
 function isAllowedMediaOrigin(origin: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(origin);
+  } catch {
+    return false;
+  }
+
+  if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) return false;
+
   const allowedOrigins = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS.split(',').map((value) => value.trim()).filter(Boolean)
     : ['http://localhost:3000'];
   if (process.env.CAST_RECEIVER_ORIGIN) allowedOrigins.push(process.env.CAST_RECEIVER_ORIGIN);
-  return (
-    allowedOrigins.includes(origin) ||
-    origin.startsWith('https://www.gstatic.com') ||
-    origin.startsWith('https://cast.google.com')
+
+  const normalizedAllowedOrigins = new Set(
+    allowedOrigins
+      .map((value) => {
+        try {
+          const allowed = new URL(value);
+          if (allowed.username || allowed.password || allowed.pathname !== '/' || allowed.search || allowed.hash) return null;
+          return allowed.origin;
+        } catch {
+          return null;
+        }
+      })
+      .filter((value): value is string => Boolean(value))
   );
+
+  if (normalizedAllowedOrigins.has(parsed.origin)) return true;
+
+  return parsed.origin === 'https://www.gstatic.com' || parsed.origin === 'https://cast.google.com';
 }
 
 // ─── HLS Streaming ─────────────────────────────────────────────────────
@@ -212,7 +254,7 @@ async function resolveTrackForHls(trackId: string): Promise<{
 
 function normalizeTargetCodec(codec: string, quality: string): string {
   if ((codec === 'ac3' || codec === 'eac3') && quality !== 'source' && parseInt(quality, 10) < 256) {
-    console.log(`[HLS] Overriding ${codec} → AAC (${quality} too low for AC-3)`);
+    logHls(`[HLS] Overriding ${codec} → AAC (${quality} too low for AC-3)`);
     return 'aac';
   }
   return codec;
@@ -397,7 +439,7 @@ router.all('/stream/:trackId/:segment', async (req, res) => {
   const quality = (req.query.quality as string) || '128k';
   const codec = (req.query.codec as string) || 'aac';
 
-  console.log(`[HLS DEBUG] Segment request: trackId=${trackId} segment=${segment} quality=${quality} codec=${codec}`);
+  logHls(`[HLS DEBUG] Segment request: trackId=${trackId} segment=${segment} quality=${quality} codec=${codec}`);
   writeHlsSessionLog(trackId, quality, codec, `Segment request for ${segment}`);
 
   // Only serve .ts segment files
@@ -408,19 +450,19 @@ router.all('/stream/:trackId/:segment', async (req, res) => {
   const outputDir = getSessionOutputDir(trackId, quality, codec);
 
   if (!outputDir) {
-    console.log(`[HLS DEBUG] No exact session for trackId=${trackId}; active variants=${JSON.stringify(getActiveSessionVariants(trackId))}`);
+    logHls(`[HLS DEBUG] No exact session for trackId=${trackId}; active variants=${JSON.stringify(getActiveSessionVariants(trackId))}`);
     writeHlsSessionLog(trackId, quality, codec, `Missing exact session for ${segment}; active variants=${JSON.stringify(getActiveSessionVariants(trackId))}`);
     return res.status(404).send('No active HLS session for this track');
   }
 
   const segmentPath = path.join(outputDir, segment);
   if (!fs.existsSync(segmentPath)) {
-    console.log(`[HLS DEBUG] Segment not found: ${segmentPath}`);
+    logHls(`[HLS DEBUG] Segment not found: ${segmentPath}`);
     writeHlsSessionLog(trackId, quality, codec, `Segment missing on disk: ${segmentPath}`);
     return res.status(404).send('Segment not found');
   }
 
-  console.log(`[HLS DEBUG] Serving segment: ${segmentPath}`);
+  logHls(`[HLS DEBUG] Serving segment: ${segmentPath}`);
   const stat = fs.statSync(segmentPath);
   writeHlsSessionLog(trackId, quality, codec, `Serving ${segment} (${stat.size} bytes) from ${segmentPath}`);
 
@@ -483,7 +525,7 @@ router.all('/stream', async (req, res) => {
     ]);
 
     ffmpeg.stderr.on('data', (data) => {
-      console.error('[FFmpeg]', data.toString());
+      logFfmpeg('[FFmpeg]', data.toString());
     });
 
     ffmpeg.stdout.pipe(res);
@@ -568,9 +610,20 @@ router.get('/art', async (req, res) => {
       // Sanitize Content-Type: WMA files can embed malformed format strings
       // containing non-ASCII/control characters that crash Node's setHeader.
       const validMime = /^[\x20-\x7E]+$/.test(picture.format) ? picture.format : 'image/jpeg';
+
+      // music-metadata 11.x mis-parses WM/Picture in ASF when the description
+      // is non-empty: picture.data starts a few bytes inside the description
+      // string instead of at the image header. Re-align to the first known
+      // image signature when present.
+      let data: Uint8Array = picture.data;
+      const start = findImageStart(data);
+      if (start > 0) {
+        data = data.subarray(start);
+      }
+
       res.setHeader('Content-Type', validMime);
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.send(picture.data);
+      res.send(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
     } else {
       res.status(404).send('No art found');
     }
