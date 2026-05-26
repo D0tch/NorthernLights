@@ -2,11 +2,12 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store';
+import type { TrackCredit } from '../../store';
 import {
     Play, Plus, ListPlus, Check,
     ChevronRight, ChevronLeft,
     Search, X, Disc3, Mic2, ListMinus,
-    Heart,
+    Heart, Users,
 } from 'lucide-react';
 import {
     ContextMenuButton,
@@ -148,6 +149,99 @@ const FilterableListPanel: React.FC<FilterableListPanelProps> = ({
     );
 };
 
+// ─── Credits sub-panel ────────────────────────────────────────────────────────
+// Role-grouped view of every credit on a single track. Same slide-in
+// shell as FilterableListPanel but no filter input — credit lists are
+// short by nature and grouping matters more than search.
+
+const CREDITS_ROLE_ORDER = [
+    'performer', 'composer', 'conductor', 'lyricist', 'producer', 'remixer',
+    'arranger', 'engineer', 'mixer', 'dj-mixer', 'writer', 'original-artist',
+] as const;
+
+interface CreditsPanelProps {
+    isActive: boolean;
+    isMobile: boolean;
+    loading: boolean;
+    credits: TrackCredit[];
+    onBack: () => void;
+    onSelectArtist: (artistId: string) => void;
+}
+
+const CreditsPanel: React.FC<CreditsPanelProps> = ({ isActive, isMobile, loading, credits, onBack, onSelectArtist }) => {
+    const grouped = React.useMemo(() => {
+        const byRole = new Map<string, TrackCredit[]>();
+        for (const c of credits) {
+            const arr = byRole.get(c.role) || [];
+            arr.push(c);
+            byRole.set(c.role, arr);
+        }
+        const ordered: Array<{ role: string; credits: TrackCredit[] }> = [];
+        for (const role of CREDITS_ROLE_ORDER) {
+            const arr = byRole.get(role);
+            if (arr && arr.length > 0) ordered.push({ role, credits: arr });
+        }
+        for (const [role, arr] of byRole) {
+            if ((CREDITS_ROLE_ORDER as readonly string[]).includes(role)) continue;
+            ordered.push({ role, credits: arr });
+        }
+        return ordered;
+    }, [credits]);
+
+    return (
+        <div
+            className="absolute inset-0 flex flex-col bg-[var(--glass-bg)]"
+            style={{
+                transform: isActive ? 'translateX(0)' : 'translateX(100%)',
+                transition: 'transform 0.28s cubic-bezier(0.4,0,0.2,1)',
+                pointerEvents: isActive ? 'auto' : 'none',
+            }}
+        >
+            <div className="flex items-center gap-2 px-3 py-2.5 border-b border-[var(--glass-border)] flex-shrink-0">
+                <button
+                    onClick={onBack}
+                    className="p-1 rounded-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors active:scale-90"
+                    aria-label="Back"
+                >
+                    <ChevronLeft size={18} />
+                </button>
+                <span className="text-sm font-semibold text-[var(--color-text-primary)] flex-1 truncate">credits</span>
+            </div>
+
+            <div className="overflow-y-auto flex-1 py-1.5" style={{ maxHeight: isMobile ? '60vh' : '300px' }}>
+                {loading ? (
+                    <div className="text-center text-[var(--color-text-muted)] text-xs py-6">Loading…</div>
+                ) : grouped.length === 0 ? (
+                    <div className="text-center text-[var(--color-text-muted)] text-xs py-6">No credits on this track.</div>
+                ) : (
+                    grouped.map(group => (
+                        <div key={group.role} className="mb-2">
+                            <div className="px-4 pt-2 pb-1 text-[10px] font-bold uppercase tracking-[0.15em] text-[var(--color-text-muted)]">
+                                {group.role}
+                            </div>
+                            {group.credits.map((c, i) => (
+                                <button
+                                    key={`${c.artistId}-${i}`}
+                                    onClick={() => onSelectArtist(c.artistId)}
+                                    className="w-full flex items-center gap-3 px-4 py-2 text-sm text-[var(--color-text-primary)] hover:bg-white/5 active:bg-white/10 transition-colors text-left"
+                                >
+                                    <Mic2 size={14} className="text-[var(--color-text-secondary)] flex-shrink-0" />
+                                    <span className="truncate flex-1">
+                                        {c.artistName}
+                                        {c.detail && (
+                                            <span className="text-[var(--color-text-muted)]"> — {c.detail}</span>
+                                        )}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                    ))
+                )}
+            </div>
+        </div>
+    );
+};
+
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export const TrackContextMenu: React.FC = () => {
@@ -165,17 +259,44 @@ export const TrackContextMenu: React.FC = () => {
 
     const [addedStatus, setAddedStatus] = useState<string | null>(null);
     const [isVisible,   setIsVisible]   = useState(false);
+    // Lazily-loaded credits for the focused track. The sub-panel opens on
+    // demand and fetches on first activation so the cold context-menu
+    // render stays as cheap as it is today.
+    const [trackCredits, setTrackCredits] = useState<TrackCredit[]>([]);
+    const [creditsLoading, setCreditsLoading] = useState(false);
+    const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
 
     // ── open/close lifecycle ──────────────────────────────────────────────────
     useEffect(() => {
         if (contextMenu) {
             setAddedStatus(null);
             nav.reset();
+            setTrackCredits([]);
             requestAnimationFrame(() => setIsVisible(true));
         } else {
             setIsVisible(false);
         }
     }, [contextMenu]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Fetch credits only when the credits sub-panel is opened. One request
+    // per credits-panel visit per menu instance — sufficient given the
+    // menu's short lifecycle and the per-track scope.
+    useEffect(() => {
+        if (nav.current !== 'credits') return;
+        if (!contextMenu) return;
+        const trackId = contextMenu.track.id;
+        if (!trackId) return;
+        let cancelled = false;
+        setCreditsLoading(true);
+        fetch(`/api/albums/track/${encodeURIComponent(trackId)}/credits`, { headers: getAuthHeader() })
+            .then(r => r.ok ? r.json() : null)
+            .then(data => {
+                if (!cancelled) setTrackCredits(Array.isArray(data?.credits) ? data.credits : []);
+            })
+            .catch(() => { if (!cancelled) setTrackCredits([]); })
+            .finally(() => { if (!cancelled) setCreditsLoading(false); });
+        return () => { cancelled = true; };
+    }, [nav.current, contextMenu, getAuthHeader]);
 
     // ── Escape: pop panel or close ────────────────────────────────────────────
     useEffect(() => {
@@ -346,6 +467,17 @@ export const TrackContextMenu: React.FC = () => {
                             />
                         )}
 
+                        {/* View credits — opens a role-grouped sub-panel.
+                            Always offered; the panel itself says "no credits"
+                            when the track has none rather than us probing
+                            ahead of time. */}
+                        <ContextMenuButton
+                            icon={<Users size={15} />}
+                            label="View Credits"
+                            onClick={() => nav.push('credits')}
+                            trailingIcon={<ChevronRight size={15} />}
+                        />
+
                         {/* Add to Playlist */}
                         {playlists.length > 0 && (
                             <>
@@ -397,6 +529,18 @@ export const TrackContextMenu: React.FC = () => {
                 isActive={nav.current === 'artists'}
                 isMobile={isMobile}
                 emptyText="No artists found"
+            />
+
+            <CreditsPanel
+                isActive={nav.current === 'credits'}
+                isMobile={isMobile}
+                loading={creditsLoading}
+                credits={trackCredits}
+                onBack={nav.pop}
+                onSelectArtist={(artistId) => {
+                    navigate(`/library/artist/${artistId}`);
+                    closeContextMenu();
+                }}
             />
 
             {/*

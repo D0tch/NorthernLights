@@ -3,12 +3,14 @@ import fs from 'fs';
 import path from 'path';
 import { ChildProcessPool } from '../workers/processPool';
 import * as mm from 'music-metadata';
-import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getExistingPaths, deleteTracksByPaths, purgeOrphanedEntities, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting, normalizeArtistNames, getPrimaryArtistName, normalizeArtistIdentityKey } from '../database';
+import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTracksWithSimulatedFeatures, getSimulatedFeatureTracks, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getExistingPaths, deleteTracksByPaths, purgeOrphanedEntities, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting, normalizeArtistNames, getPrimaryArtistName, normalizeArtistIdentityKey, setTrackCredits } from '../database';
 import { genreMatrixService } from '../services/genreMatrix.service';
 import { loveTrack, unloveTrack } from '../services/lastfm.service';
 import { submitMbRecordingRating } from '../services/musicbrainz.service';
 import { scanStatus, scanClients, broadcastScanStatus } from '../state';
 import { requireAdmin } from '../middleware/auth';
+import { enrichCreditsFromMusicBrainz, enrichCreditsFromGenius } from '../services/creditsEnrichment.service';
+import { getCreditsStatus } from '../database';
 
 const router = Router();
 
@@ -117,6 +119,43 @@ router.post('/artists/manual-merge', requireAdmin, async (req, res) => {
   } catch (error: any) {
     console.error('[ArtistDuplicates] manual merge error:', error);
     res.status(500).json({ error: error.message || 'Failed to merge artists' });
+  }
+});
+
+// ─── Credit enrichment from external providers ──────────────────────
+// Admin-triggered. Aurora's role-credit table is populated from on-disk
+// tags during scan (always-on); these endpoints layer additional rows
+// from MusicBrainz and Genius when those providers are connected.
+
+router.get('/credits/status', requireAdmin, async (_req, res) => {
+  try {
+    const status = await getCreditsStatus();
+    res.json(status);
+  } catch (err: any) {
+    console.error('[Credits] status error:', err);
+    res.status(500).json({ error: err?.message || 'Failed to read credits status' });
+  }
+});
+
+router.post('/credits/enrich/musicbrainz', requireAdmin, async (req, res) => {
+  try {
+    const limit = typeof req.body?.limit === 'number' ? req.body.limit : undefined;
+    const result = await enrichCreditsFromMusicBrainz({ limit });
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Credits] MB enrichment error:', err);
+    res.status(500).json({ error: err?.message || 'MusicBrainz enrichment failed' });
+  }
+});
+
+router.post('/credits/enrich/genius', requireAdmin, async (req, res) => {
+  try {
+    const limit = typeof req.body?.limit === 'number' ? req.body.limit : undefined;
+    const result = await enrichCreditsFromGenius({ limit });
+    res.json(result);
+  } catch (err: any) {
+    console.error('[Credits] Genius enrichment error:', err);
+    res.status(500).json({ error: err?.message || 'Genius enrichment failed' });
   }
 });
 
@@ -327,7 +366,14 @@ async function processMetadataBatch(fileBufs: Buffer[], concurrency: number): Pr
                 console.warn(`[Scanner] Failed to get/create artist "${a}" for ${nameStr}:`, e);
               }
             }
-            try { albumId = await getOrCreateAlbum(albumTitle, albumArtistName); } catch (e) {
+            try {
+              albumId = await getOrCreateAlbum(albumTitle, albumArtistName, {
+                mbReleaseGroupId: metadata.mbReleaseGroupId || null,
+                year: metadata.year || null,
+                releaseType: metadata.releaseType || null,
+                isCompilation: metadata.isCompilation || false,
+              });
+            } catch (e) {
               console.warn(`[Scanner] Failed to get/create album "${albumTitle}" for ${nameStr}:`, e);
             }
             try { genreId = await getOrCreateGenre(primaryGenreName); } catch (e) {
@@ -364,6 +410,16 @@ async function processMetadataBatch(fileBufs: Buffer[], concurrency: number): Pr
               mbWorkId: metadata.mbWorkId || null,
               rawUrls: metadata.rawUrls || null,
             });
+
+            // Tag-derived multi-role credits (composer, conductor, remixer,
+            // producer, etc.). DELETE-then-INSERT is scoped to source='tag'
+            // inside setTrackCredits so any future MB-sourced rows survive.
+            if (Array.isArray(metadata.credits) && metadata.credits.length > 0) {
+              const trackId = Buffer.from(dbPath).toString('base64');
+              try { await setTrackCredits(trackId, metadata.credits); } catch (e) {
+                console.warn(`[Scanner] Failed to write credits for ${nameStr}:`, e);
+              }
+            }
 
             if (!metadata.genre || metadata.genre.length === 0) {
               console.warn(`[Scanner] No genre found for "${nameStr}". Hop-cost logic will be restricted.`);
@@ -494,6 +550,8 @@ async function processAnalysisBatch(tracks: { id: string; filePath: Buffer; titl
             payload: {
               id: track.id,
               filePathBase64: track.filePath.toString('base64'),
+              title: track.title,
+              artist: track.artist || null,
               vectorStats
             }
           });
@@ -506,6 +564,10 @@ async function processAnalysisBatch(tracks: { id: string; filePath: Buffer; titl
           if (result.audioFeatures) {
             try {
               await addTrackFeatures(result.id, result.audioFeatures);
+              if (result.audioFeatures.is_simulated) {
+                const decodedPath = track.filePath.toString('utf8');
+                console.warn(`[Analysis] Stored simulated features trackId=${track.id} title="${track.title}" artist="${track.artist || ''}" filePath="${decodedPath}"`);
+              }
             } catch (err) {
               console.warn(`[Analysis] DB write failed for track ${result.id}:`, err);
             }
@@ -799,6 +861,19 @@ router.post('/refresh-metadata', async (req, res) => {
   return res.status(202).json({ message: 'Refresh metadata accepted' });
 });
 
+// Admin-only visibility into fallback analysis. File paths are local server paths,
+// so keep this behind requireAdmin even though the settings UI is admin-only too.
+router.get('/analyze/simulated', requireAdmin, async (req, res) => {
+  try {
+    const limit = typeof req.query.limit === 'string' ? Number(req.query.limit) : 50;
+    const tracks = await getSimulatedFeatureTracks(limit);
+    res.json({ tracks, count: tracks.length });
+  } catch (error) {
+    console.error('[Analysis] Failed to list simulated tracks:', error);
+    res.status(500).json({ error: 'Failed to list simulated tracks' });
+  }
+});
+
 // Trigger standalone analysis (no scan — analyzes tracks missing features)
 router.post('/analyze', async (req, res) => {
   if (scanStatus.isScanning) {
@@ -810,11 +885,14 @@ router.post('/analyze', async (req, res) => {
   }
 
   const force = req.body?.force === true;
+  const simulatedOnly = req.body?.simulatedOnly === true;
 
   try {
-    let tracksToAnalyze: { id: string; filePath: Buffer; title: string }[];
+    let tracksToAnalyze: { id: string; filePath: Buffer; title: string; artist?: string | null }[];
 
-    if (force) {
+    if (simulatedOnly) {
+      tracksToAnalyze = await getTracksWithSimulatedFeatures();
+    } else if (force) {
       // Re-analyze ALL tracks (e.g., after Essentia upgrade)
       const { initDB } = await import('../database');
       const db = await initDB();
@@ -830,7 +908,10 @@ router.post('/analyze', async (req, res) => {
     }
 
     if (tracksToAnalyze.length === 0) {
-      return res.json({ status: 'completed', message: 'All tracks already have audio features', count: 0 });
+      const message = simulatedOnly
+        ? 'No simulated fallback tracks need re-analysis'
+        : 'All tracks already have audio features';
+      return res.json({ status: 'completed', message, count: 0 });
     }
 
     scanStatus.isScanning = true;

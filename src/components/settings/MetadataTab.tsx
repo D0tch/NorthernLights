@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useProviderConnectionTest } from '../../hooks/useProviderConnectionTest';
 import { useToast } from '../../hooks/useToast';
-import { Trash2, Sparkles, Image as ImageIcon, BookOpen, Disc3, FileText, User, Heart, Tags, Headphones, Star, Ticket, MapPin, Calendar, AlertTriangle } from 'lucide-react';
+import { Trash2, Sparkles, Image as ImageIcon, BookOpen, Disc3, FileText, User, Heart, Tags, Headphones, Star, Ticket, MapPin, Calendar, AlertTriangle, Users } from 'lucide-react';
 import { DependencyBadge, DependencyGroup, DependencyInfoBox } from '../DependencyBadge';
 
 type MetadataSubTab = 'overview' | 'lastfm' | 'genius' | 'musicbrainz' | 'jambase';
@@ -48,6 +48,64 @@ export const MetadataTab: React.FC = () => {
     const setSettings = usePlayerStore(state => state.setSettings);
     const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
     const { addToast } = useToast();
+
+    // ─── Track-credit enrichment (MusicBrainz / Genius) ───────────────
+    // Aurora populates track_artist_credits from on-disk tags during
+    // every scan. These two buttons layer additional rows from connected
+    // providers without touching the tag-derived rows.
+    interface CreditsStatus {
+        bySource: Record<string, number>;
+        eligibleMusicbrainz: number;
+        eligibleGenius: number;
+        alreadyMusicbrainz: number;
+        alreadyGenius: number;
+    }
+    const [creditsStatus, setCreditsStatus] = useState<CreditsStatus | null>(null);
+    const [mbEnrichRunning, setMbEnrichRunning] = useState(false);
+    const [geniusEnrichRunning, setGeniusEnrichRunning] = useState(false);
+
+    const refreshCreditsStatus = useCallback(async () => {
+        try {
+            const res = await fetch('/api/library/credits/status', { headers: getAuthHeader() });
+            if (!res.ok) return;
+            const data = await res.json();
+            setCreditsStatus(data);
+        } catch { /* ignore — the panel just won't show counts */ }
+    }, [getAuthHeader]);
+
+    useEffect(() => {
+        void refreshCreditsStatus();
+    }, [refreshCreditsStatus]);
+
+    const runCreditEnrich = useCallback(async (provider: 'musicbrainz' | 'genius') => {
+        const setRunning = provider === 'musicbrainz' ? setMbEnrichRunning : setGeniusEnrichRunning;
+        setRunning(true);
+        try {
+            const res = await fetch(`/api/library/credits/enrich/${provider}`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                body: JSON.stringify({ limit: 200 }),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                addToast(err.error || `${provider} enrichment failed`, 'error');
+                return;
+            }
+            const data = await res.json();
+            const provLabel = provider === 'musicbrainz' ? 'MusicBrainz' : 'Genius';
+            if (data.attempted === 0) {
+                addToast(`${provLabel}: nothing left to enrich`, 'info');
+            } else {
+                const more = data.ranOutOfQuota ? ' (rate-limited — try again later)' : '';
+                addToast(`${provLabel}: ${data.succeeded} tracks credited (${data.creditsWritten} rows)${more}`, 'success');
+            }
+            void refreshCreditsStatus();
+        } catch (e: any) {
+            addToast(e?.message || 'Enrichment failed', 'error');
+        } finally {
+            setRunning(false);
+        }
+    }, [addToast, getAuthHeader, refreshCreditsStatus]);
     const showToast = useCallback((msg: string, type: 'success' | 'error' | 'info') => addToast(msg, type), [addToast]);
 
     const [metadataTab, setMetadataTab] = useState<MetadataSubTab>('overview');
@@ -382,8 +440,35 @@ export const MetadataTab: React.FC = () => {
                                 description="Alternative cover art source when local files are missing artwork"
                                 icon={<Disc3 size={16} />}
                             />
+                            <DependencyInfoBox
+                                title="Track Credits"
+                                description="Producer and writer credits per track, layered on top of tag-derived credits. Useful for hip-hop, pop, and electronic libraries where tags often miss producers."
+                                icon={<Users size={16} />}
+                            />
                         </div>
                     </div>
+
+                    {/* Genius credit-import action */}
+                    {!!geniusApiKey && (
+                        <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 mb-4 flex items-center justify-between gap-4 shadow-sm">
+                            <div className="min-w-0">
+                                <div className="text-sm font-semibold text-[var(--color-text-primary)]">Import producer / writer credits</div>
+                                <div className="text-xs text-[var(--color-text-muted)] mt-1">
+                                    {creditsStatus
+                                        ? `${creditsStatus.alreadyGenius} tracks already enriched · ${(creditsStatus.bySource['genius'] || 0)} credit rows on file`
+                                        : 'Loads on demand · runs in batches of 200 tracks'}
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => void runCreditEnrich('genius')}
+                                disabled={geniusEnrichRunning}
+                                className="btn btn-ghost btn-sm whitespace-nowrap disabled:opacity-50"
+                            >
+                                {geniusEnrichRunning ? 'Importing…' : 'Import credits'}
+                            </button>
+                        </div>
+                    )}
 
                     <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 flex flex-col gap-3 shadow-sm">
                         <div className="flex gap-2">
@@ -440,8 +525,35 @@ export const MetadataTab: React.FC = () => {
                                 description="Identify tracks by ISRC or MBID to match them against the global database"
                                 icon={<BookOpen size={16} />}
                             />
+                            <DependencyInfoBox
+                                title="Track Credits"
+                                description="Composer, conductor, performer (with instrument), producer, mixer, remixer, engineer, arranger, and lyricist credits per track. Layered on top of tag-derived credits — never replaces them."
+                                icon={<Users size={16} />}
+                            />
                         </div>
                     </div>
+
+                    {/* MusicBrainz credit-import action */}
+                    {musicBrainzConnected && (
+                        <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 mb-4 flex items-center justify-between gap-4 shadow-sm">
+                            <div className="min-w-0">
+                                <div className="text-sm font-semibold text-[var(--color-text-primary)]">Import role credits</div>
+                                <div className="text-xs text-[var(--color-text-muted)] mt-1">
+                                    {creditsStatus
+                                        ? `${creditsStatus.alreadyMusicbrainz} of ${creditsStatus.eligibleMusicbrainz} eligible tracks enriched · ${(creditsStatus.bySource['musicbrainz'] || 0)} credit rows on file`
+                                        : 'Requires tracks with MusicBrainz recording IDs · runs in batches of 200'}
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => void runCreditEnrich('musicbrainz')}
+                                disabled={mbEnrichRunning}
+                                className="btn btn-ghost btn-sm whitespace-nowrap disabled:opacity-50"
+                            >
+                                {mbEnrichRunning ? 'Importing…' : 'Import credits'}
+                            </button>
+                        </div>
+                    )}
 
                     <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 flex flex-col shadow-sm">
 

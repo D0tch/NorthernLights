@@ -121,6 +121,16 @@ export const ContextMenuPortal: React.FC<{
     desktopWidth?: number;
     desktopHeight?: number;
     showMobileHandle?: boolean;
+    /**
+     * How to align the popover horizontally against `anchorRef`:
+     * - 'right' (default): menu's right edge = anchor's right edge.
+     *   Best when the anchor sits in the top-right corner.
+     * - 'left': menu's left edge = anchor's left edge. Best when the
+     *   anchor is one of several adjacent icon buttons in a row, so the
+     *   menu hangs directly below its own button instead of stretching
+     *   across siblings to its left.
+     */
+    menuAlign?: 'left' | 'right';
 }> = ({
     open,
     onClose,
@@ -130,6 +140,7 @@ export const ContextMenuPortal: React.FC<{
     desktopWidth = 248,
     desktopHeight = 320,
     showMobileHandle = true,
+    menuAlign = 'right',
 }) => {
     const isMobile = useIsMobile();
     const menuRef = useRef<HTMLDivElement>(null);
@@ -205,7 +216,10 @@ export const ContextMenuPortal: React.FC<{
     }
 
     const rect = anchorRef?.current?.getBoundingClientRect();
-    const rawX = position?.x ?? (rect ? rect.right - desktopWidth : 16);
+    const rectAlignedX = rect
+        ? (menuAlign === 'left' ? rect.left : rect.right - desktopWidth)
+        : 16;
+    const rawX = position?.x ?? rectAlignedX;
     const rawY = position?.y ?? (rect ? rect.bottom + 8 : 16);
     const left = Math.max(16, Math.min(rawX, window.innerWidth - desktopWidth - 16));
     const top = Math.max(16, Math.min(rawY, window.innerHeight - desktopHeight - 16));
