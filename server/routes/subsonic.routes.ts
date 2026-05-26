@@ -8,10 +8,11 @@ import { initDB, touchSubsonicApiKey, getActiveSubsonicApiKeyByPrefix, updateSub
 import { isPathAllowed, pathToBuffer } from '../state';
 import { getOrCreateHlsSession, getSessionInfo, touchSession, getSessionOutputDir } from '../services/hlsStream.service';
 import { generateScopedToken, verifyScopedToken } from '../services/scopedToken.service';
+import { writeDebugLog } from '../services/debugLogger.service';
 
 const router = Router();
 const SUBSONIC_VERSION = '1.16.1';
-const SERVER_VERSION = '1.0.0-rc.3';
+const SERVER_VERSION = 'Aurora 1.0.0-rc.3';
 const DEFAULT_CLIENT = 'Aurora';
 const DEFAULT_HLS_QUALITY = '192';
 const DEFAULT_HLS_CODEC = 'aac';
@@ -115,6 +116,14 @@ async function touchSubsonicKeyDebounced(keyId: string) {
 
 function rateLimitKey(req: Request, method: string): string {
   return `${method}:${req.ip || req.socket?.remoteAddress || 'unknown'}`;
+}
+
+function writeSubsonicLog(line: string) {
+  try {
+    writeDebugLog('subsonic-api.log', line);
+  } catch {
+    // Diagnostics must not affect client sync.
+  }
 }
 
 function subsonicRateLimiter(req: Request, res: Response, next: NextFunction) {
@@ -340,7 +349,7 @@ function suffixFor(track: any): string {
 
 export function mapTrackToSubsonic(track: any, userId?: string) {
   const suffix = suffixFor(track);
-  const duration = Number.isFinite(Number(track.duration)) ? Math.round(Number(track.duration)) : undefined;
+  const duration = Number.isFinite(Number(track.duration)) ? Math.max(0, Math.round(Number(track.duration))) : 0;
   const bitRate = Number.isFinite(Number(track.bitrate)) ? Math.round(Number(track.bitrate) / 1000) : undefined;
   return {
     id: subsonicSongId(track.id),
@@ -412,6 +421,18 @@ export function buildSearchPayload(method: string, payload: Record<string, unkno
       ? 'searchResult2'
       : 'searchResult';
   return { [key]: payload };
+}
+
+function countPayloadItems(value: any, key: string): number {
+  const item = value?.[key];
+  if (Array.isArray(item)) return item.length;
+  return item ? 1 : 0;
+}
+
+function parseBoundedInt(value: string | undefined, fallback: number, min: number, max: number): number {
+  const parsed = parseInt(value || '', 10);
+  const base = Number.isFinite(parsed) ? parsed : fallback;
+  return Math.max(min, Math.min(max, base));
 }
 
 async function getTrackRow(id: string, userId: string) {
@@ -720,6 +741,7 @@ async function handleBrowsing(req: Request, res: Response, method: string, ctx: 
       if (!album.rows[0]) return sendError(req, res, 70, 'Album not found');
       const tracks = await db.query('SELECT t.*, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved FROM tracks t LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $2 LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $2 WHERE t.album_id = $1 ORDER BY t.disc_number NULLS LAST, t.track_number NULLS LAST, t.title', [id, ctx.userId]);
       const summary = mapAlbum(album.rows[0], tracks.rows.length, tracks.rows.reduce((sum, row) => sum + Number(row.duration || 0), 0));
+      writeSubsonicLog(`getAlbum id=${id} songs=${tracks.rows.length}`);
       return sendSubsonic(req, res, subsonicSuccess({ album: { ...summary, song: tracks.rows.map((row) => mapTrackToSubsonic(row, ctx.userId)) } }));
     }
     case 'getsong': {
@@ -771,6 +793,7 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
         ORDER BY ${order}
         LIMIT $${params.length - 1} OFFSET $${params.length}
       `, params);
+      writeSubsonicLog(`albumList method=${method} type=${type} size=${size} offset=${offset} albums=${albums.rows.length}`);
       return sendSubsonic(req, res, subsonicSuccess(buildAlbumListPayload(method, albums.rows)));
     }
     case 'getrandomsongs': {
@@ -797,10 +820,14 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
     case 'search2':
     case 'search3': {
       const query = (getParam(req, 'query') || getParam(req, 'any') || '').trim();
+      const artistCount = parseBoundedInt(getParam(req, 'artistCount'), 20, 0, 500);
+      const albumCount = parseBoundedInt(getParam(req, 'albumCount'), 20, 0, 500);
+      const songCount = parseBoundedInt(getParam(req, 'songCount'), 50, 0, 500);
+      const artistOffset = parseBoundedInt(getParam(req, 'artistOffset'), 0, 0, Number.MAX_SAFE_INTEGER);
+      const albumOffset = parseBoundedInt(getParam(req, 'albumOffset'), 0, 0, Number.MAX_SAFE_INTEGER);
+      const songOffset = parseBoundedInt(getParam(req, 'songOffset'), 0, 0, Number.MAX_SAFE_INTEGER);
+      const hasQuery = query.length > 0;
       const term = `%${query}%`;
-      const artistCount = Math.max(0, Math.min(100, parseInt(getParam(req, 'artistCount') || '20', 10) || 20));
-      const albumCount = Math.max(0, Math.min(100, parseInt(getParam(req, 'albumCount') || '20', 10) || 20));
-      const songCount = Math.max(0, Math.min(200, parseInt(getParam(req, 'songCount') || '50', 10) || 50));
       const [artists, albums, songs] = await Promise.all([
         db.query(`
           SELECT a.*, COUNT(t.album_id)::int AS album_count
@@ -810,15 +837,33 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
             FROM tracks
             WHERE artist_id IS NOT NULL AND album_id IS NOT NULL
           ) t ON t.artist_id = a.id
-          WHERE a.name ILIKE $1
+          ${hasQuery ? 'WHERE a.name ILIKE $1' : ''}
           GROUP BY a.id
           ORDER BY a.name
-          LIMIT $2
-        `, [term, artistCount]),
-        db.query('SELECT a.*, COUNT(t.id)::int AS song_count, COALESCE(SUM(t.duration), 0)::int AS duration, MIN(t.artist_id::text) AS artist_id FROM albums a LEFT JOIN tracks t ON t.album_id = a.id WHERE a.title ILIKE $1 OR a.artist_name ILIKE $1 GROUP BY a.id ORDER BY a.title LIMIT $2', [term, albumCount]),
-        db.query('SELECT t.*, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved FROM tracks t LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $2 LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $2 WHERE t.title ILIKE $1 OR t.artist ILIKE $1 OR t.album ILIKE $1 ORDER BY t.title LIMIT $3', [term, ctx.userId, songCount]),
+          LIMIT $${hasQuery ? 2 : 1} OFFSET $${hasQuery ? 3 : 2}
+        `, hasQuery ? [term, artistCount, artistOffset] : [artistCount, artistOffset]),
+        db.query(`
+          SELECT a.*, COUNT(t.id)::int AS song_count, COALESCE(SUM(t.duration), 0)::int AS duration,
+                 MIN(t.artist_id::text) AS artist_id, MIN(t.genre) AS genre, COALESCE(SUM(t.play_count), 0)::int AS play_count
+          FROM albums a
+          LEFT JOIN tracks t ON t.album_id = a.id
+          ${hasQuery ? 'WHERE a.title ILIKE $1 OR a.artist_name ILIKE $1' : ''}
+          GROUP BY a.id
+          ORDER BY a.title
+          LIMIT $${hasQuery ? 2 : 1} OFFSET $${hasQuery ? 3 : 2}
+        `, hasQuery ? [term, albumCount, albumOffset] : [albumCount, albumOffset]),
+        db.query(`
+          SELECT t.*, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved
+          FROM tracks t
+          LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $${hasQuery ? 2 : 1}
+          LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $${hasQuery ? 2 : 1}
+          ${hasQuery ? 'WHERE t.title ILIKE $1 OR t.artist ILIKE $1 OR t.album ILIKE $1' : ''}
+          ORDER BY t.title, t.id
+          LIMIT $${hasQuery ? 3 : 2} OFFSET $${hasQuery ? 4 : 3}
+        `, hasQuery ? [term, ctx.userId, songCount, songOffset] : [ctx.userId, songCount, songOffset]),
       ]);
       const payload = { artist: artists.rows.map((row) => mapArtist(row, row.album_count)), album: albums.rows.map((row) => mapAlbum(row)), song: songs.rows.map((row) => mapTrackToSubsonic(row, ctx.userId)) };
+      writeSubsonicLog(`search method=${method} emptyQuery=${!hasQuery} artistCount=${countPayloadItems(payload, 'artist')} albumCount=${countPayloadItems(payload, 'album')} songCount=${countPayloadItems(payload, 'song')} artistOffset=${artistOffset} albumOffset=${albumOffset} songOffset=${songOffset}`);
       return sendSubsonic(req, res, subsonicSuccess(buildSearchPayload(method, payload)));
     }
     default:
@@ -909,6 +954,12 @@ async function dispatch(req: Request, res: Response, method: string, ctx: Subson
   if (await handleLists(req, res, method, ctx) !== false) return;
   if (await handlePlaylists(req, res, method, ctx) !== false) return;
   if (await handleAnnotations(req, res, method, ctx) !== false) return;
+  if (method === 'getnowplaying') return sendSubsonic(req, res, subsonicSuccess({ nowPlaying: { entry: [] } }));
+  if (method === 'getartistinfo') return sendSubsonic(req, res, subsonicSuccess({ artistInfo: {} }));
+  if (method === 'getartistinfo2') return sendSubsonic(req, res, subsonicSuccess({ artistInfo2: {} }));
+  if (method === 'getalbuminfo') return sendSubsonic(req, res, subsonicSuccess({ albumInfo: {} }));
+  if (method === 'getalbuminfo2') return sendSubsonic(req, res, subsonicSuccess({ albumInfo2: {} }));
+  if (method === 'gettopsongs') return sendSubsonic(req, res, subsonicSuccess({ topSongs: { song: [] } }));
   if (EMPTY_STUB_PAYLOADS[method]) return sendSubsonic(req, res, subsonicSuccess(EMPTY_STUB_PAYLOADS[method]));
   sendError(req, res, 70, `Unsupported OpenSubsonic endpoint: ${method}`);
 }
@@ -919,10 +970,14 @@ router.all('/:method', subsonicRateLimiter, async (req, res) => {
     const auth = method === 'hlssegment'
       ? await authenticateHlsSegment(req)
       : await authenticateSubsonic(req);
-    if (auth.error || !auth.ctx) return sendError(req, res, auth.error?.code || 44, auth.error?.message || 'Authentication failed');
+    if (auth.error || !auth.ctx) {
+      writeSubsonicLog(`auth_error method=${method} code=${auth.error?.code || 44} message=${auth.error?.message || 'Authentication failed'}`);
+      return sendError(req, res, auth.error?.code || 44, auth.error?.message || 'Authentication failed');
+    }
     await dispatch(req, res, method, auth.ctx);
   } catch (error: any) {
     console.error(`[Subsonic] ${method} error:`, error?.message || error);
+    writeSubsonicLog(`error method=${method} message=${String(error?.message || error).slice(0, 300)}`);
     if (res.headersSent) return;
     if (error?.status === 404) return res.status(404).send('Not found');
     if (error?.status === 403) return res.status(403).send('Forbidden');
