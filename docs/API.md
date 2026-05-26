@@ -81,7 +81,7 @@ These are Aurora JWT endpoints, not `/rest` endpoints.
 
 | Group | Endpoints |
 | --- | --- |
-| System | `ping`, `getLicense`, `getOpenSubsonicExtensions`, `tokenInfo` |
+| System | `ping`, `getLicense`, `getOpenSubsonicExtensions`, `tokenInfo`, `getScanStatus`, `startScan` |
 | Browsing/library | `getMusicFolders`, `getIndexes`, `getMusicDirectory`, `getGenres`, `getArtists`, `getArtist`, `getAlbum`, `getSong` |
 | Lists/search | `getAlbumList`, `getAlbumList2`, `getRandomSongs`, `getSongsByGenre`, `getStarred`, `getStarred2`, `search`, `search2`, `search3` |
 | Playlists | `getPlaylists`, `getPlaylist`, `createPlaylist`, `updatePlaylist`, `deletePlaylist` |
@@ -91,7 +91,7 @@ These are Aurora JWT endpoints, not `/rest` endpoints.
 
 Aurora exposes opaque Subsonic IDs as `artist:<uuid>`, `album:<uuid>`, and `song:<trackId>`. Use IDs returned by browsing/search/list endpoints instead of constructing IDs manually.
 
-For compatibility with clients such as Symfonium, each versioned endpoint returns only its matching response root. For example, `getAlbumList2` returns `albumList2` only, and `search3` returns `searchResult3` only. Directory browsing responses from `getMusicDirectory` include Subsonic `child` entries with `title`, `parent`, and `isDir` fields for artist and album folders.
+For compatibility with clients such as Symfonium, each versioned endpoint returns only its matching response root. For example, `getAlbumList2` returns `albumList2` only, and `search3` returns `searchResult3` only. Directory browsing responses from `getMusicDirectory` include Subsonic `child` entries with `title`, `parent`, and `isDir` fields for artist and album folders. `getAlbumList`/`getAlbumList2` honor `size` and `offset` pagination for full-library syncs.
 
 ### Examples
 
@@ -105,6 +105,7 @@ Artists and albums:
 
 ```text
 GET /rest/getArtists.view?apiKey=aurora_sub_...&f=json
+GET /rest/getAlbumList2.view?type=alphabeticalByName&size=500&offset=0&apiKey=aurora_sub_...&f=json
 GET /rest/getAlbum.view?id=album:6f4...&apiKey=aurora_sub_...&f=json
 ```
 
