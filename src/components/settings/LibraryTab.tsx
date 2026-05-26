@@ -5,6 +5,16 @@ import { Activity, AlertCircle, BarChart3, BrainCircuit, CheckCircle2, Download,
 import { PromptModal } from '../PromptModal';
 import { ConfirmModal } from '../ConfirmModal';
 
+interface SimulatedFeatureTrack {
+    id: string;
+    title: string;
+    artist: string | null;
+    album: string | null;
+    filename: string;
+    filePath: string;
+    bpm: number | null;
+}
+
 interface ModelFileStatus {
     name: string;
     filename: string;
@@ -37,6 +47,8 @@ export const LibraryTab: React.FC = () => {
 
     const [dirStats, setDirStats] = useState<Record<string, { totalTracks: number; withMetadata: number; analyzed: number }>>({});
     const [dirStatsLoading, setDirStatsLoading] = useState(false);
+    const [simulatedTracks, setSimulatedTracks] = useState<SimulatedFeatureTrack[]>([]);
+    const [simulatedLoading, setSimulatedLoading] = useState(false);
 
     const [modelStatus, setModelStatus] = useState<ModelFileStatus[]>([]);
     const [modelDownloadProgress, setModelDownloadProgress] = useState<Record<string, { bytes: number; total: number; status: string }>>({});
@@ -71,6 +83,24 @@ export const LibraryTab: React.FC = () => {
     useEffect(() => {
         fetchDirStats();
     }, [fetchDirStats]);
+
+    const fetchSimulatedTracks = useCallback(async () => {
+        try {
+            setSimulatedLoading(true);
+            const res = await fetch('/api/library/analyze/simulated?limit=25', { headers: getAuthHeader() });
+            if (!res.ok) return;
+            const data = await res.json();
+            setSimulatedTracks(Array.isArray(data.tracks) ? data.tracks : []);
+        } catch (e) {
+            console.error('Failed to fetch simulated analysis tracks', e);
+        } finally {
+            setSimulatedLoading(false);
+        }
+    }, [getAuthHeader]);
+
+    useEffect(() => {
+        fetchSimulatedTracks();
+    }, [fetchSimulatedTracks]);
 
     const fetchModelStatus = useCallback(async () => {
         try {
@@ -129,9 +159,10 @@ export const LibraryTab: React.FC = () => {
     useEffect(() => {
         if (prevIsScanning.current && !isScanning) {
             fetchDirStats();
+            fetchSimulatedTracks();
         }
         prevIsScanning.current = isScanning;
-    }, [isScanning, fetchDirStats]);
+    }, [isScanning, fetchDirStats, fetchSimulatedTracks]);
 
 
 
@@ -241,7 +272,29 @@ export const LibraryTab: React.FC = () => {
                 return;
             }
             fetchDirStats();
+            fetchSimulatedTracks();
         } catch (e) {}
+    };
+
+    const handleAnalyzeSimulated = async () => {
+        try {
+            const res = await fetch('/api/library/analyze', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                body: JSON.stringify({ simulatedOnly: true })
+            });
+            if (!res.ok) {
+                const data = await res.json().catch(() => ({}));
+                showToast(data.detail || data.error || 'Analysis failed', 'error');
+                return;
+            }
+            const data = await res.json().catch(() => ({}));
+            showToast(data.message || 'Re-analysis started', 'success');
+            fetchDirStats();
+            fetchSimulatedTracks();
+        } catch (e) {
+            showToast(`Analysis failed: ${e}`, 'error');
+        }
     };
 
     const handleForceAnalyze = async () => {
@@ -263,6 +316,7 @@ export const LibraryTab: React.FC = () => {
                         return;
                     }
                     fetchDirStats();
+                    fetchSimulatedTracks();
                 } catch (e) {}
             },
         });
@@ -423,6 +477,51 @@ export const LibraryTab: React.FC = () => {
                         </div>
                     </div>
                 ) : null}
+
+                <div className="library-simulated">
+                    <div className="library-simulated__head">
+                        <div>
+                            <h5>Fallback Analysis</h5>
+                            <p>Tracks listed here used placeholder vectors because native extraction failed.</p>
+                        </div>
+                        <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={handleAnalyzeSimulated}
+                            disabled={isScanning || simulatedLoading || simulatedTracks.length === 0}
+                        >
+                            <RefreshCw size={14} aria-hidden="true" />
+                            Re-analyze Fallbacks
+                        </button>
+                    </div>
+
+                    {simulatedLoading ? (
+                        <div className="library-empty-state library-empty-state--inline" role="status">
+                            <Loader2 size={16} className="animate-spin" aria-hidden="true" />
+                            <span>Checking fallback tracks...</span>
+                        </div>
+                    ) : simulatedTracks.length === 0 ? (
+                        <div className="library-empty-state library-empty-state--inline">
+                            <CheckCircle2 size={16} aria-hidden="true" />
+                            <span>No simulated fallback analysis stored.</span>
+                        </div>
+                    ) : (
+                        <ul className="library-simulated-list" aria-label="Tracks with simulated analysis">
+                            {simulatedTracks.map(track => (
+                                <li key={track.id} className="library-simulated-row">
+                                    <div className="library-simulated-row__main">
+                                        <AlertCircle size={15} aria-hidden="true" />
+                                        <div>
+                                            <strong>{track.artist ? `${track.artist} - ${track.title}` : track.title}</strong>
+                                            <span>{track.album || track.filename}</span>
+                                        </div>
+                                    </div>
+                                    <code title={track.filePath}>{track.filePath}</code>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
             </section>
 
             <section className="library-panel library-panel--models">

@@ -15,7 +15,7 @@ process.stdin.on('data', async (chunk: string) => {
 
   for (const line of lines) {
     if (!line.trim()) continue;
-    let msg: { id: string; filePathBase64: string; vectorStats?: any };
+    let msg: { id: string; filePathBase64: string; vectorStats?: any; title?: string | null; artist?: string | null };
     try {
       msg = JSON.parse(line);
     } catch {
@@ -26,7 +26,11 @@ process.stdin.on('data', async (chunk: string) => {
       // Decode the base64 path back into a standard string path
       const utf8Path = Buffer.from(msg.filePathBase64, 'base64').toString('utf8');
       
-      const audioFeatures = await extractAudioFeatures(utf8Path);
+      const audioFeatures = await extractAudioFeatures(utf8Path, {
+        trackId: msg.id,
+        title: msg.title || null,
+        artist: msg.artist || null,
+      });
       process.stdout.write(JSON.stringify({ id: msg.id, audioFeatures }) + '\n');
     } catch (err: any) {
       process.stdout.write(JSON.stringify({ id: msg.id, error: err?.message || String(err) }) + '\n');

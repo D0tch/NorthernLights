@@ -2396,6 +2396,107 @@ body {
   gap: 4px;
 }
 
+.library-simulated {
+  display: grid;
+  gap: var(--spacing-sm);
+  border: 1px solid color-mix(in srgb, var(--glass-border) 76%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-bg-primary) 28%, transparent);
+  padding: var(--spacing-md);
+}
+
+.library-simulated__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+}
+
+.library-simulated__head > div {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.library-simulated__head h5 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-size: 0.92rem;
+  line-height: 1.25;
+  font-weight: 750;
+}
+
+.library-simulated__head p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.library-simulated-list {
+  display: grid;
+  gap: var(--spacing-xs);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.library-simulated-row {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+  padding: 10px 12px;
+}
+
+.library-simulated-row__main {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+}
+
+.library-simulated-row__main svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--aurora-pink);
+}
+
+.library-simulated-row__main > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.library-simulated-row strong,
+.library-simulated-row span,
+.library-simulated-row code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-simulated-row strong {
+  color: var(--color-text-primary);
+  font-size: 0.86rem;
+  line-height: 1.3;
+  font-weight: 700;
+}
+
+.library-simulated-row span {
+  color: var(--color-text-secondary);
+  font-size: 0.76rem;
+}
+
+.library-simulated-row code {
+  display: block;
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
 .library-progress {
   display: grid;
   gap: var(--spacing-xs);
@@ -3799,6 +3900,7 @@ body {
   .library-panel__header,
   .library-folder-row__main,
   .library-model-row__main,
+  .library-simulated__head,
   .library-toggle-row {
     display: grid;
     align-items: stretch;
@@ -3807,7 +3909,8 @@ body {
 
   .library-settings__header > .btn,
   .library-panel__actions,
-  .library-folder-row__actions {
+  .library-folder-row__actions,
+  .library-simulated__head > .btn {
     justify-self: start;
     justify-content: flex-start;
   }
