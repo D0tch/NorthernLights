@@ -387,14 +387,29 @@ function mapAlbum(row: any, songCount?: number, duration?: number) {
   };
 }
 
-function mapArtist(row: any, albumCount?: number) {
+export function mapArtist(row: any, albumCount?: number) {
   return {
     id: subsonicArtistId(row.id),
     name: row.name || 'Unknown Artist',
+    title: row.name || 'Unknown Artist',
     albumCount: Number(albumCount || row.album_count || 0),
     artistImageUrl: row.image_url || row.artwork_url || undefined,
     starred: undefined,
   };
+}
+
+export function buildAlbumListPayload(method: string, albums: any[]) {
+  const key = method === 'getalbumlist2' ? 'albumList2' : 'albumList';
+  return { [key]: { album: albums.map((row) => mapAlbum(row)) } };
+}
+
+export function buildSearchPayload(method: string, payload: Record<string, unknown>) {
+  const key = method === 'search3'
+    ? 'searchResult3'
+    : method === 'search2'
+      ? 'searchResult2'
+      : 'searchResult';
+  return { [key]: payload };
 }
 
 async function getTrackRow(id: string, userId: string) {
@@ -625,12 +640,28 @@ async function handleBrowsing(req: Request, res: Response, method: string, ctx: 
           GROUP BY a.id
           ORDER BY a.name ASC
         `);
-        return sendSubsonic(req, res, subsonicSuccess({ directory: { id: 'root', name: 'Aurora Library', child: artists.rows.map((row) => ({ ...mapArtist(row, row.album_count), isDir: true })) } }));
+        return sendSubsonic(req, res, subsonicSuccess({
+          directory: {
+            id: 'root',
+            name: 'Aurora Library',
+            child: artists.rows.map((row) => ({
+              ...mapArtist(row, row.album_count),
+              parent: 'root',
+              isDir: true,
+            })),
+          },
+        }));
       }
       if (id.startsWith('artist:')) {
         const artist = await db.query('SELECT * FROM artists WHERE id = $1', [artistId(id)]);
         const albums = await getAlbumSummaries(ctx.userId, 'WHERE t.artist_id = $1', [artistId(id)]);
-        return sendSubsonic(req, res, subsonicSuccess({ directory: { id, name: artist.rows[0]?.name || 'Artist', child: albums } }));
+        return sendSubsonic(req, res, subsonicSuccess({
+          directory: {
+            id,
+            name: artist.rows[0]?.name || 'Artist',
+            child: albums.map((album) => ({ ...album, parent: id, isDir: true })),
+          },
+        }));
       }
       const album = await db.query('SELECT * FROM albums WHERE id = $1', [albumId(id)]);
       const tracks = await db.query('SELECT t.*, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved FROM tracks t LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $2 LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $2 WHERE t.album_id = $1 ORDER BY t.disc_number NULLS LAST, t.track_number NULLS LAST, t.title', [albumId(id), ctx.userId]);
@@ -703,7 +734,7 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
         ORDER BY ${order}
         LIMIT ${size}
       `, params);
-      return sendSubsonic(req, res, subsonicSuccess({ albumList: { album: albums.rows.map((row) => mapAlbum(row)) }, albumList2: { album: albums.rows.map((row) => mapAlbum(row)) } }));
+      return sendSubsonic(req, res, subsonicSuccess(buildAlbumListPayload(method, albums.rows)));
     }
     case 'getrandomsongs': {
       const size = Math.max(1, Math.min(500, parseInt(getParam(req, 'size') || '10', 10) || 10));
@@ -751,7 +782,7 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
         db.query('SELECT t.*, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved FROM tracks t LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $2 LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $2 WHERE t.title ILIKE $1 OR t.artist ILIKE $1 OR t.album ILIKE $1 ORDER BY t.title LIMIT $3', [term, ctx.userId, songCount]),
       ]);
       const payload = { artist: artists.rows.map((row) => mapArtist(row, row.album_count)), album: albums.rows.map((row) => mapAlbum(row)), song: songs.rows.map((row) => mapTrackToSubsonic(row, ctx.userId)) };
-      return sendSubsonic(req, res, subsonicSuccess({ searchResult: payload, searchResult2: payload, searchResult3: payload }));
+      return sendSubsonic(req, res, subsonicSuccess(buildSearchPayload(method, payload)));
     }
     default:
       return false;
