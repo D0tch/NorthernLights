@@ -13,10 +13,12 @@ const ProgressBar = () => {
 
   const currentTrack = currentIndex !== null ? playlist[currentIndex] : null;
 
-  // WMA files are transcoded on-the-fly — the browser cannot decode the raw stream
-  // for waveform analysis, and duration will be Infinity. Use DB duration as fallback.
-  const isTranscoded = currentTrack?.format?.toUpperCase().includes('WMA') ||
-    currentTrack?.path?.toLowerCase().endsWith('.wma');
+  // WMA files are transcoded on-the-fly (WMA → MP3 in /api/stream) so the
+  // waveform decoder can't get a finite-length buffer for peaks. music-metadata
+  // labels the container as "ASF/Windows Media" (no literal "WMA"), so match
+  // both. `path` is base64 on the client, so don't try to test its extension.
+  const fmt = currentTrack?.format?.toUpperCase() || '';
+  const isTranscoded = fmt.includes('WMA') || fmt.includes('ASF');
 
   const dbDuration = currentTrack?.duration; // duration in seconds from DB scan
   const displayDuration = (!isFinite(duration) || duration === 0) && dbDuration

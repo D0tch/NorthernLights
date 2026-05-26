@@ -18,6 +18,7 @@ async function loadHls(): Promise<typeof Hls> {
 import { usePlayerStore, type PlaybackTelemetry } from '../store';
 import { getPlaybackTimeSnapshot, setPlaybackCurrentTime } from '../store/playbackTime';
 import { applyStreamingQualityToHlsUrl } from './streaming';
+import { canBrowserPlayNative } from './losslessCapability';
 import { logPlaybackInfo } from './playbackDebug';
 import { audioOutputManager } from './AudioOutputManager';
 import type { TrackInfo } from './fileSystem';
@@ -470,18 +471,23 @@ class PlaybackManager {
     // --- Core Playback Controls ---
 
     public async playUrl(hlsUrl: string, rawUrl: string, title?: string, artist?: string, artUrl?: string, album?: string, format?: string): Promise<void> {
-        const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
-            hlsUrl,
-            usePlayerStore.getState().streamingQuality
-        );
+        const streamingQuality = usePlayerStore.getState().streamingQuality;
+        const effectiveHlsUrl = applyStreamingQualityToHlsUrl(hlsUrl, streamingQuality);
 
-        this.currentUrl = effectiveHlsUrl || rawUrl;
+        // True lossless: when the user picks Source and the browser can decode
+        // the file's native codec, bypass HLS entirely and stream the raw bytes
+        // via /api/stream?pathB64=… (Range-seekable, zero transcoding). Cast
+        // sessions are unaffected — CastManager strips 'source' to 128k AAC.
+        const useRawPassthrough = streamingQuality === 'source' && canBrowserPlayNative(format);
+        const directUrl = useRawPassthrough ? rawUrl : (effectiveHlsUrl || rawUrl);
+
+        this.currentUrl = useRawPassthrough ? rawUrl : (effectiveHlsUrl || rawUrl);
         this.currentTitle = title || 'Unknown Title';
         this.currentArtist = artist || 'Unknown Artist';
         this.currentArtUrl = artUrl || null;
         this.currentAlbum = album || null;
         this.currentFormat = format || null;
-        this.currentPlaylistUrl = effectiveHlsUrl.includes('.m3u8') ? effectiveHlsUrl : null;
+        this.currentPlaylistUrl = !useRawPassthrough && effectiveHlsUrl.includes('.m3u8') ? effectiveHlsUrl : null;
         this.updateMediaSessionMetadata();
 
         try {
@@ -505,8 +511,8 @@ class PlaybackManager {
                 return;
             }
 
-            // Route HLS URLs through hls.js
-            if (effectiveHlsUrl.includes('.m3u8')) {
+            // Route HLS URLs through hls.js (skipped for lossless raw passthrough)
+            if (!useRawPassthrough && effectiveHlsUrl.includes('.m3u8')) {
                 if (this.isPreparedUrl(effectiveHlsUrl)) {
                     try {
                         await this.promotePreparedAudio();
@@ -559,12 +565,15 @@ class PlaybackManager {
                 URL.revokeObjectURL(this.audio.src);
             }
 
-            this.audio.src = effectiveHlsUrl || rawUrl;
+            this.audio.src = directUrl;
+            if (useRawPassthrough) {
+                this.audio.preload = 'auto';
+            }
             this.audio.load();
             await this.audio.play();
 
             this.recordTelemetry({
-                loadPath: 'direct',
+                loadPath: useRawPassthrough ? 'lossless-passthrough' : 'direct',
                 currentTrackTitle: this.currentTitle,
                 currentTrackArtist: this.currentArtist,
                 preparedAudioUsed: false,
@@ -589,10 +598,11 @@ class PlaybackManager {
 
     public async prepareNextUrl(hlsUrl: string, rawUrl: string, title?: string, artist?: string, artUrl?: string, album?: string, format?: string): Promise<void> {
         if (castManager.isConnected()) return;
-        const effectiveHlsUrl = applyStreamingQualityToHlsUrl(
-            hlsUrl,
-            usePlayerStore.getState().streamingQuality
-        );
+        const streamingQuality = usePlayerStore.getState().streamingQuality;
+        const effectiveHlsUrl = applyStreamingQualityToHlsUrl(hlsUrl, streamingQuality);
+        // Skip HLS warmup for lossless raw passthrough — playUrl will set
+        // <audio preload="auto"> and let the browser buffer the original bytes.
+        if (streamingQuality === 'source' && canBrowserPlayNative(format)) return;
         const key = this.normalizePreparedUrlKey(effectiveHlsUrl || rawUrl);
         if (!key || !effectiveHlsUrl.includes('.m3u8')) return;
         if (this.nextUrlKey === key) return;

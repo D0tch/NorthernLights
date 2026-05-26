@@ -138,8 +138,8 @@ export const PlaybackTab: React.FC = () => {
                             <option value="source">Source — Original file, no conversion</option>
                         </select>
                         <p className="text-xs text-[var(--color-text-muted)] mt-1.5">
-                            {streamingQuality === 'source' 
-                                ? 'Streams the original file exactly as it is stored on the server without conversion when the playback path supports it. Chromecast currently stays on Cast-safe HLS, so true lossless casting remains future fMP4 work.'
+                            {streamingQuality === 'source'
+                                ? 'Bit-perfect passthrough when the browser can play the file natively (FLAC, ALAC, WAV, MP3, AAC, Ogg, Opus) — bypasses HLS entirely and streams the raw bytes with Range seek. Falls back to high-bitrate AAC HLS for codecs the browser cannot decode (e.g. WMA). Chromecast still streams 128 kbps AAC HLS regardless of this setting.'
                                 : streamingQuality === 'auto'
                                 ? 'Automatically uses Normal quality (128 kbps AAC). This provides a good balance between quality and bandwidth.'
                                 : `Audio will be transcoded to AAC at ${streamingQuality}bps. Both browser playback and Chromecast now honor this bitrate when a track starts. Higher bitrates sound better but use more bandwidth and storage.`
