@@ -70,7 +70,7 @@ This yields a working range of `0.5 -> 2.0`.
 
 ## 3. Three-Phase Scanner Architecture
 
-Aurora does not use a Python analysis engine anymore. Audio analysis is handled by Node worker threads and a persistent `tsx` child-process pipeline.
+Audio analysis is handled by a Node-managed child-process pool. Each `tsx` analyzer worker keeps a persistent Python extractor process alive, so TensorFlow models load once per worker instead of once per track.
 
 1. **Walk Phase**
    - Recursively collects candidate audio file paths.
@@ -81,13 +81,13 @@ Aurora does not use a Python analysis engine anymore. Audio analysis is handled 
    - Tracks become visible in the library after this phase.
 
 3. **Analysis Phase**
-   - Uses `server/workers/audioAnalysis.worker.ts` to manage concurrent analyzer workers.
-   - Each worker spawns `tsx analyzeTrack.ts` and communicates over stdin/stdout JSON.
-   - `ffmpeg` seeks to roughly 35% into the track and decodes a 15-second window.
-   - Essentia.js extracts the semantic feature set used by recommendations.
+   - Uses `server/workers/processPool.ts` to manage concurrent `tsx analyzeTrack.ts` workers.
+   - Each `tsx` worker communicates with `server/workers/extractor.py` over newline-delimited JSON.
+   - `ffmpeg` seeks to roughly 35% into the track and decodes representative 15-second windows.
+   - Essentia TensorFlow models extract the semantic feature set used by recommendations.
    - The recommender stores:
      - 8D acoustic vectors for playlist concept matching and selector spread
-     - 13D MFCC/timbre features for richer similarity and fallback
+     - 1280D Discogs-EffNet embeddings for richer timbre and production similarity
 
 ## 4. Hub Generation Lifecycle
 

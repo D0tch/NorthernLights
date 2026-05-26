@@ -15,11 +15,13 @@
 - **Hierarchical Genres**: MBDB-driven ontology with hierarchical "Hop Cost" calculation.
 - **Global Search**: Instant client-side search across tracks, artists, albums, and genres.
 - **User Authentication**: Secure JWT-based auth with admin-controlled invites.
+- **OpenSubsonic API**: API-key-only `/rest` compatibility for third-party Subsonic clients, including browsing, search, playlists, streaming, ratings, and scrobbling.
 
 ### UI & Interaction
 - **Glassmorphism Design**: High-fidelity frosted glass aesthetic with Light/Dark mode support.
 - **Advanced State**: Robust queue management and persistent session settings via Zustand.
 - **PWA Support**: Installable Progressive Web App with service-worker caching for offline resilience.
+- **Prefetched Detail Navigation**: Album, artist, and playlist detail chunks can be warmed before navigation, with reduced-motion-aware view-transition helpers where supported.
 - **Keyboard Shortcuts**: Full control surface for power users.
 
 ---

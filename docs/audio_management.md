@@ -103,7 +103,7 @@ The application extracts acoustic features from audio files to power the recomme
 
 1. **Metadata Phase** (Library Scan): ID3/Vorbis/ASF tags extracted and stored in PostgreSQL.
 2. **Analysis Phase** (Worker Threads): ffmpeg + Python + TensorFlow extract high-dimensional feature vectors:
-   - **8D/10D Acoustic Vector** (Rhythm, style, and instrumentation)
+   - **8D Acoustic Vector** (Rhythm, style, and instrumentation)
    - **1280D Discogs-EffNet Embedding** (Neural timbre and production fingerprint)
 3. **Feature Storage**: Results stored in `track_features` table with pgvector HNSW indexing for ultra-fast similarity search.
 
@@ -115,12 +115,12 @@ ffmpeg -ss <seek_to_35%> -i <input> -t 15 -f f32le -ac 1 -ar 44100 pipe:1
 ```
 - **Smart Seeking**: Seeks to ~35% into the track (past intros/silence) to capture a representative segment of the chorus or main verse.
 - **15-Second Window**: Captures sufficient audio for the ML models to generate stable embeddings while minimizing memory and CPU overhead.
-- **Raw PCM Output**: Decodes to 16-bit little-endian mono PCM at 44.1kHz for the analysis engine.
+- **Raw PCM Output**: Decodes to 32-bit little-endian float mono PCM for the analysis engine.
 
 #### Python ML Engine
 The analysis has transitioned from WASM-based processing to a dedicated **Python 3** engine using the **Essentia Python library** and **TensorFlow** models.
 
-**MusiCNN (8D/10D Acoustic Features)**:
+**MusiCNN (8D Acoustic Features)**:
 Extracted using the MusiCNN classification model and traditional DSP algorithms:
 1. **Energy** — Overall amplitude and loudness.
 2. **Brightness** (Spectral Centroid) — Frequency balance (high-frequency content proxy).
@@ -140,17 +140,13 @@ The primary system for timbre and production similarity. It uses a **EfficientNe
 ```
 Main Thread (Express Server)
   ├── Worker 1 → spawn("tsx analyzeTrack.ts")
-  │     └── child_process → extractor.py (Python ML)
+  │     └── persistent child_process → extractor.py (Python ML)
   ├── Worker 2 → spawn("tsx analyzeTrack.ts")
-  │     └── child_process → extractor.py (Python ML)
+  │     └── persistent child_process → extractor.py (Python ML)
   ...
 ```
-- **Process Isolation**: Node.js manages a pool of `analyzeTrack.ts` workers. Each worker spawns the Python `extractor.py` script for each file.
+- **Process Isolation**: Node.js manages a pool of `analyzeTrack.ts` workers. Each worker keeps one Python `extractor.py` process alive and sends multiple track jobs over stdin/stdout so the TensorFlow models load once per worker.
 - **Resource Management**: Concurrency is adjusted via the "Audio Analysis Workers" setting in the UI.
-SON
-  └── Worker 4 → spawn("tsx analyzeTrack.ts") → stdin/stdout JSON
-```
-
 - **Concurrency Control**: `audioAnalysisCpu` setting (Background=1, Balanced=4, Maximum=6 workers)
 - **Protocol**: Newline-delimited JSON over stdin/stdout
 - **Process Lifetime**: Persistent child processes per worker, handling multiple tracks
@@ -188,8 +184,8 @@ SELECT AVG(acoustic_vector_8d), STDDEV(acoustic_vector_8d) FROM track_features
 ```
 Z-score normalization per-dimension, then sigmoid to [0,1] range.
 
-### Timbre-Weighted MFCC
-For electronic/synthetic playlists (target acousticness < 0.3), MFCC timbre is weighted 3× in the SQL query to prioritize instrument texture over rhythm.
+### Timbre-Weighted EffNet Similarity
+For electronic/synthetic playlists (target acousticness < 0.3), Discogs-EffNet embedding similarity is weighted more heavily in the SQL query to prioritize instrument texture and production character over rhythm alone.
 
 ### SQL-Level Acousticness Dealbreaker
 An asymmetric penalty applied in SQL: if the playlist targets EDM (acousticness < 0.2) but a track is fully acoustic (> 0.5), it receives a +5.0 distance spike at the query level.
@@ -204,4 +200,3 @@ An asymmetric penalty applied in SQL: if the playlist targets EDM (acousticness 
 - **Transcoding**: WMA files are transcoded to AAC on-the-fly via the HLS pipeline (same as other formats when quality < source bitrate)
 - **Legacy fallback**: Direct WMA → MP3 pipe streaming is preserved in the `/api/stream` legacy endpoint
 - **Format Detection**: File extension-based MIME type mapping in `MIME_TYPES` record
-

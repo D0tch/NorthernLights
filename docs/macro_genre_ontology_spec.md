@@ -4,5 +4,5 @@
 
 See instead:
 - `genre_adjacency_matrix.md` — Dynamic hop-cost system using MBDB tree paths
-- `music_recommendation_engine.md` — 21D recommendation engine architecture
-- `audio_management.md` — 8D acoustic + 13D MFCC feature extraction
+- `music_recommendation_engine.md` — library-relative recommendation engine architecture
+- `audio_management.md` — 8D acoustic + 1280D Discogs-EffNet feature extraction

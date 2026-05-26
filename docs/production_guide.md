@@ -114,6 +114,7 @@ Notes:
 - `SERVER_URL` should be the public HTTPS base URL when using Last.fm or MusicBrainz OAuth.
 - Keep `DB_DATA_DIR` and `MBDB_WORK_DIR` on a disk with enough free space.
 - Keep `.env` private. It contains secrets.
+- OpenSubsonic clients use the same public base URL with `/rest` endpoints. Create per-client API keys in Settings -> My Account; do not expose Aurora account JWTs to third-party clients.
 
 ## Running With PM2
 
@@ -252,6 +253,7 @@ For larger installs, prefer PostgreSQL-native backups from inside the container.
 - Audio analysis is CPU and memory heavy. Start with Balanced or Background CPU usage in Settings.
 - Chromecast uses AAC-in-HLS for reliability.
 - Hub LLM playlists refresh only for active users on login or Hub access. Prompt-generated playlists are durable.
+- OpenSubsonic `/rest` accepts only Aurora API keys. Username/password and token/salt Subsonic authentication are disabled.
 - MusicBrainz import needs temporary disk space and can take a while.
 - If scans fail on unusual filenames, check FFmpeg availability and `logs/`.
 

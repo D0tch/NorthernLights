@@ -71,8 +71,8 @@ This keeps the LLM grounded in the actual taxonomy instead of inventing free-for
 
 If metadata is weak or missing, the system can recover by vector similarity:
 
-- full 21D similarity when both 8D and MFCC/timbre data are present
-- 8D fallback when only the acoustic vector is available
+- full acoustic + Discogs-EffNet similarity when both vectors are available
+- 8D acoustic fallback when only the acoustic vector is available
 
 ## 4. How Genre Adjacency Is Used in LLM Playlists
 

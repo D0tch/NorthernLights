@@ -91,6 +91,8 @@ These are Aurora JWT endpoints, not `/rest` endpoints.
 
 Aurora exposes opaque Subsonic IDs as `artist:<uuid>`, `album:<uuid>`, and `song:<trackId>`. Use IDs returned by browsing/search/list endpoints instead of constructing IDs manually.
 
+For compatibility with clients such as Symfonium, each versioned endpoint returns only its matching response root. For example, `getAlbumList2` returns `albumList2` only, and `search3` returns `searchResult3` only. Directory browsing responses from `getMusicDirectory` include Subsonic `child` entries with `title`, `parent`, and `isDir` fields for artist and album folders.
+
 ### Examples
 
 Ping:

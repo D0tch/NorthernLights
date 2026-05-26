@@ -11,15 +11,17 @@ graph TD
     Scanner --> Walk[Phase 1: Walk]
     Scanner --> Metadata[Phase 2: Metadata]
     Scanner --> Analysis[Phase 3: Audio Analysis]
-    Analysis --> Workers[Worker Thread Pool]
+    Analysis --> Workers[Child process pool]
     Workers --> TSX[Persistent tsx analyzer workers]
-    TSX --> FFmpeg[ffmpeg decode + seek]
-    TSX --> Essentia[Essentia.js feature extraction]
+    TSX --> Python[Persistent Python extractor]
+    Python --> FFmpeg[ffmpeg decode + seek]
+    Python --> Essentia[Essentia TensorFlow models]
     API --> Hub[LLM Hub Pipeline]
     Hub --> Compiler[Concept Compiler]
     Compiler --> Pools[Named Candidate Pools]
     Pools --> Selector[Constrained Diversity Selector]
     API --> Stream[HLS / Media Streaming]
+    API --> Subsonic[OpenSubsonic /rest API]
     Stream --> Audio[PlaybackManager / CastManager]
     Store --> Audio
 ```
@@ -36,9 +38,9 @@ graph TD
 ## 2. Backend Infrastructure
 
 - **Express**
-  - Route modules under `server/routes/` handle auth, library, playback, settings, hub, playlists, entities, and media.
+  - Route modules under `server/routes/` handle auth, library, playback, settings, hub, playlists, entities, media, and OpenSubsonic compatibility.
 - **PostgreSQL + pgvector**
-  - Stores tracks, entities, settings, listening state, playlists, and feature vectors.
+  - Stores tracks, entities, settings, listening state, playlists, OpenSubsonic API key hashes, and feature vectors.
 - **Filesystem-backed library**
   - Local music folders are scanned and streamed directly from disk.
 
@@ -53,20 +55,23 @@ Aurora’s scanner separates library ingestion into discrete phases:
    - Makes tracks visible quickly.
 3. **Analysis**
    - Runs in worker-managed `tsx` child processes.
-   - `ffmpeg` seeks to about 35% into the track and decodes a short representative segment.
-   - Essentia.js extracts the recommendation features used by the engine.
+   - Each worker keeps a persistent Python extractor alive.
+   - `ffmpeg` seeks to about 35% into the track and decodes short representative windows.
+   - Essentia TensorFlow models extract the recommendation features used by the engine.
 
 This keeps the main server responsive during large library analysis runs.
 
 ## 4. Audio Analysis Pipeline
 
 - **Worker manager**
-  - `server/workers/audioAnalysis.worker.ts`
+  - `server/workers/processPool.ts`
 - **Analyzer child**
   - `server/workers/analyzeTrack.ts`
+- **Python extractor**
+  - `server/workers/extractor.py`
 - **Feature extraction**
   - 8D acoustic semantic vector
-  - 13D MFCC/timbre feature set
+  - 1280D Discogs-EffNet embedding
 - **Non-ASCII path handling**
   - Temporary symlinks in `/tmp/am-*` avoid decode issues with problematic filenames
 

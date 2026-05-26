@@ -43,6 +43,7 @@ For manual deployment, reverse proxy setup, backups, and update procedures, see 
 - Local-library streaming for MP3, FLAC, OGG/Opus, M4A/AAC, WAV, and FFmpeg-backed WMA.
 - Browser, mobile, PWA, and Chromecast playback through HLS.
 - Multi-user accounts with JWT authentication and invite-based registration.
+- OpenSubsonic-compatible `/rest` API for third-party Subsonic clients, using Aurora-generated API keys.
 - PostgreSQL plus pgvector storage, managed through Podman or Docker.
 - Three-phase scanning: filesystem walk, metadata extraction, and audio analysis.
 - MusiCNN 8D acoustic vectors plus 1280D Discogs-EffNet embeddings for similarity.
@@ -51,7 +52,7 @@ For manual deployment, reverse proxy setup, backups, and update procedures, see 
 - External metadata integrations for Last.fm, Genius, MusicBrainz, ListenBrainz, and JamBase where configured.
 - Artist detail pages with popular local tracks, upcoming shows, hero artwork, and similar artists.
 - Playlist management with manual playlists, durable prompt-generated playlists, and transient Hub playlists.
-- Light/dark themes, route-based navigation, global search, queue editing, loved tracks, scrobbling, and local audio output selection.
+- Light/dark themes, route-based navigation with prefetched detail views and reduced-motion-aware transitions, global search, queue editing, loved tracks, scrobbling, and local audio output selection.
 
 ## Requirements
 
@@ -99,6 +100,8 @@ Copy `.env.example` to `.env` and review at least:
 - `CAST_RECEIVER_APP_ID` and `CAST_RECEIVER_ORIGIN`: optional Chromecast custom receiver settings.
 
 Most provider keys and AI settings can also be configured from the app settings UI.
+
+Third-party Subsonic clients should connect to the Aurora base URL and use an API key from Settings -> My Account -> OpenSubsonic API Keys. Username/password and token/salt Subsonic auth are intentionally disabled.
 
 ## Production
 
