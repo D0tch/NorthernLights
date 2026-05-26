@@ -81,7 +81,7 @@ describe('subsonic route helpers', () => {
 
   it('maps Aurora tracks to Subsonic song fields without leaking file paths', () => {
     const song = mapTrackToSubsonic({
-      id: 'track-1',
+      id: 'track/with+unsafe=chars',
       path: '/music/Artist/Album/song.flac',
       title: 'Song',
       artist: 'Artist',
@@ -97,7 +97,6 @@ describe('subsonic route helpers', () => {
     });
 
     expect(song).toMatchObject({
-      id: 'song:track-1',
       parent: 'album:album-1',
       title: 'Song',
       artist: 'Artist',
@@ -111,6 +110,11 @@ describe('subsonic route helpers', () => {
       contentType: 'audio/flac',
       userRating: 5,
     });
+    expect(song.id).toMatch(/^song:v1:[A-Za-z0-9_-]+$/);
+    expect(song.coverArt).toBe(song.id);
+    expect(song.id).not.toContain('/');
+    expect(song.id).not.toContain('+');
+    expect(song.id).not.toContain('=');
     expect(song.path).toBeUndefined();
     expect(song.starred).toBeDefined();
   });

@@ -325,10 +325,26 @@ function sendError(req: Request, res: Response, code: SubsonicErrorCode, message
 
 function artistId(id: string) { return id.startsWith('artist:') ? id.slice(7) : id; }
 function albumId(id: string) { return id.startsWith('album:') ? id.slice(6) : id; }
-function songId(id: string) { return id.startsWith('song:') ? id.slice(5) : id; }
+function encodeSongId(id: string) {
+  return Buffer.from(id, 'utf8').toString('base64url');
+}
+
+function decodeSongId(id: string) {
+  try {
+    return Buffer.from(id, 'base64url').toString('utf8');
+  } catch {
+    return id;
+  }
+}
+
+function songId(id: string) {
+  if (id.startsWith('song:v1:')) return decodeSongId(id.slice(8));
+  if (id.startsWith('song:')) return id.slice(5);
+  return id;
+}
 function subsonicArtistId(id: string) { return `artist:${id}`; }
 function subsonicAlbumId(id: string) { return `album:${id}`; }
-function subsonicSongId(id: string) { return `song:${id}`; }
+function subsonicSongId(id: string) { return `song:v1:${encodeSongId(id)}`; }
 
 function toIso(value: unknown): string | undefined {
   if (!value) return undefined;
