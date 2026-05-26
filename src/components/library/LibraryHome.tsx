@@ -1,5 +1,5 @@
 import React, { useMemo, useState, useCallback, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { TrackInfo } from '../../utils/fileSystem';
 import { AlbumCard, AlbumCardSkeleton } from './AlbumCard';
@@ -23,6 +23,9 @@ import {
   type EnrichedAlbum,
 } from '../../utils/filterState';
 import type { ArtistInfo } from '../../store/index';
+import { prefetchArtistDetail } from '../../utils/routePrefetch';
+import type { ArtistHeroState } from '../../utils/heroState';
+import { artistTransitionName, withViewTransition } from '../../utils/viewTransition';
 
 const ArtistCardSkeleton: React.FC = () => (
     <div className="flex flex-col items-center animate-pulse">
@@ -57,16 +60,43 @@ const GenreCard: React.FC<{ genre: string }> = ({ genre }) => {
     );
 };
 
-const ArtistCard: React.FC<{ artist: string }> = ({ artist }) => {
+const ArtistLink: React.FC<{ to: string; state: ArtistHeroState; children: React.ReactNode }> = ({ to, state, children }) => {
+    const navigate = useNavigate();
+    const handleClick = useCallback((e: React.MouseEvent<HTMLAnchorElement>) => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        withViewTransition(() => navigate(to, { state }));
+    }, [navigate, state, to]);
+    return (
+        <Link
+            to={to}
+            state={state}
+            onClick={handleClick}
+            className="no-underline"
+            onPointerEnter={prefetchArtistDetail}
+            onPointerDown={prefetchArtistDetail}
+            onFocus={prefetchArtistDetail}
+        >
+            {children}
+        </Link>
+    );
+};
+
+const ArtistCard: React.FC<{ artist: string; artistId?: string }> = ({ artist, artistId }) => {
     const [ref, inView] = useInView();
     const { imageUrl } = useArtistData(artist, undefined, { enabled: inView });
+    const transitionName = artistTransitionName(artistId);
+    const avatarStyle = transitionName ? ({ viewTransitionName: transitionName } as React.CSSProperties) : undefined;
 
     return (
         <div
             ref={ref}
             className="artist-card group flex flex-col items-center cursor-pointer transition-transform duration-300 hover:scale-105"
         >
-            <div className="w-full aspect-square rounded-full overflow-hidden shadow-[var(--shadow-sm)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)] mb-4 flex items-center justify-center transition-ui duration-300 group-hover:border-[var(--color-primary)] group-hover:shadow-[var(--shadow-md)]">
+            <div
+                style={avatarStyle}
+                className="w-full aspect-square rounded-full overflow-hidden shadow-[var(--shadow-sm)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)] mb-4 flex items-center justify-center transition-ui duration-300 group-hover:border-[var(--color-primary)] group-hover:shadow-[var(--shadow-md)]"
+            >
                 {imageUrl ? (
                     <img src={imageUrl} alt={artist} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
                 ) : (
@@ -368,10 +398,21 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                                 {filteredArtists.map((entity: any) => {
                                     const artistName = entity.name || '';
                                     if (!entity.id) return <ArtistCard key={artistName} artist={artistName} />;
+                                    const artistHref = `/library/artist/${entity.id}`;
+                                    const artistHero: ArtistHeroState = {
+                                        kind: 'artist',
+                                        name: artistName,
+                                        imageUrl: (entity as any).image_url || (entity as any).artwork_url || undefined,
+                                        backLabel: 'Back to Library',
+                                    };
                                     return (
-                                        <Link key={artistName} to={`/library/artist/${entity.id}`} state={{ backLabel: 'Back to Library' }} className="no-underline">
-                                            <ArtistCard artist={artistName} />
-                                        </Link>
+                                        <ArtistLink
+                                            key={artistName}
+                                            to={artistHref}
+                                            state={artistHero}
+                                        >
+                                            <ArtistCard artist={artistName} artistId={entity.id} />
+                                        </ArtistLink>
                                     );
                                 })}
                             </div>

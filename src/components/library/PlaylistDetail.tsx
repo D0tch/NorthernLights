@@ -1,6 +1,6 @@
 import React, { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
   DndContext,
   closestCenter,
@@ -44,6 +44,8 @@ import { getSuggestedPlaylistTracks } from '../../utils/playlistSuggestions';
 import { useNowPlayingState } from '../../hooks/useNowPlaying';
 import { NowPlayingBadge } from '../now-playing/NowPlayingBadge';
 import { NowPlayingBars } from '../now-playing/NowPlayingBars';
+import { readPlaylistHeroState, type PlaylistHeroState } from '../../utils/heroState';
+import { playlistTransitionName } from '../../utils/viewTransition';
 
 function formatDuration(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
@@ -88,41 +90,99 @@ function getSmartPlaylistPreparationUrl(playlistId: string): string | null {
   return null;
 }
 
-const PlaylistDetailSkeleton: React.FC<{ onBack: () => void }> = ({ onBack }) => (
-  <div className="page-container relative overflow-x-hidden">
-    <div className="relative z-10">
-      <BackButton onClick={onBack}>Back to Playlists</BackButton>
-      <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
-        <div className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
-        <div className="flex-1 w-full space-y-3">
-          <div className="h-4 w-20 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
-          <div className="h-10 w-3/4 max-w-xl rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
-          <div className="h-5 w-56 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
-          <div className="h-10 w-32 rounded-full bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0 mt-4" />
+const PlaylistDetailSkeleton: React.FC<{ onBack: () => void; hero?: PlaylistHeroState; playlistId?: string }> = ({ onBack, hero, playlistId }) => {
+  const heroArt = (hero?.artUrls || []).slice(0, 4);
+  const hasHero = !!hero && (!!hero.title || heroArt.length > 0);
+  const transitionName = playlistTransitionName(playlistId);
+  const coverStyle = transitionName ? ({ viewTransitionName: transitionName } as React.CSSProperties) : undefined;
+
+  return (
+    <div className="page-container relative overflow-x-hidden">
+      <div className="relative z-10">
+        <BackButton onClick={onBack}>Back to Playlists</BackButton>
+        <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
+          {hasHero ? (
+            <div
+              style={coverStyle}
+              className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5"
+            >
+              <div className="grid h-full w-full grid-cols-2 gap-0.5">
+                {(heroArt.length > 0 ? heroArt : [null, null, null, null]).map((artUrl, index) => (
+                  <div key={`${artUrl || 'fallback'}-${index}`} className="overflow-hidden bg-black/10 dark:bg-white/10">
+                    {artUrl ? (
+                      <img src={artUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center">
+                        <Disc3 className="h-8 w-8 text-[var(--color-text-muted)] opacity-40" />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <div
+              style={coverStyle}
+              className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none"
+            />
+          )}
+
+          <div className="flex-1 w-full space-y-3">
+            {hasHero ? (
+              <>
+                <div className="font-semibold text-sm tracking-wider uppercase text-[var(--color-primary)]">
+                  {hero?.isSystem ? 'Curated for You' : hero?.isLlmGenerated ? 'AI Curated Playlist' : 'Playlist'}
+                </div>
+                <h1 className="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight leading-tight text-[var(--color-text-primary)] line-clamp-2" title={hero?.title}>
+                  {hero?.title}
+                </h1>
+                {(typeof hero?.trackCount === 'number' || hero?.pinned) && (
+                  <div className="text-sm md:text-xl text-[var(--color-text-muted)]">
+                    {typeof hero?.trackCount === 'number' && (
+                      <span>{hero.trackCount} track{hero.trackCount !== 1 ? 's' : ''}</span>
+                    )}
+                    {hero?.pinned && <span className="ml-1"> • <Pin className="w-3.5 h-3.5 inline" /> pinned</span>}
+                  </div>
+                )}
+                {hero?.description && (
+                  <p className="text-sm text-[var(--color-text-secondary)] leading-relaxed line-clamp-3 max-w-3xl mx-auto md:mx-0">
+                    {hero.description}
+                  </p>
+                )}
+              </>
+            ) : (
+              <>
+                <div className="h-4 w-20 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+                <div className="h-10 w-3/4 max-w-xl rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+                <div className="h-5 w-56 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+                <div className="h-10 w-32 rounded-full bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0 mt-4" />
+              </>
+            )}
+          </div>
+        </div>
+        <div className="space-y-0.5">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div
+              key={i}
+              className="grid grid-cols-[30px_44px_minmax(0,1fr)_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-2 items-center animate-pulse motion-reduce:animate-none"
+            >
+              <div className="h-4 w-4 rounded bg-[var(--color-surface-variant)]" />
+              <div className="h-11 w-11 md:h-13 md:w-13 rounded-lg md:rounded-xl bg-[var(--color-surface-variant)]" />
+              <div className="space-y-2">
+                <div className="h-4 w-3/4 rounded bg-[var(--color-surface-variant)]" />
+                <div className="h-3 w-1/2 rounded bg-[var(--color-surface-variant)]" />
+              </div>
+              <div className="hidden md:block h-4 w-2/3 rounded bg-[var(--color-surface-variant)]" />
+              <div className="hidden md:block h-4 w-20 rounded bg-[var(--color-surface-variant)]" />
+              <div className="hidden md:block h-4 w-12 rounded bg-[var(--color-surface-variant)]" />
+              <div className="h-8 w-8 rounded-full bg-[var(--color-surface-variant)]" />
+            </div>
+          ))}
         </div>
       </div>
-      <div className="space-y-0.5">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <div
-            key={i}
-            className="grid grid-cols-[30px_44px_minmax(0,1fr)_40px] md:grid-cols-[34px_52px_minmax(0,1.4fr)_minmax(0,1fr)_120px_92px_40px] gap-2 md:gap-3 px-2 md:px-4 py-2 items-center animate-pulse motion-reduce:animate-none"
-          >
-            <div className="h-4 w-4 rounded bg-[var(--color-surface-variant)]" />
-            <div className="h-11 w-11 md:h-13 md:w-13 rounded-lg md:rounded-xl bg-[var(--color-surface-variant)]" />
-            <div className="space-y-2">
-              <div className="h-4 w-3/4 rounded bg-[var(--color-surface-variant)]" />
-              <div className="h-3 w-1/2 rounded bg-[var(--color-surface-variant)]" />
-            </div>
-            <div className="hidden md:block h-4 w-2/3 rounded bg-[var(--color-surface-variant)]" />
-            <div className="hidden md:block h-4 w-20 rounded bg-[var(--color-surface-variant)]" />
-            <div className="hidden md:block h-4 w-12 rounded bg-[var(--color-surface-variant)]" />
-            <div className="h-8 w-8 rounded-full bg-[var(--color-surface-variant)]" />
-          </div>
-        ))}
-      </div>
     </div>
-  </div>
-);
+  );
+};
 
 interface PlaylistTrackRowProps {
   id: string;
@@ -306,6 +366,8 @@ PlaylistTrackRow.displayName = 'PlaylistTrackRow';
 export const PlaylistDetail: React.FC = () => {
   const { playlistId } = useParams<{ playlistId: string }>();
   const navigate = useNavigate();
+  const location = useLocation();
+  const heroState = useMemo(() => readPlaylistHeroState(location.state), [location.state]);
   const { addToast } = useToast();
   const [hasCheckedPlaylist, setHasCheckedPlaylist] = useState(false);
   const [isPreparingGeneratedPlaylist, setIsPreparingGeneratedPlaylist] = useState(false);
@@ -320,6 +382,7 @@ export const PlaylistDetail: React.FC = () => {
   const replaceTracksInUserPlaylist = usePlayerStore((state) => state.replaceTracksInUserPlaylist);
   const addTracksToUserPlaylist = usePlayerStore((state) => state.addTracksToUserPlaylist);
   const fetchPlaylistsFromServer = usePlayerStore((state) => state.fetchPlaylistsFromServer);
+  const fetchPlaylistFromServer = usePlayerStore((state) => state.fetchPlaylistFromServer);
   const isPlaylistsLoading = usePlayerStore((state) => state.isPlaylistsLoading);
   const getAuthHeader = usePlayerStore((state) => state.getAuthHeader);
   const currentTrackId = usePlayerStore((state) => state.currentIndex !== null ? state.playlist[state.currentIndex]?.id ?? null : null);
@@ -343,22 +406,33 @@ export const PlaylistDetail: React.FC = () => {
     setIsPreparingGeneratedPlaylist(false);
 
     const loadPlaylist = async () => {
-      await fetchPlaylistsFromServer();
+      // Cheap path: just this one playlist. Falls back to the bulk fetch
+      // only when the server says the playlist doesn't exist yet (e.g. a
+      // generated smart playlist that needs a preparation call first).
+      let found = await fetchPlaylistFromServer(playlistId);
       if (cancelled) return;
 
-      const existsAfterRefresh = usePlayerStore.getState().playlists.some((entry) => entry.id === playlistId);
       const preparationUrl = getSmartPlaylistPreparationUrl(playlistId);
 
-      if (!existsAfterRefresh && preparationUrl) {
+      if (!found && preparationUrl) {
         setIsPreparingGeneratedPlaylist(true);
         try {
           await fetch(preparationUrl, { headers: getAuthHeader() });
-          if (!cancelled) await fetchPlaylistsFromServer();
+          if (!cancelled) {
+            found = await fetchPlaylistFromServer(playlistId);
+          }
         } catch (error) {
           console.error('Failed to prepare generated playlist', error);
         } finally {
           if (!cancelled) setIsPreparingGeneratedPlaylist(false);
         }
+      }
+
+      if (!found && !cancelled) {
+        // Last-resort: refresh the whole list. Covers cases where the
+        // server has the playlist but our single-id route reported 404
+        // due to a transient permission/scoping mismatch.
+        await fetchPlaylistsFromServer();
       }
 
       if (!cancelled) setHasCheckedPlaylist(true);
@@ -369,7 +443,7 @@ export const PlaylistDetail: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [fetchPlaylistsFromServer, getAuthHeader, playlist, playlistId]);
+  }, [fetchPlaylistFromServer, fetchPlaylistsFromServer, getAuthHeader, playlist, playlistId]);
 
   const isSystemPlaylist = !!playlist?.isSystem;
   const playlistTracks = playlist?.tracks || [];
@@ -557,7 +631,7 @@ export const PlaylistDetail: React.FC = () => {
 
   if (!playlist) {
     if (isPlaylistsLoading || isPreparingGeneratedPlaylist || !hasCheckedPlaylist) {
-      return <PlaylistDetailSkeleton onBack={() => navigate('/playlists')} />;
+      return <PlaylistDetailSkeleton onBack={() => navigate('/playlists')} hero={heroState} playlistId={playlistId} />;
     }
 
     return (
@@ -610,7 +684,10 @@ export const PlaylistDetail: React.FC = () => {
         <BackButton onClick={() => navigate('/playlists')}>Back to Playlists</BackButton>
 
         <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
-          <div className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5">
+          <div
+            style={{ viewTransitionName: playlistTransitionName(playlist.id) } as React.CSSProperties}
+            className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5"
+          >
             <div className="grid h-full w-full grid-cols-2 gap-0.5">
               {(heroArtUrls.length > 0 ? heroArtUrls.slice(0, 4) : [null, null, null, null]).map((artUrl, index) => (
                 <div key={`${artUrl || 'fallback'}-${index}`} className="overflow-hidden bg-black/10 dark:bg-white/10">

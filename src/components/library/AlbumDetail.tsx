@@ -1,6 +1,6 @@
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { AlbumArt } from '../AlbumArt';
 import { parseArtistsForDisplay } from '../../utils/artistUtils';
@@ -17,6 +17,8 @@ import { NowPlayingBars } from '../now-playing/NowPlayingBars';
 
 import { MoreHorizontal, Play, Clock, ExternalLink, Headphones, BarChart2, Link2, Music2, Calendar, Gauge, Disc3, X, Search, Plus, Users, Layers, Settings } from 'lucide-react';
 import type { AlbumInfo, TrackCredit } from '../../store/index';
+import { readAlbumHeroState, type AlbumHeroState } from '../../utils/heroState';
+import { albumTransitionName } from '../../utils/viewTransition';
 
 interface EditionRow extends AlbumInfo {
     track_count?: number;
@@ -84,23 +86,57 @@ const TrackRowSkeleton: React.FC = () => (
     </div>
 );
 
-const AlbumDetailSkeleton: React.FC<{ onBack: () => void }> = ({ onBack }) => (
-    <div className="flex flex-col overflow-hidden p-4 md:p-8 lg:p-12 flex-1">
-        <div className="shrink-0 mb-6"><BackButton onClick={onBack} /></div>
-        <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12">
-            <div className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
-            <div className="flex-1 space-y-3">
-                <div className="h-4 w-16 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
-                <div className="h-10 w-3/4 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
-                <div className="h-5 w-1/2 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
-                <div className="h-10 w-32 rounded-full bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mt-4" />
+const AlbumDetailSkeleton: React.FC<{ onBack: () => void; hero?: AlbumHeroState; albumId?: string }> = ({ onBack, hero, albumId }) => {
+    const hasHero = !!hero && (!!hero.title || !!hero.artUrl);
+    const transitionName = albumTransitionName(albumId);
+    const coverStyle = transitionName ? ({ viewTransitionName: transitionName } as React.CSSProperties) : undefined;
+    return (
+        <div className="flex flex-col overflow-hidden p-4 md:p-8 lg:p-12 flex-1">
+            <div className="shrink-0 mb-6"><BackButton onClick={onBack} /></div>
+            <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
+                {hasHero ? (
+                    <div
+                        style={coverStyle}
+                        className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5"
+                    >
+                        <AlbumArt artUrl={hero?.artUrl} artist={hero?.artist} size={240} className="w-full h-full object-cover rounded-2xl" />
+                    </div>
+                ) : (
+                    <div
+                        style={coverStyle}
+                        className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none"
+                    />
+                )}
+                <div className="flex-1 space-y-3">
+                    {hasHero ? (
+                        <>
+                            <div className="font-semibold text-sm tracking-wider uppercase text-[var(--color-primary)]">Album</div>
+                            <h1 className="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight leading-tight text-[var(--color-text-primary)] line-clamp-2" title={hero?.title}>
+                                {hero?.title}
+                            </h1>
+                            {hero?.artist && (
+                                <div className="text-base md:text-xl text-[var(--color-text-secondary)]">{hero.artist}</div>
+                            )}
+                            {hero?.subtitle && (
+                                <div className="text-xs text-[var(--color-text-muted)]">{hero.subtitle}</div>
+                            )}
+                        </>
+                    ) : (
+                        <>
+                            <div className="h-4 w-16 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                            <div className="h-10 w-3/4 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                            <div className="h-5 w-1/2 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                            <div className="h-10 w-32 rounded-full bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mt-4" />
+                        </>
+                    )}
+                </div>
+            </div>
+            <div className="space-y-0.5">
+                {Array.from({ length: 8 }).map((_, i) => <TrackRowSkeleton key={i} />)}
             </div>
         </div>
-        <div className="space-y-0.5">
-            {Array.from({ length: 8 }).map((_, i) => <TrackRowSkeleton key={i} />)}
-        </div>
-    </div>
-);
+    );
+};
 
 interface AlbumDiscHeaderRow {
     type: 'disc';
@@ -475,6 +511,8 @@ const ManageEditionsModal: React.FC<ManageEditionsModalProps> = ({
 export const AlbumDetail: React.FC = () => {
     const { albumId } = useParams<{ albumId: string }>();
     const navigate = useNavigate();
+    const location = useLocation();
+    const heroState = useMemo(() => readAlbumHeroState(location.state), [location.state]);
 
     const library = usePlayerStore(state => state.library);
     const isLibraryLoading = usePlayerStore(state => state.isLibraryLoading);
@@ -792,10 +830,13 @@ export const AlbumDetail: React.FC = () => {
     // ── Navigation helpers ─────────────────────────────────────────────────
 
     if (!albumId || (isLibraryLoading && albumTracks.length === 0)) {
-        return <AlbumDetailSkeleton onBack={() => navigate(-1)} />;
+        return <AlbumDetailSkeleton onBack={() => navigate(-1)} hero={heroState} albumId={albumId} />;
     }
 
     if (albumTracks.length === 0) {
+        if (heroState && (heroState.title || heroState.artUrl)) {
+            return <AlbumDetailSkeleton onBack={() => navigate(-1)} hero={heroState} albumId={albumId} />;
+        }
         return <div className="flex-1 flex justify-center items-center text-[var(--color-text-muted)]">Album not found.</div>;
     }
 
@@ -811,7 +852,10 @@ export const AlbumDetail: React.FC = () => {
             <div className="shrink-0 mb-6"><BackButton onClick={() => navigate(-1)} /></div>
 
             <div className="shrink-0 flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
-                <div className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5">
+                <div
+                    style={{ viewTransitionName: albumTransitionName(albumId) } as React.CSSProperties}
+                    className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5"
+                >
                     <AlbumArt artUrl={artUrl} artist={albumArtist} size={240} className="w-full h-full object-cover rounded-2xl" />
                 </div>
                 <div className="flex flex-col justify-end items-center md:items-start max-w-full">

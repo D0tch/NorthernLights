@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { TrackInfo } from '../../utils/fileSystem';
 import { normalizeArtistIdentityKey, parseArtistsForDisplay, trackMatchesArtist } from '../../utils/artistUtils';
@@ -18,6 +18,9 @@ import { useArtistConcerts, OnTourSticker, UpcomingShows } from './ArtistConcert
 import { useIsCurrentCollection, useNowPlayingState } from '../../hooks/useNowPlaying';
 import { NowPlayingBadge } from '../now-playing/NowPlayingBadge';
 import { NowPlayingBars } from '../now-playing/NowPlayingBars';
+import { prefetchArtistDetail } from '../../utils/routePrefetch';
+import { readArtistHeroState, type ArtistHeroState } from '../../utils/heroState';
+import { artistTransitionName, withViewTransition } from '../../utils/viewTransition';
 
 // ─── Link label helpers ───────────────────────────────────────────────────────
 
@@ -130,6 +133,63 @@ type SimilarArtist = {
     matchScore: number;
 };
 
+const SimilarArtistRow: React.FC<{ artist: SimilarArtist }> = ({ artist }) => {
+    const href = `/library/artist/${artist.id}`;
+    const navigate = useNavigate();
+    const heroState: ArtistHeroState = {
+        kind: 'artist',
+        name: artist.name,
+        imageUrl: artist.imageUrl || undefined,
+        backLabel: 'Back to Artist',
+    };
+    const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        withViewTransition(() => navigate(href, { state: heroState }));
+    };
+    const transitionName = artistTransitionName(artist.id);
+    const avatarStyle = transitionName ? ({ viewTransitionName: transitionName } as React.CSSProperties) : undefined;
+
+    return (
+        <Link
+            to={href}
+            state={heroState}
+            onClick={handleClick}
+            onPointerEnter={prefetchArtistDetail}
+            onPointerDown={prefetchArtistDetail}
+            onFocus={prefetchArtistDetail}
+            className="group rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-3 transition-ui hover:border-[var(--color-primary)]/40 hover:bg-[var(--glass-bg-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
+        >
+            <div className="flex items-start gap-3">
+                <div
+                    style={avatarStyle}
+                    className="h-14 w-14 shrink-0 overflow-hidden rounded-full border border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/10"
+                >
+                    {artist.imageUrl ? (
+                        <img src={artist.imageUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                    ) : (
+                        <div className="flex h-full w-full items-center justify-center">
+                            <ArtistInitial name={artist.name} className="text-xl text-[var(--color-primary)] opacity-55" />
+                        </div>
+                    )}
+                </div>
+                <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold text-[var(--color-text-primary)] transition-colors group-hover:text-[var(--color-primary)]">
+                        {artist.name}
+                    </div>
+                    <div className="mt-1 text-xs text-[var(--color-text-muted)] tabular-nums">
+                        {artist.matchScore}% match
+                    </div>
+                </div>
+            </div>
+            <div className="mt-3 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-[var(--color-text-muted)]">
+                <span>{artist.trackCount} track{artist.trackCount !== 1 ? 's' : ''}</span>
+                {artist.albumCount > 0 && <span>{artist.albumCount} album{artist.albumCount !== 1 ? 's' : ''}</span>}
+            </div>
+        </Link>
+    );
+};
+
 const SimilarArtistsSection: React.FC<{ artists: SimilarArtist[]; loading: boolean }> = ({ artists, loading }) => {
     if (loading) {
         return (
@@ -157,71 +217,77 @@ const SimilarArtistsSection: React.FC<{ artists: SimilarArtist[]; loading: boole
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
                 {artists.map(artist => (
-                    <Link
-                        key={artist.id}
-                        to={`/library/artist/${artist.id}`}
-                        state={{ backLabel: 'Back to Artist' }}
-                        className="group rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-3 transition-ui hover:border-[var(--color-primary)]/40 hover:bg-[var(--glass-bg-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
-                    >
-                        <div className="flex items-start gap-3">
-                            <div className="h-14 w-14 shrink-0 overflow-hidden rounded-full border border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/10">
-                                {artist.imageUrl ? (
-                                    <img src={artist.imageUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
-                                ) : (
-                                    <div className="flex h-full w-full items-center justify-center">
-                                        <ArtistInitial name={artist.name} className="text-xl text-[var(--color-primary)] opacity-55" />
-                                    </div>
-                                )}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                                <div className="truncate text-sm font-semibold text-[var(--color-text-primary)] transition-colors group-hover:text-[var(--color-primary)]">
-                                    {artist.name}
-                                </div>
-                                <div className="mt-1 text-xs text-[var(--color-text-muted)] tabular-nums">
-                                    {artist.matchScore}% match
-                                </div>
-                            </div>
-                        </div>
-                        <div className="mt-3 flex flex-wrap gap-x-2 gap-y-1 text-[11px] text-[var(--color-text-muted)]">
-                            <span>{artist.trackCount} track{artist.trackCount !== 1 ? 's' : ''}</span>
-                            {artist.albumCount > 0 && <span>{artist.albumCount} album{artist.albumCount !== 1 ? 's' : ''}</span>}
-                        </div>
-                    </Link>
+                    <SimilarArtistRow key={artist.id} artist={artist} />
                 ))}
             </div>
         </section>
     );
 };
 
-const ArtistDetailSkeleton: React.FC<{ onBack: () => void }> = ({ onBack }) => (
-    <div className="artist-detail page-container relative">
-        <div className="relative z-10">
-            <BackButton onClick={onBack} />
-            <section className="flex flex-col md:flex-row items-center md:items-end gap-8 mb-10 md:mb-14">
-                <div className="w-48 h-48 md:w-64 md:h-64 rounded-full shrink-0 bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
-                <div className="flex-1 w-full space-y-4 text-center md:text-left">
-                    <div className="h-12 md:h-16 w-3/4 max-w-xl rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
-                    <div className="h-4 w-56 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
-                    <div className="h-10 w-36 rounded-full bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+const ArtistDetailSkeleton: React.FC<{ onBack: () => void; hero?: ArtistHeroState; artistId?: string }> = ({ onBack, hero, artistId }) => {
+    const hasHero = !!hero && (!!hero.name || !!hero.imageUrl);
+    return (
+        <div className="artist-detail page-container relative">
+            <div className="relative z-10">
+                <BackButton onClick={onBack} />
+                <section className="flex flex-col md:flex-row items-center md:items-end gap-8 mb-10 md:mb-14">
+                    {hasHero && hero?.imageUrl ? (
+                        <div
+                            style={{ viewTransitionName: artistTransitionName(artistId) } as React.CSSProperties}
+                            className="w-48 h-48 md:w-64 md:h-64 rounded-full overflow-hidden shrink-0 shadow-[var(--shadow-md)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)]"
+                        >
+                            <img src={hero.imageUrl} alt={hero.name || ''} className="w-full h-full object-cover" />
+                        </div>
+                    ) : hasHero ? (
+                        <div
+                            style={{ viewTransitionName: artistTransitionName(artistId) } as React.CSSProperties}
+                            className="w-48 h-48 md:w-64 md:h-64 rounded-full overflow-hidden shrink-0 shadow-[var(--shadow-md)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)] flex items-center justify-center"
+                        >
+                            <ArtistInitial name={hero.name || ''} />
+                        </div>
+                    ) : (
+                        <div
+                            style={{ viewTransitionName: artistTransitionName(artistId) } as React.CSSProperties}
+                            className="w-48 h-48 md:w-64 md:h-64 rounded-full shrink-0 bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none"
+                        />
+                    )}
+                    <div className="flex-1 w-full space-y-4 text-center md:text-left">
+                        {hasHero ? (
+                            <>
+                                <h1 className="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight leading-tight text-[var(--color-text-primary)] line-clamp-2">
+                                    {hero?.name}
+                                </h1>
+                                <div className="h-4 w-56 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+                            </>
+                        ) : (
+                            <>
+                                <div className="h-12 md:h-16 w-3/4 max-w-xl rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+                                <div className="h-4 w-56 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+                                <div className="h-10 w-36 rounded-full bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none mx-auto md:mx-0" />
+                            </>
+                        )}
+                    </div>
+                </section>
+                <div className="mb-12 max-w-3xl space-y-2">
+                    <div className="h-4 w-full rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                    <div className="h-4 w-5/6 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
+                    <div className="h-4 w-2/3 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
                 </div>
-            </section>
-            <div className="mb-12 max-w-3xl space-y-2">
-                <div className="h-4 w-full rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
-                <div className="h-4 w-5/6 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
-                <div className="h-4 w-2/3 rounded bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none" />
-            </div>
-            <div className="album-grid">
-                {Array.from({ length: 6 }).map((_, i) => <AlbumCardSkeleton key={i} />)}
+                <div className="album-grid">
+                    {Array.from({ length: 6 }).map((_, i) => <AlbumCardSkeleton key={i} />)}
+                </div>
             </div>
         </div>
-    </div>
-);
+    );
+};
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export const ArtistDetail: React.FC = () => {
     const { artistId } = useParams<{ artistId: string }>();
     const navigate = useNavigate();
+    const location = useLocation();
+    const heroState = useMemo(() => readArtistHeroState(location.state), [location.state]);
     const { library, artists, albums, setPlaylist, getAuthHeader, isLibraryLoading } = usePlayerStore();
 
     // Map albumId → edition_label so each AlbumCard can render the "remaster",
@@ -613,16 +679,21 @@ export const ArtistDetail: React.FC = () => {
     const hasAnyContent = primaryTracks.length > 0 || collaborationTracks.length > 0 || featuredTracks.length > 0;
 
     if (isLibraryLoading && (!artistName || !hasAnyContent)) {
-        return <ArtistDetailSkeleton onBack={() => navigate(-1)} />;
+        return <ArtistDetailSkeleton onBack={() => navigate(-1)} hero={heroState} artistId={artistId} />;
     }
 
-    if (!artistName || !hasAnyContent) return (
-        <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
-            <Users className="w-12 h-12 text-[var(--color-text-muted)] opacity-30 mb-4" />
-            <p className="text-lg font-medium text-[var(--color-text-secondary)]">Artist not found</p>
-            <p className="text-sm text-[var(--color-text-muted)] mt-1">This artist may not have any tracks in your library.</p>
-        </div>
-    );
+    if (!artistName || !hasAnyContent) {
+        if (heroState && (heroState.name || heroState.imageUrl)) {
+            return <ArtistDetailSkeleton onBack={() => navigate(-1)} hero={heroState} artistId={artistId} />;
+        }
+        return (
+            <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
+                <Users className="w-12 h-12 text-[var(--color-text-muted)] opacity-30 mb-4" />
+                <p className="text-lg font-medium text-[var(--color-text-secondary)]">Artist not found</p>
+                <p className="text-sm text-[var(--color-text-muted)] mt-1">This artist may not have any tracks in your library.</p>
+            </div>
+        );
+    }
 
     return (
         <div className="artist-detail page-container relative">
@@ -632,11 +703,17 @@ export const ArtistDetail: React.FC = () => {
 
                 <div className="flex flex-col md:flex-row gap-8 items-start mb-8 md:mb-12">
                     {imageUrl ? (
-                        <div className="w-48 h-48 md:w-64 md:h-64 rounded-full overflow-hidden shrink-0 shadow-[var(--shadow-md)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)]">
+                        <div
+                            style={{ viewTransitionName: artistTransitionName(artistId) } as React.CSSProperties}
+                            className="w-48 h-48 md:w-64 md:h-64 rounded-full overflow-hidden shrink-0 shadow-[var(--shadow-md)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)]"
+                        >
                             <img src={imageUrl} alt={artistName} className="w-full h-full object-cover" />
                         </div>
                     ) : (
-                        <div className={`w-48 h-48 md:w-64 md:h-64 rounded-full overflow-hidden shrink-0 shadow-[var(--shadow-md)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)] flex items-center justify-center ${artistLoading ? 'animate-pulse motion-reduce:animate-none' : ''}`}>
+                        <div
+                            style={{ viewTransitionName: artistTransitionName(artistId) } as React.CSSProperties}
+                            className={`w-48 h-48 md:w-64 md:h-64 rounded-full overflow-hidden shrink-0 shadow-[var(--shadow-md)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)] flex items-center justify-center ${artistLoading ? 'animate-pulse motion-reduce:animate-none' : ''}`}
+                        >
                             <ArtistInitial name={artistName} />
                         </div>
                     )}

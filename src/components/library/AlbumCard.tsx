@@ -1,7 +1,10 @@
-import React, { memo } from 'react';
-import { Link } from 'react-router-dom';
+import React, { memo, useCallback } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { AlbumArt } from '../AlbumArt';
 import { Play } from 'lucide-react';
+import { prefetchAlbumDetail } from '../../utils/routePrefetch';
+import { readBackLabel, type AlbumHeroState } from '../../utils/heroState';
+import { albumTransitionName, withViewTransition } from '../../utils/viewTransition';
 
 interface AlbumCardProps {
     title: string;
@@ -13,6 +16,10 @@ interface AlbumCardProps {
     onOpen?: () => void;
     linkTo?: string;
     linkState?: unknown;
+    // Optional: provide the canonical album id for the cover's
+    // view-transition-name. When omitted we derive a name from `linkTo` as a
+    // fallback so callers don't have to pass it everywhere.
+    albumId?: string;
 }
 
 export const AlbumCardSkeleton: React.FC = () => (
@@ -25,13 +32,49 @@ export const AlbumCardSkeleton: React.FC = () => (
     </div>
 );
 
-export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl, subtitle, editionLabel, onPlay, onOpen, linkTo, linkState }) => {
+export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl, subtitle, editionLabel, onPlay, onOpen, linkTo, linkState, albumId }) => {
+    const navigate = useNavigate();
+    const handlePrefetch = useCallback(() => {
+        if (linkTo) prefetchAlbumDetail();
+    }, [linkTo]);
+
+    // Derive a hero placeholder from the card's own props so the detail view
+    // can paint its hero before tracks hydrate. Preserve any caller-supplied
+    // backLabel so the back button keeps its previous wording.
+    const navState: AlbumHeroState | undefined = linkTo
+        ? {
+            kind: 'album',
+            title,
+            artist,
+            artUrl,
+            subtitle,
+            backLabel: readBackLabel(linkState),
+        }
+        : undefined;
+
+    // Per-entity transition name shared with AlbumDetail's hero. Browser pairs
+    // the matching names across the navigation and morphs them.
+    const transitionId = albumId || linkTo;
+    const coverStyle: React.CSSProperties | undefined = transitionId
+        ? { viewTransitionName: albumTransitionName(transitionId) }
+        : undefined;
+
+    const handleLinkClick = useCallback((e: React.MouseEvent<HTMLAnchorElement>) => {
+        // Preserve middle-click / modifier-click open-in-new-tab behaviour.
+        if (!linkTo || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+        e.preventDefault();
+        withViewTransition(() => navigate(linkTo, { state: navState }));
+    }, [linkTo, navState, navigate]);
+
     return (
         <div
             className="group flex flex-col relative cursor-pointer"
             role={!linkTo ? "button" : undefined}
             tabIndex={!linkTo ? 0 : undefined}
             onClick={!linkTo ? onOpen : undefined}
+            onPointerEnter={handlePrefetch}
+            onPointerDown={handlePrefetch}
+            onFocus={handlePrefetch}
             onKeyDown={!linkTo ? (e) => {
                 if (e.key === 'Enter' || e.key === ' ') {
                     e.preventDefault();
@@ -41,16 +84,19 @@ export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl
         >
             {/* Semantic Invisible Link Overlay */}
             {linkTo && (
-                <Link 
-                    to={linkTo} 
-                    state={linkState}
+                <Link
+                    to={linkTo}
+                    state={navState}
+                    onClick={handleLinkClick}
                     className="absolute inset-0 z-10 rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
                     aria-label={`View album: ${title}`}
                 />
             )}
-            
+
             {/* Art container */}
-            <div className="relative aspect-square w-full mb-3 rounded-2xl border border-black/5 dark:border-white/5 bg-white/5 dark:bg-black/20 shadow-md overflow-hidden transition-transform duration-300 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100">
+            <div
+                style={coverStyle}
+                className="relative aspect-square w-full mb-3 rounded-2xl border border-black/5 dark:border-white/5 bg-white/5 dark:bg-black/20 shadow-md overflow-hidden transition-transform duration-300 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100">
                 <AlbumArt
                     artUrl={artUrl}
                     artist={artist}

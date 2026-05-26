@@ -11,6 +11,9 @@ import {
   PlaylistContextMenu,
   type PlaylistMenuTrigger,
 } from './PlaylistContextMenu';
+import { prefetchPlaylistDetail } from '../../utils/routePrefetch';
+import type { PlaylistHeroState } from '../../utils/heroState';
+import { playlistTransitionName, withViewTransition } from '../../utils/viewTransition';
 
 // ─── Playlist Card ────────────────────────────────────────────────────────────
 
@@ -22,11 +25,15 @@ const PlaylistCard: React.FC<{
 }> = ({ playlist, onOpen, onMenuOpen, onPlay }) => {
   const { artUrls, bgColor } = useDominantColor(playlist.tracks);
   const hasCovers = artUrls.length > 0;
+  const coverStyle: React.CSSProperties = { viewTransitionName: playlistTransitionName(playlist.id) };
 
   return (
     <div
       className="relative p-4 sm:p-5 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
       onClick={onOpen}
+      onPointerEnter={prefetchPlaylistDetail}
+      onPointerDown={prefetchPlaylistDetail}
+      onFocus={prefetchPlaylistDetail}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
@@ -42,7 +49,7 @@ const PlaylistCard: React.FC<{
 
       {/* Top row: stacked art + kebab */}
       <div className="relative flex items-start justify-between mb-4">
-        <div className="flex items-center">
+        <div className="flex items-center" style={coverStyle}>
           {hasCovers ? (
             artUrls.slice(0, 4).map((url, i) => (
               <img
@@ -410,15 +417,28 @@ export const Playlists: React.FC = () => {
             />
           )}
 
-          {sorted.map((pl) => (
-            <PlaylistCard
-              key={pl.id}
-              playlist={pl}
-              onOpen={() => navigate(`/playlists/${pl.id}`)}
-              onPlay={() => { if (pl.tracks.length > 0) setPlaylist(pl.tracks, 0); }}
-              onMenuOpen={(x, y) => openMenu(pl, x, y)}
-            />
-          ))}
+          {sorted.map((pl) => {
+            const hero: PlaylistHeroState = {
+              kind: 'playlist',
+              title: pl.title,
+              description: pl.description || undefined,
+              trackCount: pl.tracks.length,
+              artUrls: pl.tracks.map((t) => t.artUrl).filter((u): u is string => !!u).slice(0, 4),
+              isLlmGenerated: pl.isLlmGenerated || false,
+              isSystem: pl.isSystem || false,
+              pinned: pl.pinned || false,
+              backLabel: 'Back to Playlists',
+            };
+            return (
+              <PlaylistCard
+                key={pl.id}
+                playlist={pl}
+                onOpen={() => withViewTransition(() => navigate(`/playlists/${pl.id}`, { state: hero }))}
+                onPlay={() => { if (pl.tracks.length > 0) setPlaylist(pl.tracks, 0); }}
+                onMenuOpen={(x, y) => openMenu(pl, x, y)}
+              />
+            );
+          })}
         </div>
       )}
     </div>
