@@ -1,25 +1,48 @@
 import { Router } from 'express';
-import { getPlaylists, getPlaylistTracks, createPlaylist, addTracksToPlaylist, deletePlaylist, getPlaylistOwner, getPlaylistMeta, togglePlaylistPin } from '../database';
+import {
+  getPlaylistTracks,
+  createPlaylist,
+  addTracksToPlaylist,
+  deletePlaylist,
+  getPlaylistMeta,
+  togglePlaylistPin,
+  getPlaylistByIdForUser,
+  getPlaylistsForUserWithTracks,
+} from '../database';
 
 const router = Router();
 
-// Get all playlists for current user
+// Get all playlists for current user. Backed by a two-query helper that
+// avoids the previous N+1 (one `getPlaylistTracks` per playlist).
 router.get('/', async (req, res) => {
   try {
     const userId = req.user?.userId;
     if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
-    const playlists = await getPlaylists(userId);
-
-    const populated = await Promise.all(playlists.map(async (pl: any) => {
-      const tracks = await getPlaylistTracks(pl.id, userId);
-      return { ...pl, tracks };
-    }));
-
-    res.json({ playlists: populated });
+    const playlists = await getPlaylistsForUserWithTracks(userId);
+    res.json({ playlists });
   } catch (error) {
     console.error('Playlist fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch playlists' });
+  }
+});
+
+// Get a single playlist with its tracks. Cheap path for the detail view —
+// no need to load every other playlist's tracks just to open one.
+router.get('/:id', async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+
+    const { id } = req.params;
+    const meta = await getPlaylistByIdForUser(id as string, userId);
+    if (!meta) return res.status(404).json({ error: 'Playlist not found' });
+
+    const tracks = await getPlaylistTracks(id as string, userId);
+    res.json({ playlist: { ...meta, tracks } });
+  } catch (error) {
+    console.error('Single playlist fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch playlist' });
   }
 });
 

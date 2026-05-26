@@ -120,7 +120,6 @@ export const ContextMenuPortal: React.FC<{
     position?: { x: number; y: number };
     desktopWidth?: number;
     desktopHeight?: number;
-    showMobileHandle?: boolean;
     /**
      * How to align the popover horizontally against `anchorRef`:
      * - 'right' (default): menu's right edge = anchor's right edge.
@@ -139,7 +138,6 @@ export const ContextMenuPortal: React.FC<{
     position,
     desktopWidth = 248,
     desktopHeight = 320,
-    showMobileHandle = true,
     menuAlign = 'right',
 }) => {
     const isMobile = useIsMobile();
@@ -200,11 +198,6 @@ export const ContextMenuPortal: React.FC<{
                     className="fixed bottom-0 left-0 right-0 z-[9999] transition-transform duration-300 ease-[cubic-bezier(0.4,0,0.2,1)]"
                     style={{ transform: isVisible ? 'translateY(0)' : 'translateY(100%)' }}
                 >
-                    {showMobileHandle && (
-                        <div className="flex justify-center pt-3 pb-1 bg-[var(--glass-bg)] rounded-t-2xl border-t border-x border-[var(--glass-border)]">
-                            <div className="w-10 h-1 rounded-full bg-[var(--color-border)]" />
-                        </div>
-                    )}
                     <div ref={menuRef}>
                         {children({ isMobile })}
                     </div>

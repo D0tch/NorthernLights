@@ -431,6 +431,7 @@ export interface PlayerState {
 
   fetchLibraryFromServer: () => Promise<void>;
   fetchPlaylistsFromServer: () => Promise<void>;
+  fetchPlaylistFromServer: (playlistId: string) => Promise<boolean>;
   createPlaylist: (title: string, description?: string) => Promise<void>;
   deletePlaylist: (playlistId: string) => Promise<void>;
   togglePin: (playlistId: string, pinned: boolean) => Promise<void>;
@@ -1379,7 +1380,7 @@ export const usePlayerStore = create<PlayerState>()(
               const res = await fetch('/api/playlists', { headers: authHeaders });
               if (res.ok) {
                  const data = await res.json();
-                 
+
                  const { mediaAccessToken, authToken, library } = get();
                  const token = mediaAccessToken || authToken || '';
 
@@ -1405,6 +1406,50 @@ export const usePlayerStore = create<PlayerState>()(
               console.error("Failed to fetch playlists from server", e);
            } finally {
               set({ isPlaylistsLoading: false });
+           }
+        },
+
+        // Fetch a single playlist with its tracks and upsert it into the
+        // playlists array. Avoids the cost of refetching every playlist when
+        // the user opens just one. Returns false when the playlist is not
+        // accessible (404 / unauthenticated / network failure).
+        fetchPlaylistFromServer: async (playlistId: string) => {
+           try {
+              const authHeaders = (get() as any).getAuthHeader();
+              const res = await fetch(`/api/playlists/${encodeURIComponent(playlistId)}`, { headers: authHeaders });
+              if (!res.ok) return false;
+
+              const data = await res.json();
+              const pl = data.playlist;
+              if (!pl) return false;
+
+              const { mediaAccessToken, authToken, library, streamingQuality } = get();
+              const token = mediaAccessToken || authToken || '';
+              const quality = (streamingQuality === 'auto' ? '128k' : streamingQuality);
+
+              const mappedTracks = (pl.tracks || []).map((t: any) => {
+                 const fullTrack = library.find((lt: TrackInfo) => lt.id === t.id);
+                 const track = fullTrack ? { ...t, ...fullTrack, playlistAddedAt: t.playlistAddedAt } : t;
+                 if (!track.path) return null;
+                 return {
+                   ...track,
+                   ...buildTrackUrls(track.id, track.path, token, quality),
+                 };
+              }).filter(Boolean);
+
+              const populated = { ...pl, tracks: mappedTracks };
+
+              set((state) => {
+                 const idx = state.playlists.findIndex((p) => p.id === pl.id);
+                 if (idx === -1) return { playlists: [populated, ...state.playlists] };
+                 const next = state.playlists.slice();
+                 next[idx] = populated;
+                 return { playlists: next };
+              });
+              return true;
+           } catch (e) {
+              console.error('Failed to fetch single playlist from server', e);
+              return false;
            }
         },
 

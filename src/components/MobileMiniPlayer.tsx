@@ -27,8 +27,21 @@ const MobileMiniPlayer = () => {
   const isPlaying = playbackState === 'playing';
 
   const [expanded, setExpanded] = useState(false);
+  const [sheetMounted, setSheetMounted] = useState(false);
   const [swipeDir, setSwipeDir] = useState<'left' | 'right' | null>(null);
   const [castDeviceName, setCastDeviceName] = useState(castManager.getCastDeviceName());
+
+  useEffect(() => {
+    if (expanded) {
+      setSheetMounted(true);
+      return;
+    }
+    if (!sheetMounted) return;
+    // Keep mounted slightly longer than the CSS exit (320ms) so the slide-down
+    // animation can finish before unmount.
+    const timer = setTimeout(() => setSheetMounted(false), 340);
+    return () => clearTimeout(timer);
+  }, [expanded, sheetMounted]);
 
   useEffect(() => {
     const unsubscribe = castManager.addStateChangeListener((state) => {
@@ -86,7 +99,9 @@ const MobileMiniPlayer = () => {
 
   return (
     <>
-      {expanded && <MobileNowPlaying onClose={() => setExpanded(false)} />}
+      {sheetMounted && (
+        <MobileNowPlaying onClose={() => setExpanded(false)} isOpen={expanded} />
+      )}
 
       <div
         ref={swipeRef}

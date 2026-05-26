@@ -12,9 +12,10 @@ import { useDominantColor } from '../hooks/useDominantColor';
 
 interface MobileNowPlayingProps {
   onClose: () => void;
+  isOpen?: boolean;
 }
 
-const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
+const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = true }) => {
   const playlist = usePlayerStore((s) => s.playlist);
   const currentIndex = usePlayerStore((s) => s.currentIndex);
   const playbackState = usePlayerStore((s) => s.playbackState);
@@ -80,9 +81,10 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose }) => {
 
   return (
     <div
-      className="mobile-now-playing-shell md:hidden animate-slide-up"
+      className="mobile-now-playing-shell md:hidden"
       data-playing={isPlaying}
       data-buffering={isBuffering}
+      data-state={isOpen ? 'open' : 'closing'}
       style={mobileNowStyle}
     >
       {currentTrack.artUrl && (

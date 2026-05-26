@@ -18,11 +18,10 @@ import { playbackManager } from './utils/PlaybackManager';
 import { GlobalScanningIndicator } from './components/GlobalScanningIndicator';
 import { applyPendingPwaUpdate } from './utils/pwaUpdate';
 
+import { AlbumDetail, ArtistDetail, PlaylistDetail } from './utils/routePrefetch';
+
 const LibraryHome = React.lazy(() => import('./components/library/LibraryHome').then(module => ({ default: module.LibraryHome })));
-const AlbumDetail = React.lazy(() => import('./components/library/AlbumDetail').then(module => ({ default: module.AlbumDetail })));
-const ArtistDetail = React.lazy(() => import('./components/library/ArtistDetail').then(module => ({ default: module.ArtistDetail })));
 const GenreDetail = React.lazy(() => import('./components/library/GenreDetail').then(module => ({ default: module.GenreDetail })));
-const PlaylistDetail = React.lazy(() => import('./components/library/PlaylistDetail').then(module => ({ default: module.PlaylistDetail })));
 const SetupWizard = React.lazy(() => import('./components/SetupWizard').then(module => ({ default: module.SetupWizard })));
 const LoginPage = React.lazy(() => import('./components/LoginPage').then(module => ({ default: module.LoginPage })));
 const Hub = React.lazy(() => import('./components/Hub').then(module => ({ default: module.Hub })));

@@ -61,7 +61,7 @@ const SearchResults = React.memo(function SearchResults({
         matchedArtists.length === 0 && matchedAlbums.length === 0 && matchedTracks.length === 0;
 
     return (
-        <div className="flex flex-col gap-6">
+        <div className="global-search-results-list flex flex-col gap-6">
             {noResults && (
                 <div className="text-center text-[var(--color-text-muted)] py-12 text-sm">
                     No results found for &ldquo;{query}&rdquo;
@@ -78,7 +78,7 @@ const SearchResults = React.memo(function SearchResults({
                             <button
                                 key={artist.id}
                                 onClick={() => onArtistClick(artist.id)}
-                                className="flex items-center gap-3 w-full text-left p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                                className="global-search-result-row flex items-center gap-3 w-full text-left p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                             >
                                 <div className="w-10 h-10 rounded-full bg-[var(--color-primary)]/20 flex items-center justify-center flex-shrink-0 text-[var(--color-primary)] font-bold">
                                     <ArtistInitial name={artist.name} className="text-base" />
@@ -102,7 +102,7 @@ const SearchResults = React.memo(function SearchResults({
                             <button
                                 key={album.id}
                                 onClick={() => onAlbumClick(album.id)}
-                                className="flex items-center gap-3 w-full text-left p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                                className="global-search-result-row flex items-center gap-3 w-full text-left p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                             >
                                 {album.artUrl ? (
                                     <img
@@ -140,7 +140,7 @@ const SearchResults = React.memo(function SearchResults({
                         {matchedTracks.map((track, i) => (
                             <div
                                 key={track.id || i}
-                                className="group flex items-center gap-3 w-full text-left p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
+                                className="global-search-result-row group flex items-center gap-3 w-full text-left p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                             >
                                 <div
                                     className="relative w-10 h-10 flex-shrink-0 cursor-pointer"
@@ -200,6 +200,7 @@ export const GlobalSearch: React.FC = () => {
     const isMobile = useIsMobile();
 
     const [isExpanded, setIsExpanded] = useState(false);
+    const [isClosing, setIsClosing] = useState(false);
     const [query, setQuery] = useState('');
     const [debouncedQuery, setDebouncedQuery] = useState('');
     const [dropdownStyle, setDropdownStyle] = useState<React.CSSProperties>({});
@@ -208,6 +209,7 @@ export const GlobalSearch: React.FC = () => {
     const mobileInputRef = useRef<HTMLInputElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const dropdownRef = useRef<HTMLDivElement>(null);
+    const closeTimerRef = useRef<number | null>(null);
 
     useEffect(() => {
         if (!query.trim()) {
@@ -224,6 +226,11 @@ export const GlobalSearch: React.FC = () => {
 
     // ── open ──────────────────────────────────────────────────────────────────
     const handleExpand = () => {
+        if (closeTimerRef.current) {
+            window.clearTimeout(closeTimerRef.current);
+            closeTimerRef.current = null;
+        }
+        setIsClosing(false);
         setIsExpanded(true);
         if (isMobile) {
             // Lock body scroll while overlay is open
@@ -236,9 +243,35 @@ export const GlobalSearch: React.FC = () => {
 
     // ── close ─────────────────────────────────────────────────────────────────
     const handleClose = useCallback(() => {
+        if (closeTimerRef.current) {
+            window.clearTimeout(closeTimerRef.current);
+            closeTimerRef.current = null;
+        }
+
+        if (isMobile && isExpanded) {
+            setIsClosing(true);
+            closeTimerRef.current = window.setTimeout(() => {
+                setIsExpanded(false);
+                setIsClosing(false);
+                setQuery('');
+                document.body.style.overflow = '';
+                closeTimerRef.current = null;
+            }, 180);
+            return;
+        }
+
         setIsExpanded(false);
+        setIsClosing(false);
         setQuery('');
         document.body.style.overflow = '';
+    }, [isExpanded, isMobile]);
+
+    useEffect(() => {
+        return () => {
+            if (closeTimerRef.current) {
+                window.clearTimeout(closeTimerRef.current);
+            }
+        };
     }, []);
 
     // ── desktop: close on outside click / Escape ──────────────────────────────
@@ -419,40 +452,45 @@ export const GlobalSearch: React.FC = () => {
 
     // ── pill (trigger) ────────────────────────────────────────────────────────
     const pill = (
-        <div ref={containerRef} className="relative z-[60] flex items-center ml-auto h-9">
+        <div ref={containerRef} className={`global-search-root ${isMobile ? 'global-search-root--mobile' : ''}`}>
             <div
                 className={`
-                    flex items-center rounded-full border backdrop-blur-md transition-ui duration-300 overflow-hidden
-                    ${isExpanded && !isMobile
-                        ? 'w-64 sm:w-80 bg-[var(--glass-bg)] border-[var(--color-primary)] shadow-[0_0_12px_rgba(34,201,131,0.2)]'
-                        : 'w-[104px] bg-black/10 dark:bg-white/10 border-black/10 dark:border-white/15 hover:bg-black/15 dark:hover:bg-white/15 hover:border-[var(--glass-border-hover)] cursor-pointer'
+                    global-search-pill
+                    ${isMobile
+                        ? 'global-search-pill--mobile'
+                        : isExpanded
+                            ? 'global-search-pill--expanded'
+                            : 'global-search-pill--collapsed'
                     }
                 `}
                 onClick={!isExpanded || isMobile ? handleExpand : undefined}
             >
-                <div className="pl-4 pr-2 py-2 flex items-center justify-center text-[var(--color-text-secondary)]">
+                <div className="global-search-icon-slot">
                     <SearchIcon size={16} />
                 </div>
 
                 {isExpanded && !isMobile ? (
                     <input
                         ref={inputRef}
-                        type="text"
+                        type="search"
                         value={query}
                         onChange={e => setQuery(e.target.value)}
                         placeholder="Search library..."
-                        className="flex-1 bg-transparent border-none outline-none text-sm text-[var(--color-text-primary)] py-2 pr-4 placeholder-[var(--color-text-muted)]"
+                        autoComplete="off"
+                        className="global-search-input"
                     />
                 ) : (
-                    <span className="text-sm font-semibold pr-4 text-[var(--color-text-secondary)] select-none">
+                    <span className="global-search-label">
                         Search
                     </span>
                 )}
 
                 {isExpanded && !isMobile && hasQuery && (
                     <button
+                        type="button"
+                        aria-label="Clear search"
                         onClick={() => setQuery('')}
-                        className="pr-3 text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
+                        className="global-search-clear"
                     >
                         <X size={14} />
                     </button>
@@ -465,7 +503,7 @@ export const GlobalSearch: React.FC = () => {
                     <div
                         ref={dropdownRef}
                         style={dropdownStyle}
-                        className="fixed w-[calc(100vw-2rem)] sm:w-[400px] max-h-[70vh] overflow-y-auto bg-[var(--glass-bg)] backdrop-blur-3xl border border-[var(--glass-border)] rounded-2xl shadow-[var(--shadow-2xl)] p-4 animate-in fade-in slide-in-from-top-4 duration-200 z-[100]"
+                        className="global-search-dropdown"
                     >
                         <SearchResults {...sharedResultsProps} />
                     </div>,
@@ -477,10 +515,11 @@ export const GlobalSearch: React.FC = () => {
     // ── mobile full-screen overlay portal ────────────────────────────────────
     const mobileOverlay = isMobile && isExpanded &&
         createPortal(
-            <div className="fixed inset-0 z-[200] flex flex-col bg-[var(--color-background)]">
+            <div className={`global-search-mobile-overlay ${isClosing ? 'global-search-mobile-overlay--closing' : ''}`}>
                 {/* Header bar */}
-                <div className="flex items-center gap-3 px-4 py-3 border-b border-black/10 dark:border-white/10 bg-white/70 dark:bg-black/40 backdrop-blur-xl">
+                <div className="global-search-mobile-header">
                     <button
+                        type="button"
                         aria-label="Close search"
                         onClick={handleClose}
                         className="flex-shrink-0 p-1 -ml-1 rounded-lg text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] active:scale-95 transition-ui"
@@ -489,7 +528,7 @@ export const GlobalSearch: React.FC = () => {
                     </button>
 
                     {/* Input */}
-                    <div className="flex-1 flex items-center gap-2 rounded-full px-4 py-2 bg-black/5 dark:bg-white/10 border border-[var(--color-primary)]/60 shadow-[0_0_12px_rgba(34,201,131,0.15)] focus-within:border-[var(--color-primary)] focus-within:shadow-[0_0_16px_rgba(34,201,131,0.25)] transition-ui">
+                    <div className="global-search-mobile-field">
                         <SearchIcon size={16} className="text-[var(--color-text-muted)] flex-shrink-0" />
                         <input
                             ref={mobileInputRef}
@@ -502,8 +541,10 @@ export const GlobalSearch: React.FC = () => {
                         />
                         {hasQuery && (
                             <button
+                                type="button"
+                                aria-label="Clear search"
                                 onClick={() => setQuery('')}
-                                className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] active:scale-90 transition-transform"
+                                className="global-search-mobile-clear"
                             >
                                 <X size={16} />
                             </button>
@@ -512,11 +553,11 @@ export const GlobalSearch: React.FC = () => {
                 </div>
 
                 {/* Results scroll area */}
-                <div className="flex-1 overflow-y-auto overscroll-contain p-4">
+                <div className="global-search-mobile-results">
                     {canShowResults ? (
                         <SearchResults {...sharedResultsProps} />
                     ) : (
-                        <div className="flex flex-col items-center justify-center h-full gap-3 text-[var(--color-text-muted)]">
+                        <div className="global-search-empty">
                             <SearchIcon size={40} strokeWidth={1.2} />
                             <p className="text-sm">Search artists, albums &amp; tracks</p>
                         </div>
