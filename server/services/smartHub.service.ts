@@ -2,6 +2,14 @@ import { initDB, getPlaylistTracks } from '../database';
 import OpenAI from 'openai';
 import { getLlmConfig, extractJson } from './llm.service';
 import { withTransaction } from '../utils/db';
+import {
+  buildPlaylistFromPools,
+  computeArtistCentroids,
+  getArtistGenrePaths,
+  getLibraryMainstreamVector,
+  PoolName,
+  PoolSpec,
+} from './candidatePool.service';
 
 // ============================================================
 // Smart Hub: On Repeat, Repeat Rewind, Jump Back In, Artist
@@ -22,10 +30,14 @@ type SmartKind =
 // want to feature (radio, jump-back-in tile, top-artist surface). The real
 // per-track artists are tagged correctly on VA albums, so individual
 // tracks still flow through normally.
-const VARIOUS_ARTISTS_NAMES = "'various artists', 'various', 'va', 'compilation', 'compilations'";
-
+//
+// Detection comes from artists.is_va_pseudo, which is set when every track
+// of the artist lives on a compilation album (where albums.is_compilation
+// is itself driven primarily by the MusicBrainz RELEASETYPE secondary
+// type). The legacy LOWER(name) NOT IN ('various artists','va',…) match
+// has been retired — see migrateReleaseGroups() for the derivation.
 function variousArtistsExclusion(artistAlias: string): string {
-  return `LOWER(${artistAlias}.name) NOT IN (${VARIOUS_ARTISTS_NAMES})`;
+  return `COALESCE(${artistAlias}.is_va_pseudo, FALSE) = FALSE`;
 }
 
 // Christmas / holiday content is suppressed from every smart surface
@@ -112,7 +124,7 @@ function fireBackgroundRefresh(key: string, work: () => Promise<unknown>) {
   inFlightRefreshes.add(key);
   Promise.resolve()
     .then(work)
-    .catch((e) => console.error(`[SmartHub] Background refresh failed for ${key}`, e))
+    .catch((e) => console.error('[SmartHub] Background refresh failed', { key }, e))
     .finally(() => inFlightRefreshes.delete(key));
 }
 
@@ -490,14 +502,18 @@ export async function computeArtistRadioCandidates(
 }
 
 // ─── Artist Radio (generated on demand) ────────────────────
-// Builds a 30-track radio seeded by the artist's most-played track,
-// using 1280D Discogs-EffNet embedding similarity.
+// Multi-pool radio: a seed pool (artist's own most-played) plus core
+// (embedding K-NN around a centroid of the artist's top tracks), adjacent
+// (tracks sharing genre paths), bridge (blend with library mainstream),
+// and discovery (never-played / dormant neighbors). Dedup by MB recording
+// id + normalized title; artist diversity enforced via the shared
+// candidatePool primitive.
 async function generateArtistRadioFresh(userId: string, artistId: string, limit: number) {
   const id = smartPlaylistId('artist-radio', userId, artistId);
   const db = await initDB();
 
   const artistRes = await db.query(
-    `SELECT name FROM artists WHERE id = $1`,
+    `SELECT name, COALESCE(is_va_pseudo, FALSE) AS is_va_pseudo FROM artists WHERE id = $1`,
     [artistId]
   );
   if (artistRes.rowCount === 0) {
@@ -507,43 +523,21 @@ async function generateArtistRadioFresh(userId: string, artistId: string, limit:
 
   // Refuse to build a radio for the "Various Artists" pseudo-entity — by
   // definition it has no coherent acoustic signature.
-  if (VARIOUS_ARTISTS_NAMES.includes(`'${artistName.toLowerCase()}'`)) {
+  if ((artistRes.rows[0] as any).is_va_pseudo) {
     throw new Error('Cannot generate radio for compilation pseudo-artist');
   }
 
-  // Seed: artist's track with the highest user play count that has an embedding
-  const seedRes = await db.query(
-    `
-    SELECT t.id, tf.embedding_vector
-    FROM tracks t
-    JOIN track_features tf ON tf.track_id = t.id
-    LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
-    WHERE t.artist_id = $2
-      AND tf.embedding_vector IS NOT NULL
-      ${christmasExclusion('t')}
-    ORDER BY COALESCE(ups.play_count, 0) DESC, t.id ASC
-    LIMIT 1
-    `,
-    [userId, artistId]
-  );
+  const centroids = await computeArtistCentroids(userId, artistId, 5);
 
-  let seedTrackIds: string[] = [];
-  let seedVectorStr: string | null = null;
-
-  if (seedRes.rowCount && seedRes.rowCount > 0) {
-    const seedRow = seedRes.rows[0] as any;
-    seedTrackIds.push(seedRow.id);
-    seedVectorStr = seedRow.embedding_vector;
-  }
-
-  // Fallback when no embedding exists for this artist: just return their tracks
-  if (!seedVectorStr) {
+  // Library-of-one fallback: artist has no analysed tracks (no acoustic
+  // vector). Return their plain catalogue ordered by user play count.
+  if (!centroids) {
     const fallbackRes = await db.query(
       `
       SELECT t.id
       FROM tracks t
       LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
-      WHERE t.artist_id = $2
+      WHERE t.artist_id::text = $2
       ${christmasExclusion('t')}
       ORDER BY COALESCE(ups.play_count, 0) DESC, t.id ASC
       LIMIT $3
@@ -561,36 +555,124 @@ async function generateArtistRadioFresh(userId: string, artistId: string, limit:
     );
   }
 
-  // K-NN by embedding, dedupe artists (max 2 per artist, except seed)
-  const neighborsRes = await db.query(
-    `
-    SELECT t.id, t.artist_id::text AS artist_id,
-      tf.embedding_vector <=> $1::vector AS distance
-    FROM tracks t
-    JOIN track_features tf ON tf.track_id = t.id
-    WHERE tf.embedding_vector IS NOT NULL
-    ${christmasExclusion('t')}
-    ORDER BY distance ASC
-    LIMIT $2
-    `,
-    [seedVectorStr, limit * 4]
-  );
+  const { acousticVectorStr, embeddingCentroidStr } = centroids;
+  const { primaryPath, adjacentPaths, rootPath } = await getArtistGenrePaths(artistId);
+  const mainstreamVectorStr = await getLibraryMainstreamVector();
 
-  const perArtist = new Map<string, number>();
-  const radioTrackIds: string[] = [];
-  // Always include the seed first
-  radioTrackIds.push(...seedTrackIds);
-  perArtist.set(artistId, 1);
-
-  for (const row of neighborsRes.rows as any[]) {
-    if (radioTrackIds.length >= limit) break;
-    if (radioTrackIds.includes(row.id)) continue;
-    const cap = row.artist_id === artistId ? 5 : 2;
-    const cur = perArtist.get(row.artist_id) || 0;
-    if (cur >= cap) continue;
-    radioTrackIds.push(row.id);
-    perArtist.set(row.artist_id, cur + 1);
+  // Bridge vector = midpoint between seed centroid and library mainstream.
+  // Pulls the recommendation slightly toward the listener's general taste so
+  // the radio can sneak in safe non-genre matches without going random.
+  let bridgeVectorStr: string | null = null;
+  if (acousticVectorStr && mainstreamVectorStr) {
+    try {
+      const a = JSON.parse(acousticVectorStr);
+      const m = JSON.parse(mainstreamVectorStr);
+      if (Array.isArray(a) && Array.isArray(m) && a.length === 8 && m.length === 8) {
+        const mid = a.map((x: number, i: number) => (Number(x) + Number(m[i])) / 2);
+        bridgeVectorStr = `[${mid.join(',')}]`;
+      }
+    } catch {}
   }
+
+  const seedSpec: PoolSpec = {
+    name: 'seed',
+    limit: 6,
+    favoritesScore: true,
+    restrictArtistIds: [artistId],
+  };
+
+  const coreSpec: PoolSpec = {
+    name: 'core',
+    limit: Math.max(40, limit * 2),
+    vectorStr: acousticVectorStr,
+    embeddingCentroidStr,
+    effnetWeight: 0.55,
+  };
+
+  const adjacentSpec: PoolSpec | null = adjacentPaths.length > 0 || primaryPath
+    ? {
+        name: 'adjacent',
+        limit: Math.max(15, limit),
+        vectorStr: acousticVectorStr,
+        embeddingCentroidStr,
+        effnetWeight: 0.35,
+        pathPrefixes: primaryPath ? [primaryPath, ...adjacentPaths] : adjacentPaths,
+      }
+    : null;
+
+  const bridgeSpec: PoolSpec = {
+    name: 'bridge',
+    limit: Math.max(12, Math.ceil(limit * 0.5)),
+    vectorStr: bridgeVectorStr ?? acousticVectorStr,
+    embeddingCentroidStr,
+    effnetWeight: 0.30,
+  };
+
+  const discoverySpec: PoolSpec = {
+    name: 'discovery',
+    limit: Math.max(15, limit),
+    vectorStr: acousticVectorStr,
+    embeddingCentroidStr,
+    effnetWeight: 0.45,
+    enableDiscoveryBoost: true,
+  };
+
+  const poolSpecs: PoolSpec[] = [seedSpec, coreSpec, bridgeSpec, discoverySpec];
+  if (adjacentSpec) poolSpecs.push(adjacentSpec);
+
+  const poolTargets = new Map<PoolName, number>([
+    ['seed', Math.max(3, Math.round(limit * 0.13))],
+    ['core', Math.round(limit * 0.38)],
+    ['adjacent', Math.round(limit * (adjacentSpec ? 0.18 : 0))],
+    ['bridge', Math.round(limit * 0.15)],
+    ['discovery', Math.round(limit * 0.16)],
+  ]);
+
+  // Protect the seed artist from the per-artist cap so the seed pool can
+  // actually surface multiple of their tracks. Everyone else is capped.
+  const result = await buildPlaylistFromPools({
+    userId,
+    count: limit,
+    poolSpecs,
+    poolTargets,
+    artistSpread: 0.55,
+    diversity: 0.50,
+    discoveryBias: 0.45,
+    relaxationPlan: [
+      // Drop genre filters, widen K, relax artist floor.
+      {
+        poolSpecs: [
+          seedSpec,
+          { ...coreSpec, limit: Math.max(60, limit * 3) },
+          { ...bridgeSpec, limit: Math.max(20, limit) },
+          { ...discoverySpec, limit: Math.max(25, limit * 2) },
+        ],
+        poolTargets,
+      },
+    ],
+  });
+
+  // Belt-and-braces: if the multi-pool came back empty (unusable centroid,
+  // tiny library, etc.) keep the legacy artist-only fallback as the last
+  // resort instead of returning a silent empty playlist.
+  let trackIds = result.trackIds;
+  if (trackIds.length === 0) {
+    const fallbackRes = await db.query(
+      `
+      SELECT t.id
+      FROM tracks t
+      LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
+      WHERE t.artist_id::text = $2
+      ${christmasExclusion('t')}
+      ORDER BY COALESCE(ups.play_count, 0) DESC, t.id ASC
+      LIMIT $3
+      `,
+      [userId, artistId, limit]
+    );
+    trackIds = fallbackRes.rows.map((r: any) => r.id);
+  }
+
+  void rootPath;
 
   return persistSmart(
     id,
@@ -598,7 +680,7 @@ async function generateArtistRadioFresh(userId: string, artistId: string, limit:
     `${artistName} Radio`,
     `A mix inspired by ${artistName}.`,
     userId,
-    radioTrackIds
+    trackIds
   );
 }
 
@@ -772,7 +854,9 @@ async function computeDaylistFresh(userId: string, limit: number) {
   const weekday = now.toLocaleDateString('en-US', { weekday: 'long' }).toLowerCase();
   const timeOfDay = describeTimeOfDay(now.getHours());
 
-  // Recent listening signature: top genres by play count over last 7 days
+  // Recent listening signature: top genres by play count over last 7 days.
+  // Used as flavor input for the LLM title/description and to derive
+  // banned-genre paths (mood-driven), not as a hard track filter.
   const genresRes = await db.query(
     `
     SELECT t.genre, SUM(b.play_count) AS plays
@@ -795,7 +879,6 @@ async function computeDaylistFresh(userId: string, limit: number) {
   const description =
     concept?.description ||
     `A fresh mix for your ${weekday} ${timeOfDay}.`;
-  const targetGenres = normalizeDaylistGenres(concept?.target_genres, recentGenres.slice(0, 4));
   const bannedGenres = normalizeDaylistGenres(
     concept?.banned_genres,
     DAYLIST_DEFAULT_MOODS[timeOfDay]?.banned || []
@@ -803,48 +886,77 @@ async function computeDaylistFresh(userId: string, limit: number) {
   const targetVector = normalizeDaylistVector(concept?.target_vector, timeOfDay);
   const targetVectorStr = `[${targetVector.join(',')}]`;
 
-  const genreMatchSql = `
-    EXISTS (
-      SELECT 1
-      FROM unnest($3::text[]) AS target_genre(name)
-      WHERE LOWER(COALESCE(t.genre, '')) = target_genre.name
-         OR LOWER(COALESCE(t.genres, '')) LIKE '%' || target_genre.name || '%'
-    )
-  `;
+  // Daylist identity: discovery mix of favorites the user hasn't reached for
+  // and tracks they haven't heard. Mood vector biases the acoustic pool but
+  // doesn't dominate. Banned genres are honoured.
+  const favoritesSpec: PoolSpec = {
+    name: 'favorites',
+    limit: Math.max(40, limit * 2),
+    favoritesScore: true,
+    vectorStr: targetVectorStr,
+  };
 
-  const tracksRes = await db.query(
-    `
-    SELECT t.id
-    FROM tracks t
-    LEFT JOIN track_features tf ON tf.track_id = t.id
-    LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
-    WHERE (
-        tf.acoustic_vector_8d IS NOT NULL
-        OR CARDINALITY($3::text[]) = 0
-        OR ${genreMatchSql}
-      )
-      AND NOT EXISTS (
-        SELECT 1
-        FROM unnest($4::text[]) AS banned_genre(name)
-        WHERE LOWER(COALESCE(t.genre, '')) = banned_genre.name
-           OR LOWER(COALESCE(t.genres, '')) LIKE '%' || banned_genre.name || '%'
-      )
-      ${christmasExclusion('t')}
-    ORDER BY
-      CASE
-        WHEN tf.acoustic_vector_8d IS NULL THEN 1.15
-        ELSE tf.acoustic_vector_8d <-> $2::vector
-      END ASC,
-      CASE WHEN ${genreMatchSql} THEN 0 ELSE 1 END ASC,
-      COALESCE(ups.last_played_at, NOW() - INTERVAL '10 years') DESC,
-      RANDOM()
-    LIMIT $5
-    `,
-    [userId, targetVectorStr, targetGenres, bannedGenres, limit]
-  );
+  const acousticSpec: PoolSpec = {
+    name: 'acoustic',
+    limit: Math.max(25, limit),
+    vectorStr: targetVectorStr,
+  };
 
-  let trackIds = tracksRes.rows.map((r: any) => r.id);
+  const discoverySpec: PoolSpec = {
+    name: 'discovery',
+    limit: Math.max(35, limit * 2),
+    vectorStr: targetVectorStr,
+    enableDiscoveryBoost: true,
+    dormantOnly: true,
+  };
+
+  const poolTargets = new Map<PoolName, number>([
+    ['favorites', Math.round(limit * 0.40)],
+    ['acoustic', Math.round(limit * 0.25)],
+    ['discovery', Math.round(limit * 0.35)],
+  ]);
+
+  const result = await buildPlaylistFromPools({
+    userId,
+    count: limit,
+    poolSpecs: [favoritesSpec, acousticSpec, discoverySpec],
+    poolTargets,
+    bannedGenres,
+    artistSpread: 0.70,
+    diversity: 0.55,
+    discoveryBias: 0.60,
+    allowSoftVetoRecovery: true,
+    relaxationPlan: [
+      // Step 1: drop banned-genre hard veto (soft penalty only) and lift the
+      // discovery dormancy filter so any unheard track qualifies.
+      {
+        poolSpecs: [
+          favoritesSpec,
+          acousticSpec,
+          { ...discoverySpec, dormantOnly: false },
+        ],
+        poolTargets,
+        softVeto: true,
+      },
+      // Step 2: broaden the acoustic radius (bigger pool sizes, no vector
+      // anchor on favorites/discovery so the recency/novelty signal dominates).
+      {
+        poolSpecs: [
+          { ...favoritesSpec, vectorStr: null, limit: Math.max(60, limit * 3) },
+          { ...discoverySpec, vectorStr: null, dormantOnly: false, limit: Math.max(60, limit * 3) },
+        ],
+        poolTargets: new Map<PoolName, number>([
+          ['favorites', Math.round(limit * 0.55)],
+          ['discovery', Math.round(limit * 0.45)],
+        ]),
+        softVeto: true,
+      },
+    ],
+  });
+
+  let trackIds = result.trackIds;
   if (trackIds.length === 0) {
+    // Final safety net: pure random by recency, no acoustic guidance.
     const fallbackRes = await db.query(
       `
       SELECT t.id
@@ -861,6 +973,7 @@ async function computeDaylistFresh(userId: string, limit: number) {
     );
     trackIds = fallbackRes.rows.map((r: any) => r.id);
   }
+
   return persistSmart(id, 'daylist', title, description, userId, trackIds);
 }
 
