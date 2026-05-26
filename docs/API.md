@@ -3,6 +3,8 @@
 All API endpoints are prefixed with `/api`.
 Most endpoints require authentication via a JWT token.
 
+Aurora also exposes an OpenSubsonic-compatible API at `/rest` for third-party music clients. `/rest` does not use Aurora JWTs; it accepts only Aurora-generated Subsonic API keys.
+
 ## Table of Contents
 1. [Authentication & Setup](#-authentication--setup)
 2. [Admin](#-admin)
@@ -17,6 +19,133 @@ Most endpoints require authentication via a JWT token.
 11. [Media & Streaming](#-media--streaming)
 12. [Providers & Metadata](#-providers--metadata)
 13. [Miscellaneous](#-miscellaneous)
+14. [OpenSubsonic `/rest` API](#-opensubsonic-rest-api)
+
+---
+
+## OpenSubsonic `/rest` API
+
+Base URL: `/rest`
+
+Aurora implements an API-key-only OpenSubsonic surface for clients that support custom Subsonic servers. Both `/rest/{method}` and `/rest/{method}.view` are accepted. Parameters may be sent as query strings or as `application/x-www-form-urlencoded` POST bodies.
+
+### Authentication
+
+Create keys in Aurora at **Settings -> My Account -> OpenSubsonic API Keys**. The raw key is shown once; later lists show only the prefix, creation time, last-used time, and revocation state. Revoking a key immediately blocks future `/rest` requests that use it.
+
+Pass the key as one of:
+
+```text
+/rest/ping.view?apiKey=aurora_sub_...
+/rest/ping.view?api_key=aurora_sub_...
+```
+
+Unsupported auth behavior:
+
+| Scenario | OpenSubsonic error |
+| --- | --- |
+| `u`/`p` or username/password auth | `41` |
+| `t`/`s` token/salt auth | `42` |
+| Missing API key or mixed API-key plus legacy auth params | `43` |
+| Invalid or revoked API key | `44` |
+
+### Response Formats
+
+`f=xml` is the default. `f=json` returns a JSON object with `subsonic-response`. `f=jsonp&callback=name` returns JSONP after validating the callback identifier.
+
+Every structured response includes:
+
+```json
+{
+  "subsonic-response": {
+    "status": "ok",
+    "version": "1.16.1",
+    "type": "aurora",
+    "serverVersion": "1.0.0-rc.3",
+    "openSubsonic": true
+  }
+}
+```
+
+### Key Management Endpoints
+
+These are Aurora JWT endpoints, not `/rest` endpoints.
+
+| Method | Endpoint | Notes |
+| --- | --- | --- |
+| `GET` | `/api/auth/subsonic-api-keys` | List current user's keys and revoked records. |
+| `POST` | `/api/auth/subsonic-api-keys` | Body: `{ "name": "Client name" }`. Returns the raw key once. |
+| `DELETE` | `/api/auth/subsonic-api-keys/:id` | Revoke one key owned by the current user. |
+
+### Supported Endpoint Matrix
+
+| Group | Endpoints |
+| --- | --- |
+| System | `ping`, `getLicense`, `getOpenSubsonicExtensions`, `tokenInfo` |
+| Browsing/library | `getMusicFolders`, `getIndexes`, `getMusicDirectory`, `getGenres`, `getArtists`, `getArtist`, `getAlbum`, `getSong` |
+| Lists/search | `getAlbumList`, `getAlbumList2`, `getRandomSongs`, `getSongsByGenre`, `getStarred`, `getStarred2`, `search`, `search2`, `search3` |
+| Playlists | `getPlaylists`, `getPlaylist`, `createPlaylist`, `updatePlaylist`, `deletePlaylist` |
+| Media | `stream`, `download`, `hls`, internal `hlsSegment`, `getCoverArt` |
+| Annotation/playback | `star`, `unstar`, `setRating`, `scrobble` |
+| Empty compatibility stubs | Podcasts, shares, internet radio, chat, bookmarks, videos, captions, avatar, and jukebox probes return successful empty payloads where Aurora has no equivalent feature. |
+
+Aurora exposes opaque Subsonic IDs as `artist:<uuid>`, `album:<uuid>`, and `song:<trackId>`. Use IDs returned by browsing/search/list endpoints instead of constructing IDs manually.
+
+### Examples
+
+Ping:
+
+```text
+GET /rest/ping.view?apiKey=aurora_sub_...&f=json
+```
+
+Artists and albums:
+
+```text
+GET /rest/getArtists.view?apiKey=aurora_sub_...&f=json
+GET /rest/getAlbum.view?id=album:6f4...&apiKey=aurora_sub_...&f=json
+```
+
+Search:
+
+```text
+GET /rest/search3.view?query=burial&apiKey=aurora_sub_...&f=json
+```
+
+Media:
+
+```text
+GET /rest/stream.view?id=song:track-id&apiKey=aurora_sub_...
+GET /rest/getCoverArt.view?id=song:track-id&apiKey=aurora_sub_...
+GET /rest/hls.view?id=song:track-id&apiKey=aurora_sub_...
+```
+
+`stream` and `download` support HTTP Range requests and do not increment play counts. `hls` returns segment URLs with short-lived scoped `mediaToken` values instead of embedding the primary API key. Use `scrobble` to record playback:
+
+```text
+GET /rest/scrobble.view?id=song:track-id&apiKey=aurora_sub_...
+```
+
+Playlists:
+
+```text
+GET /rest/getPlaylists.view?apiKey=aurora_sub_...&f=json
+GET /rest/getPlaylist.view?id=subsonic_123&apiKey=aurora_sub_...&f=json
+POST /rest/createPlaylist.view
+Content-Type: application/x-www-form-urlencoded
+
+apiKey=aurora_sub_...&name=Road+Mix&songId=song:track-a&songId=song:track-b
+```
+
+User annotations:
+
+```text
+GET /rest/star.view?id=song:track-id&apiKey=aurora_sub_...
+GET /rest/unstar.view?id=song:track-id&apiKey=aurora_sub_...
+GET /rest/setRating.view?id=song:track-id&rating=5&apiKey=aurora_sub_...
+```
+
+Known unsupported areas are intentionally limited to empty successful compatibility responses: podcasts, internet radio, shares, chat, bookmarks, videos/captions, avatars, and jukebox control. Unsupported non-stubbed endpoints return OpenSubsonic error `70`.
 
 ---
 

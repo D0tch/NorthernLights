@@ -643,6 +643,23 @@ export async function initDB(): Promise<Pool> {
           PRIMARY KEY (user_id, key)
         );
 
+        CREATE TABLE IF NOT EXISTS subsonic_api_keys (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+          name TEXT NOT NULL,
+          key_prefix TEXT NOT NULL,
+          key_hash TEXT NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          last_used_at TIMESTAMPTZ,
+          revoked_at TIMESTAMPTZ
+        );
+        CREATE INDEX IF NOT EXISTS subsonic_api_keys_user_id_idx ON subsonic_api_keys(user_id);
+        CREATE INDEX IF NOT EXISTS subsonic_api_keys_active_idx ON subsonic_api_keys(user_id, revoked_at);
+        CREATE UNIQUE INDEX IF NOT EXISTS subsonic_api_keys_prefix_idx ON subsonic_api_keys(key_prefix);
+        CREATE INDEX IF NOT EXISTS tracks_title_trgm_idx ON tracks USING gin (title gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS tracks_artist_trgm_idx ON tracks USING gin (artist gin_trgm_ops);
+        CREATE INDEX IF NOT EXISTS tracks_album_trgm_idx ON tracks USING gin (album gin_trgm_ops);
+
         -- Add user_id to playlists (nullable for backward compat)
         DO $$
         BEGIN
@@ -3255,13 +3272,74 @@ export async function getPlaylists(userId: string | null = null) {
   } else {
     res = await db.query('SELECT * FROM playlists ORDER BY created_at DESC');
   }
-  return res.rows.map((row: any) => ({
+  return res.rows.map(mapPlaylistRow);
+}
+
+function mapPlaylistRow(row: any) {
+  return {
     ...row,
     isLlmGenerated: row.is_llm_generated,
     isSystem: row.is_system,
     pinned: row.pinned,
     generationSource: row.generation_source || (row.is_system ? 'system' : row.is_llm_generated ? 'hub' : 'manual'),
     createdAt: new Date(row.created_at).getTime(),
+  };
+}
+
+// Single-playlist lookup scoped to a user. Returns null when not found or not
+// owned by the user (system playlists are stored with user_id set so they
+// follow the same scoping rule).
+export async function getPlaylistByIdForUser(playlistId: string, userId: string) {
+  const db = await initDB();
+  const res = await db.query(
+    'SELECT * FROM playlists WHERE id = $1 AND user_id = $2',
+    [playlistId, userId]
+  );
+  if (res.rows.length === 0) return null;
+  return mapPlaylistRow(res.rows[0]);
+}
+
+// Bulk-load all playlists for a user with their tracks attached, using two
+// queries instead of N+1. Tracks are grouped by playlist_id in JS, preserving
+// the per-playlist sort_order.
+export async function getPlaylistsForUserWithTracks(userId: string) {
+  const db = await initDB();
+  const [playlistsRes, tracksRes] = await Promise.all([
+    db.query(
+      'SELECT * FROM playlists WHERE user_id = $1 ORDER BY created_at DESC',
+      [userId]
+    ),
+    db.query(
+      `
+        SELECT
+          pt.playlist_id,
+          t.*,
+          pt.added_at AS playlist_added_at,
+          EXISTS (
+            SELECT 1 FROM user_loved_tracks ult
+            WHERE ult.user_id = $1 AND ult.track_id = t.id
+          ) AS is_loved
+        FROM playlist_tracks pt
+        JOIN tracks t ON t.id = pt.track_id
+        JOIN playlists p ON p.id = pt.playlist_id
+        WHERE p.user_id = $1
+        ORDER BY pt.playlist_id, pt.sort_order ASC
+      `,
+      [userId]
+    ),
+  ]);
+
+  const tracksByPlaylist = new Map<string, any[]>();
+  for (const row of tracksRes.rows) {
+    const playlistId = row.playlist_id;
+    const arr = tracksByPlaylist.get(playlistId) || [];
+    arr.push(mapTrackRow(row));
+    tracksByPlaylist.set(playlistId, arr);
+  }
+
+  return playlistsRes.rows.map((row: any) => ({
+    ...mapPlaylistRow(row),
+    tracks: tracksByPlaylist.get(row.id) || [],
   }));
 }
 
@@ -3738,6 +3816,104 @@ export async function setTrackLovedForUser(userId: string, trackId: string, love
   } else {
     await db.query('DELETE FROM user_loved_tracks WHERE user_id = $1 AND track_id = $2', [userId, trackId]);
   }
+}
+
+export async function setTrackRatingForUser(userId: string, trackId: string, rating: number) {
+  const db = await initDB();
+  const safeRating = Math.max(0, Math.min(5, Math.floor(rating)));
+  await db.query(`
+    INSERT INTO user_playback_stats (user_id, track_id, play_count, rating, last_played_at)
+    VALUES ($1, $2, 0, $3, NULL)
+    ON CONFLICT (user_id, track_id) DO UPDATE SET
+      rating = EXCLUDED.rating
+  `, [userId, trackId, safeRating]);
+}
+
+export interface SubsonicApiKeyRow {
+  id: string;
+  user_id: string;
+  name: string;
+  key_prefix: string;
+  key_hash: string;
+  created_at: Date | string;
+  last_used_at: Date | string | null;
+  revoked_at: Date | string | null;
+}
+
+export interface SubsonicApiKeyWithUserRow extends SubsonicApiKeyRow {
+  username: string;
+  role: string;
+}
+
+export async function createSubsonicApiKey(userId: string, name: string, keyPrefix: string, keyHash: string) {
+  const db = await initDB();
+  const res = await db.query(`
+    INSERT INTO subsonic_api_keys (user_id, name, key_prefix, key_hash)
+    VALUES ($1, $2, $3, $4)
+    RETURNING id, user_id, name, key_prefix, created_at, last_used_at, revoked_at
+  `, [userId, name, keyPrefix, keyHash]);
+  return res.rows[0];
+}
+
+export async function listSubsonicApiKeys(userId: string) {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT id, user_id, name, key_prefix, created_at, last_used_at, revoked_at
+    FROM subsonic_api_keys
+    WHERE user_id = $1
+    ORDER BY created_at DESC
+  `, [userId]);
+  return res.rows;
+}
+
+export async function listActiveSubsonicApiKeys(): Promise<SubsonicApiKeyRow[]> {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT id, user_id, name, key_prefix, key_hash, created_at, last_used_at, revoked_at
+    FROM subsonic_api_keys
+    WHERE revoked_at IS NULL
+    ORDER BY created_at DESC
+  `);
+  return res.rows;
+}
+
+export async function getActiveSubsonicApiKeyByPrefix(keyPrefix: string): Promise<SubsonicApiKeyWithUserRow | null> {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT k.id, k.user_id, k.name, k.key_prefix, k.key_hash, k.created_at, k.last_used_at, k.revoked_at,
+           u.username, u.role
+    FROM subsonic_api_keys k
+    JOIN users u ON u.id = k.user_id
+    WHERE k.key_prefix = $1 AND k.revoked_at IS NULL
+    LIMIT 1
+  `, [keyPrefix]);
+  return res.rows[0] || null;
+}
+
+export async function updateSubsonicApiKeyHash(keyId: string, keyHash: string) {
+  const db = await initDB();
+  await db.query('UPDATE subsonic_api_keys SET key_hash = $2 WHERE id = $1', [keyId, keyHash]);
+}
+
+export async function touchSubsonicApiKey(keyId: string) {
+  const db = await initDB();
+  await db.query(`
+    UPDATE subsonic_api_keys
+    SET last_used_at = NOW()
+    WHERE id = $1
+      AND (last_used_at IS NULL OR last_used_at < NOW() - INTERVAL '5 minutes')
+  `, [keyId]);
+}
+
+export async function revokeSubsonicApiKey(userId: string, keyId: string) {
+  const db = await initDB();
+  const res = await db.query(`
+    UPDATE subsonic_api_keys
+    SET revoked_at = NOW()
+    WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+    RETURNING id
+  `, [keyId, userId]);
+  return (res.rowCount || 0) > 0;
 }
 
 // ==========================================

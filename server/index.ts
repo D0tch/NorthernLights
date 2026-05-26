@@ -34,6 +34,7 @@ import mediaRoutes from './routes/media.routes';
 import providersRoutes from './routes/providers.routes';
 import concertsRoutes from './routes/concerts.routes';
 import filterRoutes from './routes/filter.routes';
+import subsonicRoutes from './routes/subsonic.routes';
 
 const app = express();
 const port = process.env.PORT || 3001;
@@ -115,6 +116,7 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json());
+app.use(express.urlencoded({ extended: false }));
 
 // Serve static files from the 'dist' directory in production
 const distPath = path.join(__dirname, '../dist');
@@ -205,7 +207,7 @@ if (fs.existsSync(distPath)) {
 
   // Catch-all route to serve index.html for React SPA routing
   app.get('/{*splat}', (req, res, next) => {
-    if (req.path.startsWith('/api')) {
+    if (req.path.startsWith('/api') || req.path.startsWith('/rest')) {
       return next();
     }
     if (cachedIndexHtml) {
@@ -225,6 +227,11 @@ app.get('/api/client-config', (_req, res) => {
     castReceiverAppId: (process.env.CAST_RECEIVER_APP_ID || '').trim(),
   });
 });
+
+// OpenSubsonic clients authenticate with Aurora-managed API keys, not JWTs.
+// Mount /rest before the global JWT middleware so third-party clients can
+// reach it without Aurora browser session tokens.
+app.use('/rest', subsonicRoutes);
 
 // Apply JWT auth middleware to all API routes
 app.use(jwtAuthMiddleware);
