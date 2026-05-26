@@ -107,11 +107,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
           <button
             type="button"
             onClick={onConfirm}
-            className={`flex-1 py-2.5 rounded-xl font-semibold transition-ui active:scale-[0.98] ${
-              confirmTone === 'primary'
-                ? 'bg-[var(--color-accent)] hover:bg-[var(--color-accent)]/90 text-[var(--color-bg-primary)]'
-                : 'bg-[var(--color-error)]/80 hover:bg-[var(--color-error)] text-[var(--color-bg-primary)]'
-            }`}
+            className={`btn ${confirmTone === 'primary' ? 'btn-primary' : 'btn-danger-fill'} flex-1 py-2.5`}
           >
             {confirmLabel}
           </button>
@@ -119,7 +115,7 @@ export const ConfirmModal: React.FC<ConfirmModalProps> = ({
             ref={cancelButtonRef}
             type="button"
             onClick={onCancel}
-            className="flex-1 py-2.5 rounded-xl bg-[var(--color-surface)] border border-[var(--glass-border)] text-[var(--color-text-secondary)] hover:text-[var(--color-text-primary)] transition-colors"
+            className="btn btn-ghost flex-1 py-2.5"
           >
             Cancel
           </button>

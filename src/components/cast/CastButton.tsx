@@ -93,6 +93,12 @@ export const CastButton: React.FC<CastButtonProps> = ({
     }
   };
 
+  const noteLaunchIntent = () => {
+    if (!isConnected && !isBusy) {
+      castManager.noteUserCastLaunchIntent(`launcher-${size}`);
+    }
+  };
+
   if (!isVisible) return null;
 
   return (
@@ -101,7 +107,15 @@ export const CastButton: React.FC<CastButtonProps> = ({
       data-cast-state={castState}
       data-cast-health={castHealth.phase}
     >
-      <span className="aurora-cast-button-shell">
+      <span
+        className="aurora-cast-button-shell"
+        onPointerDownCapture={noteLaunchIntent}
+        onKeyDownCapture={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            noteLaunchIntent();
+          }
+        }}
+      >
         {isBusy ? (
           <Loader2 className="aurora-cast-icon aurora-cast-spinner" aria-hidden="true" strokeWidth={1.9} />
         ) : (

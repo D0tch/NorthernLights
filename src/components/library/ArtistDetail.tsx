@@ -12,7 +12,7 @@ import { BackButton } from './BackButton';
 import { FadedHeroImage } from './FadedHeroImage';
 import { ArtistInitial } from './ArtistInitial';
 import { formatTime } from '../../utils/formatTime';
-import { ExternalLink, Globe, Users, Mic2, Calendar, Sparkles, Music2, Clock, BookOpen, Play, Headphones, Link2, Disc3, Radio } from 'lucide-react';
+import { ExternalLink, Globe, Users, Mic2, Calendar, Sparkles, Music2, Clock, BookOpen, Play, Headphones, Link2, Disc3, Radio, Tag } from 'lucide-react';
 import { ContextMenuFrame, ContextMenuHeader, ContextMenuLink, ContextMenuList, ContextMenuPortal } from '../ContextMenu';
 import { useArtistConcerts, OnTourSticker, UpcomingShows } from './ArtistConcerts';
 import { useIsCurrentCollection, useNowPlayingState } from '../../hooks/useNowPlaying';
@@ -222,7 +222,44 @@ const ArtistDetailSkeleton: React.FC<{ onBack: () => void }> = ({ onBack }) => (
 export const ArtistDetail: React.FC = () => {
     const { artistId } = useParams<{ artistId: string }>();
     const navigate = useNavigate();
-    const { library, artists, setPlaylist, getAuthHeader, isLibraryLoading } = usePlayerStore();
+    const { library, artists, albums, setPlaylist, getAuthHeader, isLibraryLoading } = usePlayerStore();
+
+    // Map albumId → edition_label so each AlbumCard can render the "remaster",
+    // "deluxe", etc. badge alongside the canonical edition (which has no label).
+    const editionLabelByAlbumId = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const al of albums) {
+            if (al.id && al.edition_label) map.set(al.id, al.edition_label);
+        }
+        return map;
+    }, [albums]);
+
+    // Map albumId → a track's embedded artUrl so the role-filtered grid
+    // (which gets album rows from the server, not tracks from the in-memory
+    // library) can still surface cover art from the user's own files —
+    // no external fetch required.
+    const artUrlByAlbumId = useMemo(() => {
+        const map = new Map<string, string>();
+        for (const t of library) {
+            if (t.albumId && t.artUrl && !map.has(t.albumId)) {
+                map.set(t.albumId, t.artUrl);
+            }
+        }
+        return map;
+    }, [library]);
+
+    // Same idea for albumId → list of tracks in that album. Lets the
+    // role-filtered AlbumCard's play button actually queue something.
+    const tracksByAlbumId = useMemo(() => {
+        const map = new Map<string, TrackInfo[]>();
+        for (const t of library) {
+            if (!t.albumId) continue;
+            const arr = map.get(t.albumId) || [];
+            arr.push(t);
+            map.set(t.albumId, arr);
+        }
+        return map;
+    }, [library]);
 
     // Find artist info from entity list
     const artistInfo = useMemo(() => artists.find(a => a.id === artistId), [artists, artistId]);
@@ -247,6 +284,14 @@ export const ArtistDetail: React.FC = () => {
     const [similarArtists, setSimilarArtists] = useState<SimilarArtist[]>([]);
     const [similarArtistsLoading, setSimilarArtistsLoading] = useState(false);
     const [radioLoading, setRadioLoading] = useState(false);
+    // Credit-driven role browse state. `rolesInLibrary` is sorted by
+    // frequency (most credits first) so the chip row leads with the
+    // role this artist holds most often in *this* library: producer for
+    // a trance act, composer for a classical writer, conductor for a
+    // maestro, performer for everyone else.
+    const [rolesInLibrary, setRolesInLibrary] = useState<Array<{ role: string; credits: number }>>([]);
+    const [albumsByRole, setAlbumsByRole] = useState<Record<string, any[]>>({});
+    const [selectedRole, setSelectedRole] = useState<string>('all');
     const linksButtonRef = useRef<HTMLButtonElement>(null);
     const isArtistPlaying = useIsCurrentCollection({ artistId: artistId ?? undefined });
     const playbackState = useNowPlayingState();
@@ -295,6 +340,34 @@ export const ArtistDetail: React.FC = () => {
                 if (!cancelled) setSimilarArtistsLoading(false);
             });
 
+        return () => { cancelled = true; };
+    }, [artistId, getAuthHeader]);
+
+    // Fetch credit-derived roles + the albums where this artist holds each
+    // role. One request per artist; the response carries every role's
+    // album list so flipping chips is instant after the initial load.
+    useEffect(() => {
+        if (!artistId) {
+            setRolesInLibrary([]);
+            setAlbumsByRole({});
+            setSelectedRole('all');
+            return;
+        }
+        let cancelled = false;
+        setSelectedRole('all');
+        fetch(`/api/artists/${artistId}/credits`, { headers: getAuthHeader() })
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+                if (cancelled || !data) return;
+                setRolesInLibrary(Array.isArray(data.roles) ? data.roles : []);
+                setAlbumsByRole(data.albumsByRole && typeof data.albumsByRole === 'object' ? data.albumsByRole : {});
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setRolesInLibrary([]);
+                    setAlbumsByRole({});
+                }
+            });
         return () => { cancelled = true; };
     }, [artistId, getAuthHeader]);
 
@@ -430,7 +503,7 @@ export const ArtistDetail: React.FC = () => {
     }, [primaryTracks]);
 
     const buildReleaseGroups = (tracks: TrackInfo[]) => {
-        const albumMap = new Map<string, { title: string, artist: string, artUrl?: string, albumId?: string, type: 'Album' | 'EP' | 'Single' | 'Compilation', tracks: TrackInfo[] }>();
+        const albumMap = new Map<string, { title: string, artist: string, artUrl?: string, albumId?: string, editionLabel?: string, type: 'Album' | 'EP' | 'Single' | 'Compilation', tracks: TrackInfo[] }>();
 
         tracks.forEach(track => {
             const albumTitle = track.album || 'Unknown Album';
@@ -439,7 +512,7 @@ export const ArtistDetail: React.FC = () => {
             if (!albumMap.has(key)) {
                 let rType: 'Album' | 'EP' | 'Single' | 'Compilation' = 'Album';
                 const rawType = (track.releaseType || '').toLowerCase();
-                if (track.isCompilation || rawType.includes('compilation')) rType = 'Compilation';
+                if (rawType.includes('compilation') || track.isCompilation) rType = 'Compilation';
                 else if (rawType.includes('ep')) rType = 'EP';
                 else if (rawType.includes('single')) rType = 'Single';
 
@@ -448,6 +521,7 @@ export const ArtistDetail: React.FC = () => {
                     artist: albumOwner,
                     artUrl: track.artUrl,
                     albumId: track.albumId,
+                    editionLabel: track.albumId ? editionLabelByAlbumId.get(track.albumId) : undefined,
                     type: rType,
                     tracks: []
                 });
@@ -590,9 +664,18 @@ export const ArtistDetail: React.FC = () => {
                             </div>
                         )}
 
-                        {/* MusicBrainz metadata */}
-                        {(disambiguation || type || area || lifeSpan?.begin) && (
+                        {/* Artist meta line — roles from on-disk credits sit
+                            alongside the MusicBrainz-sourced type / area /
+                            lifespan items, in the same style. Roles take the
+                            lead position so they sit right under the name. */}
+                        {(rolesInLibrary.length > 1 || disambiguation || type || area || lifeSpan?.begin) && (
                             <div className="flex flex-wrap items-center gap-3 mb-3 text-xs text-[var(--color-text-muted)]">
+                                {rolesInLibrary.length > 1 && (
+                                    <span className="inline-flex items-center gap-1">
+                                        <Tag className="w-3 h-3" />
+                                        {rolesInLibrary.map(r => r.role).join(' · ')}
+                                    </span>
+                                )}
                                 {type && (
                                     <span className="inline-flex items-center gap-1">
                                         {type === 'Group' ? <Users className="w-3 h-3" /> : type === 'Person' ? <Mic2 className="w-3 h-3" /> : <Globe className="w-3 h-3" />}
@@ -875,34 +958,107 @@ export const ArtistDetail: React.FC = () => {
                     stale={concertsStale}
                 />
 
-                {/* Primary Releases */}
-            {[
-                { title: 'Albums', data: releaseGroups.albums },
-                { title: 'EPs', data: releaseGroups.eps },
-                { title: 'Singles', data: releaseGroups.singles },
-                { title: 'Compilations', data: releaseGroups.compilations }
-            ].map((section) => section.data.length > 0 && (
-                <div key={section.title} className="mb-12">
-                    <h3 className="font-semibold text-xl tracking-wide text-[var(--color-text-secondary)] mb-4 md:mb-6 border-b border-[var(--glass-border)] pb-2">{section.title}</h3>
-                    <div className="album-grid">
-                        {section.data.map(album => (
-                            <AlbumCard
-                                key={album.albumId || `${album.title}-${album.artist}`}
-                                title={album.title}
-                                artist={album.artist}
-                                artUrl={album.artUrl}
-                                subtitle={`${album.tracks.length} track${album.tracks.length !== 1 ? 's' : ''}`}
-                                linkTo={album.albumId ? `/library/album/${album.albumId}` : undefined}
-                                linkState={{ backLabel: 'Back to Artist' }}
-                                onPlay={() => setPlaylist(album.tracks, 0)}
-                            />
-                        ))}
+                {/* Role-filter chip row. The chip order mirrors the
+                    user's library: a producer-credited artist sees
+                    `producer` first; a composer sees `composer` first.
+                    The visual is the same lowercase pill we use for the
+                    Hub "Uniquely yours" badges and the AlbumCard edition
+                    label, keeping the chrome consistent. */}
+                {rolesInLibrary.length > 1 && (
+                    <div className="mb-6 flex flex-wrap items-center gap-2">
+                        {[{ role: 'all', credits: 0 }, ...rolesInLibrary].map((r) => {
+                            const isActive = selectedRole === r.role;
+                            return (
+                                <button
+                                    key={r.role}
+                                    type="button"
+                                    onClick={() => setSelectedRole(r.role)}
+                                    className={`text-[10px] font-bold uppercase tracking-[0.15em] px-2.5 py-1 rounded-full backdrop-blur-sm border transition-ui ${
+                                        isActive
+                                            ? 'bg-[var(--color-primary)] text-white border-[var(--color-primary)]'
+                                            : 'bg-black/5 dark:bg-white/5 text-[var(--color-text-secondary)] border-[var(--glass-border)] hover:border-[var(--color-primary)] hover:text-[var(--color-primary)]'
+                                    }`}
+                                    aria-pressed={isActive}
+                                >
+                                    {r.role}
+                                    {r.role !== 'all' && (
+                                        <span className="ml-1.5 opacity-60">{r.credits}</span>
+                                    )}
+                                </button>
+                            );
+                        })}
                     </div>
-                </div>
-            ))}
+                )}
 
-            {/* Also Appears On */}
-            {[
+                {selectedRole === 'all' ? (
+                    /* Default view: Albums / EPs / Singles / Compilations */
+                    [
+                        { title: 'Albums', data: releaseGroups.albums },
+                        { title: 'EPs', data: releaseGroups.eps },
+                        { title: 'Singles', data: releaseGroups.singles },
+                        { title: 'Compilations', data: releaseGroups.compilations }
+                    ].map((section) => section.data.length > 0 && (
+                        <div key={section.title} className="mb-12">
+                            <h3 className="font-semibold text-xl tracking-wide text-[var(--color-text-secondary)] mb-4 md:mb-6 border-b border-[var(--glass-border)] pb-2">{section.title}</h3>
+                            <div className="album-grid">
+                                {section.data.map(album => (
+                                    <AlbumCard
+                                        key={album.albumId || `${album.title}-${album.artist}`}
+                                        title={album.title}
+                                        artist={album.artist}
+                                        artUrl={album.artUrl}
+                                        subtitle={`${album.tracks.length} track${album.tracks.length !== 1 ? 's' : ''}`}
+                                        editionLabel={album.editionLabel}
+                                        linkTo={album.albumId ? `/library/album/${album.albumId}` : undefined}
+                                        linkState={{ backLabel: 'Back to Artist' }}
+                                        onPlay={() => setPlaylist(album.tracks, 0)}
+                                    />
+                                ))}
+                            </div>
+                        </div>
+                    ))
+                ) : (
+                    /* Role-filtered view: a single section listing albums
+                       where this artist holds the selected role. The
+                       backend has already pre-sorted by year DESC, title. */
+                    <div className="mb-12">
+                        <h3 className="font-semibold text-xl tracking-wide text-[var(--color-text-secondary)] mb-4 md:mb-6 border-b border-[var(--glass-border)] pb-2">
+                            {selectedRole} credits
+                        </h3>
+                        {(albumsByRole[selectedRole] || []).length === 0 ? (
+                            <div className="text-sm text-[var(--color-text-muted)]">No albums with this credit.</div>
+                        ) : (
+                            <div className="album-grid">
+                                {(albumsByRole[selectedRole] || []).map((al: any) => {
+                                    // Prefer file-embedded art (works fully offline / no 3rd-party);
+                                    // fall back to any cached external image_url on the album row.
+                                    const localArt = artUrlByAlbumId.get(al.id);
+                                    const albumTracks = tracksByAlbumId.get(al.id) || [];
+                                    return (
+                                        <AlbumCard
+                                            key={al.id}
+                                            title={al.title}
+                                            artist={al.artist_name || artistName}
+                                            artUrl={localArt || al.image_url || undefined}
+                                            subtitle={al.credited_track_count
+                                                ? `${al.credited_track_count} track${al.credited_track_count !== 1 ? 's' : ''}`
+                                                : undefined}
+                                            editionLabel={al.edition_label}
+                                            linkTo={`/library/album/${al.id}`}
+                                            linkState={{ backLabel: 'Back to Artist' }}
+                                            onPlay={() => { if (albumTracks.length > 0) setPlaylist(albumTracks, 0); }}
+                                        />
+                                    );
+                                })}
+                            </div>
+                        )}
+                    </div>
+                )}
+
+            {/* Also Appears On — hidden when a role filter is active, since
+                the role-filtered view above already shows the role-relevant
+                slice across primary + featured albums. */}
+            {selectedRole === 'all' && [
                 ...featuredGroups.albums,
                 ...featuredGroups.eps,
                 ...featuredGroups.singles,
@@ -925,6 +1081,7 @@ export const ArtistDetail: React.FC = () => {
                                 artist={album.artist}
                                 artUrl={album.artUrl}
                                 subtitle={album.artist}
+                                editionLabel={album.editionLabel}
                                 linkTo={album.albumId ? `/library/album/${album.albumId}` : undefined}
                                 linkState={{ backLabel: 'Back to Artist' }}
                                 onPlay={() => setPlaylist(album.tracks, 0)}

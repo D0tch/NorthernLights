@@ -102,6 +102,7 @@ export class CastManager {
     private freshSessionStartedAt = 0;
     private readonly freshSessionWindowMs = 5000;
     private freshSessionPlaybackPromise: Promise<void> | null = null;
+    private userSessionIntentTimer: ReturnType<typeof setTimeout> | null = null;
     private staleTransportRecoveryPromise: Promise<boolean> | null = null;
     private mediaStatusRefreshPromise: Promise<any | null> | null = null;
     private preserveSessionOnNextEnd = false;
@@ -348,7 +349,10 @@ export class CastManager {
     }
 
     private scheduleFreshSessionPlayback(reason: string, delayMs: number = 0) {
-        if (this.freshSessionPlaybackPromise) return;
+        if (this.freshSessionPlaybackPromise) {
+            this.logCast('ok', `Fresh Cast playback already scheduled: ${reason}`);
+            return;
+        }
         this.freshSessionPlaybackPromise = (async () => {
             if (delayMs > 0) {
                 await this.delay(delayMs);
@@ -356,7 +360,46 @@ export class CastManager {
             await this.startPlaybackForCurrentSession(reason);
         })().finally(() => {
             this.freshSessionPlaybackPromise = null;
+            this.userSessionRequestPending = false;
+            this.clearUserSessionIntentTimer();
         });
+    }
+
+    private clearUserSessionIntentTimer() {
+        if (this.userSessionIntentTimer) {
+            clearTimeout(this.userSessionIntentTimer);
+            this.userSessionIntentTimer = null;
+        }
+    }
+
+    public noteUserCastLaunchIntent(reason: string = 'launcher') {
+        if (this.isConnected()) return;
+
+        this.userSessionRequestPending = true;
+        this.freshSessionStartedAt = Date.now();
+        this.rejoinSessionPending = false;
+        this.rejoinHydrationRunId += 1;
+        this.clearRejoinHydrationTimer();
+        this.clearUserSessionIntentTimer();
+        this.setHealthStatus('rejoining', 'Connecting to Cast device...', reason);
+        this.logCast('ok', 'User initiated Cast launcher session', `reason=${reason}`);
+
+        [2000, 5000, 9000].forEach((delay) => {
+            window.setTimeout(() => {
+                if (!this.userSessionRequestPending) return;
+                void this.reconcileActiveSession(`user-launch-intent+${delay}ms`);
+            }, delay);
+        });
+
+        this.userSessionIntentTimer = setTimeout(() => {
+            if (!this.userSessionRequestPending) return;
+            this.userSessionRequestPending = false;
+            this.freshSessionStartedAt = 0;
+            this.logCast('warn', 'User Cast launcher intent timed out', `reason=${reason}`);
+            if (!this.isConnected()) {
+                this.setHealthStatus('idle', '', reason);
+            }
+        }, 15000);
     }
 
     private resetSessionAttemptState(reason: string, options: { clearStoredSession?: boolean; healthPhase?: CastHealthPhase; healthMessage?: string } = {}) {
@@ -365,6 +408,7 @@ export class CastManager {
         this.freshSessionStartedAt = 0;
         this.rejoinHydrationRunId += 1;
         this.clearRejoinHydrationTimer();
+        this.clearUserSessionIntentTimer();
         if (options.clearStoredSession) {
             localStorage.removeItem(SESSION_STORAGE_KEY);
         }
@@ -746,7 +790,15 @@ export class CastManager {
 
                 if (this.hasActiveRemoteMediaSession(mediaSession)) {
                     this.logCast('ok', `Reconciled active Cast session: ${reason}`);
+                    this.userSessionRequestPending = false;
+                    this.clearUserSessionIntentTimer();
                     await this.hydrateSenderFromRemoteSession(mediaSession, reason);
+                    return true;
+                }
+
+                if (this.userSessionRequestPending) {
+                    this.logCast('ok', `Reconciled fresh user Cast session without media: ${reason}`);
+                    this.scheduleFreshSessionPlayback(`reconcile-user-launch:${reason}`);
                     return true;
                 }
 
@@ -869,12 +921,13 @@ export class CastManager {
                     // Fresh connection with no existing remote media: auto-cast local playback.
                     // Existing/resumed remote media must win over stale local sender state.
                     if (prevState !== 'CONNECTED' && this.state === 'CONNECTED' && !this.autoCastInProgress) {
-                        if (this.userSessionRequestPending) {
-                            return;
-                        }
                         const mediaSession = this.getHydratableMediaSession(this.castContext.getCurrentSession?.()?.getMediaSession?.() || null);
                         if (this.hasActiveRemoteMediaSession(mediaSession)) {
+                            this.userSessionRequestPending = false;
+                            this.clearUserSessionIntentTimer();
                             void this.hydrateSenderFromRemoteSession(mediaSession, 'cast-connected');
+                        } else if (this.userSessionRequestPending) {
+                            this.scheduleFreshSessionPlayback('cast-connected-user-launch', 250);
                         } else if (this.shouldHydrateConnectedSessionAsRejoin()) {
                             this.beginRejoinHydration('cast-connected');
                         } else {
@@ -903,6 +956,7 @@ export class CastManager {
                             const startedSessionId = startedSession?.getSessionId?.() || '';
                             const treatStartedSessionAsRejoin =
                                 this.rejoinSessionPending
+                                && !this.userSessionRequestPending
                                 && !this.isRecentFreshSessionStart()
                                 && (!startedSessionId || !storedSessionBeforeStart || startedSessionId === storedSessionBeforeStart);
 
@@ -946,6 +1000,7 @@ export class CastManager {
 
                         case cast.framework.SessionState.SESSION_START_FAILED:
                             this.logCast('warn', 'SESSION_START_FAILED', `errorCode=${event.errorCode || 'unknown'} reason=${event.reason || 'unknown'}`);
+                            this.clearUserSessionIntentTimer();
                             this.resetSessionAttemptState('session-start-failed', {
                                 healthPhase: 'idle',
                                 healthMessage: '',
@@ -954,6 +1009,7 @@ export class CastManager {
 
                         case cast.framework.SessionState.SESSION_RESUME_FAILED:
                             this.logCast('warn', 'SESSION_RESUME_FAILED', `errorCode=${event.errorCode || 'unknown'} reason=${event.reason || 'unknown'}`);
+                            this.clearUserSessionIntentTimer();
                             this.resetSessionAttemptState('session-resume-failed', {
                                 clearStoredSession: true,
                                 healthPhase: 'warning',
@@ -1006,6 +1062,7 @@ export class CastManager {
                             }
                             this.rejoinSessionPending = false;
                             this.freshSessionStartedAt = 0;
+                            this.clearUserSessionIntentTimer();
                             this.suppressRemoteEndedDuringDisconnect = false;
                             this.rejoinHydrationRunId += 1;
                             this.clearRejoinHydrationTimer();

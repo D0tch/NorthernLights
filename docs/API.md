@@ -7,14 +7,16 @@ Most endpoints require authentication via a JWT token.
 1. [Authentication & Setup](#-authentication--setup)
 2. [Admin](#-admin)
 3. [Library](#-library)
-4. [Playlists](#-playlists)
-5. [Playback & History](#-playback--history)
-6. [Settings](#-settings)
-7. [Hub & AI Features](#-hub--ai-features)
-8. [Entities](#-entities)
-9. [Media & Streaming](#-media--streaming)
-10. [Providers](#-providers)
-11. [Miscellaneous](#-miscellaneous)
+4. [Filtering](#-filtering)
+5. [Playlists](#-playlists)
+6. [Playback & History](#-playback--history)
+7. [Settings & ML Models](#-settings--ml-models)
+8. [Hub & AI Features](#-hub--ai-features)
+9. [Entities](#-entities)
+10. [Concerts & Live Events](#-concerts--live-events)
+11. [Media & Streaming](#-media--streaming)
+12. [Providers & Metadata](#-providers--metadata)
+13. [Miscellaneous](#-miscellaneous)
 
 ---
 
@@ -301,7 +303,7 @@ Add a mapped folder.
 Remove a mapped folder and its tracks.
 
 ### [POST] `/api/library/scan`
-Trigger a recursive directory scan.
+Trigger a recursive directory scan (synced disk walk, stale removal, metadata extraction, audio analysis).
 - **How to use**: Pass an absolute path. The server will walk the directory, extract metadata, and run audio analysis.
 - **Example Request**:
   ```json
@@ -321,6 +323,17 @@ Receive real-time scan progress.
     "totalFiles": 1000,
     "activeWorkers": 8
   }
+  ```
+
+### [POST] `/api/library/refresh-metadata`
+Trigger metadata refresh on existing files.
+- **Example Request**:
+  ```json
+  { "path": "/home/user/music" }
+  ```
+- **Example Response**:
+  ```json
+  { "message": "Refresh metadata accepted" }
   ```
 
 ### [POST] `/api/library/analyze`
@@ -348,6 +361,134 @@ Get per-directory statistics.
     ]
   }
   ```
+
+### [POST] `/api/library/love`
+Toggle loved status of a track for the current user, optionally syncing to Last.fm and/or MusicBrainz.
+- **Example Request**:
+  ```json
+  {
+    "trackId": "uuid-v4",
+    "loved": true
+  }
+  ```
+- **Example Response**:
+  ```json
+  {
+    "status": "ok",
+    "loved": true,
+    "providers": [
+      { "provider": "lastfm", "status": "ok" },
+      { "provider": "musicbrainz", "status": "skipped", "reason": "not_connected_or_missing_recording_mbid" }
+    ]
+  }
+  ```
+
+### [GET] `/api/library/artist-duplicates`
+Retrieve potential duplicate artists based on fuzzy names (Admin only).
+- **Example Response**:
+  ```json
+  {
+    "candidates": [
+      {
+        "candidateKey": "t_dj_tiesto",
+        "signature": "tiesto",
+        "artists": [
+          { "id": "id1", "name": "Tiësto", "trackCount": 15 },
+          { "id": "id2", "name": "DJ Tiësto", "trackCount": 2 }
+        ]
+      }
+    ]
+  }
+  ```
+
+### [POST] `/api/library/artist-duplicates/dismiss`
+Dismiss a duplicate artist candidate cluster (Admin only).
+- **Example Request**:
+  ```json
+  {
+    "candidateKey": "t_dj_tiesto",
+    "signature": "tiesto",
+    "artistIds": ["id1", "id2"]
+  }
+  ```
+
+### [POST] `/api/library/artist-duplicates/merge`
+Merge duplicate artist candidate records under a single canonical ID (Admin only).
+- **Example Request**:
+  ```json
+  {
+    "candidateKey": "t_dj_tiesto",
+    "signature": "tiesto",
+    "canonicalArtistId": "id1",
+    "duplicateArtistIds": ["id2"]
+  }
+  ```
+
+### [POST] `/api/library/artists/manual-merge`
+Manually merge arbitrary artists not caught by the auto-detector (Admin only).
+- **Example Request**:
+  ```json
+  {
+    "canonicalArtistId": "id1",
+    "duplicateArtistIds": ["id2", "id3"]
+  }
+  ```
+
+---
+
+## 🔍 Filtering
+
+Advanced metadata queries for library exploration.
+
+### [POST] `/api/filter/artists`
+Filter library artists using logical group conditions (OR inside a group, AND between groups).
+- **Example Request**:
+  ```json
+  {
+    "groups": [
+      {
+        "id": "group-1",
+        "conditions": [
+          { "metadataType": "genre", "operator": "contains", "value": "Electronic" },
+          { "metadataType": "area", "operator": "equals", "value": "United Kingdom" }
+        ]
+      }
+    ]
+  }
+  ```
+- **Example Response**:
+  ```json
+  {
+    "ids": ["artist-uuid-1", "artist-uuid-2"]
+  }
+  ```
+
+**Valid Artist Fields**: `genre`, `artist_type`, `area`, `lifespan_begin`, `community_tags`, `image_url`, `listeners`, `name`.
+
+### [POST] `/api/filter/albums`
+Filter library albums using logical group conditions.
+- **Example Request**:
+  ```json
+  {
+    "groups": [
+      {
+        "id": "group-1",
+        "conditions": [
+          { "metadataType": "year", "operator": "greater than", "value": "2010" },
+          { "metadataType": "release_type", "operator": "is not", "value": "compilation" }
+        ]
+      }
+    ]
+  }
+  ```
+- **Example Response**:
+  ```json
+  {
+    "ids": ["album-uuid-1", "album-uuid-2"]
+  }
+  ```
+
+**Valid Album Fields**: `genre`, `release_type`, `year`, `artist_name`, `tags`, `image_url`, `listeners`, `title`.
 
 ---
 
@@ -397,7 +538,38 @@ Pin or unpin a playlist.
 
 ---
 
-## ⚙️ Settings
+## ✨ Playback & History
+
+### [POST] `/api/playback/history`
+Record a track as "Played" in the current session.
+- **Payload**: `{ "trackId": "uuid" }`
+- **Role**: Influences the Infinity Mode decay centroid.
+
+### [POST] `/api/playback/record`
+Record a successful playback (increments database play count).
+- **Example Request**:
+  ```json
+  { "trackId": "track-v4-id" }
+  ```
+
+### [POST] `/api/playback/skip`
+Record a track skip.
+- **Payload**: `{ "trackId": "uuid" }`
+
+### [POST] `/api/recommend`
+Request the next track for Infinity Mode.
+- **Payload**: 
+  ```json
+  {
+    "sessionHistoryTrackIds": ["id1", "id2"],
+    "settings": { "genreStrictness": 50 }
+  }
+  ```
+- **Returns**: `{ "track": { ...track metadata... } }`
+
+---
+
+## ⚙️ Settings & ML Models
 
 ### [GET] `/api/settings`
 Get all server and user configuration settings.
@@ -408,17 +580,7 @@ Get all server and user configuration settings.
     "scannerConcurrency": "SSD",
     "discoveryLevel": 50,
     "llmModelName": "gpt-4",
-    "llmBaseUrl": "https://api.openai.com/v1",
-    "llmPlaylistDiversity": 50,
-    "llmVetoMode": "hard",
-    "llmGenreCohesion": 50,
-    "llmDiscoveryBias": 45,
-    "llmArtistSpread": 70,
-    "genrePenaltyCurve": 50,
-    "llmRecoveryStrength": 50,
-    "llmAdjacentReach": 50,
-    "llmTracksPerPlaylist": 10,
-    "llmPlaylistCount": 3
+    ...
   }
   ```
 
@@ -431,42 +593,69 @@ Returns a merged view of server-wide settings and user-specific settings. System
 - `llmBaseUrl`, `llmApiKey`, `llmModelName`: Core AI configuration.
 - `hubGenerationSchedule`: `Manual Only`, `Daily`, `Weekly`.
 - `geniusApiKey`, `lastFmApiKey`: Provider credentials.
+- `jambaseEnabled`, `jambaseMaxSubscriptionsPerUser`, `jambaseMonthlyCap`, `jambaseHardStop`: Live concert integration.
 
 **Valid User Keys**:
-- Legacy recommendation keys:
-  - `discoveryLevel`
-  - `genreStrictness`
-  - `artistAmnesiaLimit`
-- Current LLM playlist keys:
-  - `llmPlaylistDiversity`: `0-100`
-  - `llmVetoMode`: `hard | adaptive`
-  - `llmGenreCohesion`: `0-100`
-  - `llmDiscoveryBias`: `0-100`
-  - `llmArtistSpread`: `0-100`
-  - `genrePenaltyCurve`: `0-100`
-  - `llmRecoveryStrength`: `0-100`
-  - `llmAdjacentReach`: `0-100`
-  - `llmTracksPerPlaylist`: integer
-  - `llmPlaylistCount`: integer
-  - `lastFmScrobbleEnabled`: boolean
+- Legacy recommendation: `discoveryLevel`, `genreStrictness`, `artistAmnesiaLimit`.
+- Smart Hub: `llmPlaylistDiversity`, `llmVetoMode`, `llmGenreCohesion`, `llmDiscoveryBias`, `llmArtistSpread`, `genrePenaltyCurve`, `llmRecoveryStrength`, `llmAdjacentReach`, `llmTracksPerPlaylist`, `llmPlaylistCount`.
+- Providers: `lastFmScrobbleEnabled`, `listenBrainzScrobbleEnabled`.
+- Concerts: `concertsEnabled`, `concertsLat`, `concertsLng`, `concertsLocationLabel`, `concertsRadiusKm`, `concertsAutoAddEnabled`.
 
-### [POST] `/api/settings/health/llm`
-Test LLM connection.
+### [POST] `/api/settings`
+Update settings keys for system or user.
+- **Example Request**:
+  ```json
+  {
+    "discoveryLevel": 60,
+    "lastFmScrobbleEnabled": true
+  }
+  ```
+
+### [POST] `/api/health/llm`
+Test connection to the configured LLM API (Admin only).
 - **Example Request**:
   ```json
   { "llmBaseUrl": "https://api.openai.com/v1", "llmApiKey": "sk-..." }
   ```
+- **Example Response**:
+  ```json
+  { "status": "ok", "models": ["gpt-4", "gpt-3.5-turbo"] }
+  ```
 
-### Genre Matrix
+### Genre Matrix & Taxonomy
 
-### [GET] `/api/settings/genre-matrix/mappings`
-Get genre-to-subgenre mappings.
+### [GET] `/api/genre-matrix/mappings`
+Get all genre-to-subgenre mappings.
 
-### [POST] `/api/settings/genre-matrix/remap-all`
-Trigger full remapping of all genres (admin only).
+### [POST] `/api/genre-matrix/remap-all`
+Trigger a full remapping of all genres based on the taxonomy hierarchy (Admin only).
 
-### [POST] `/api/settings/genre-matrix/regenerate`
-Manually trigger genre matrix regeneration (admin only).
+### [POST] `/api/genre-matrix/regenerate`
+Manually trigger genre matrix matrix weight diff and generation (Admin only).
+
+### ML Model Management
+
+Local machine learning models can be managed dynamically for audio categorization.
+
+### [GET] `/api/settings/models/status`
+Check download status of ML models (Admin only).
+- **Example Response**:
+  ```json
+  {
+    "models": { "essentia": { "downloaded": true, "size": 15000000 } },
+    "isDownloading": false
+  }
+  ```
+
+### [POST] `/api/settings/models/download`
+Trigger a full redownload of ML models in the background (Admin only).
+- **Example Response**:
+  ```json
+  { "status": "started" }
+  ```
+
+### [GET] `/api/settings/models/progress` (SSE)
+Receive real-time progress for ML model downloads (Admin only).
 
 ---
 
@@ -474,6 +663,7 @@ Manually trigger genre matrix regeneration (admin only).
 
 ### [GET] `/api/hub`
 Get the user's saved AI-generated Hub playlists.
+- **Query Params**: `queueRefresh` (`true` or `false`).
 - **Example Response**:
   ```json
   {
@@ -482,39 +672,66 @@ Get the user's saved AI-generated Hub playlists.
         "section": "Time-of-Day",
         "title": "Morning Coffee",
         "description": "Warm acoustic tracks for your morning.",
-        "target_vector": [0.3, 0.6, 0.2, 0.8, 0.4, 0.9, 0.4, 0.5]
+        "tracks": [...]
       }
     ]
   }
   ```
 
-Notes:
-- This is a fetch-only endpoint.
-- It returns saved playlists for the authenticated user.
-- It does **not** trigger concept generation or LLM calls.
-
 ### [POST] `/api/hub/regenerate`
 Trigger regeneration of LLM playlists for the authenticated user.
-- **Body**: `{ "force": true }` is optional and bypasses the normal recent-playlist freshness guard.
-- **Example Response**:
-  ```json
-  { "generated": 3 }
-  ```
-
-Generation flow:
-- removes stale LLM playlists for the user
-- builds time-of-day and listening-history context
-- requests concepts from the LLM
-- compiles each concept into a library-relative plan
-- builds named candidate pools (`core`, `adjacent`, `root`, `acoustic`, `discovery`, `bridge`)
-- recovers through the relaxation ladder when the local library is sparse
-- saves the resulting playlists
+- **Payload**: `{ "force": true }` (optional, bypasses the recent-playlist freshness guard).
 
 ### [POST] `/api/hub/generate-custom`
 Generate a new playlist concept from a natural language prompt.
 - **Example Request**:
   ```json
   { "prompt": "Synthwave for driving late at night in a neon city" }
+  ```
+- **Example Response**:
+  ```json
+  {
+    "playlist": { "id": "...", "title": "Synthwave Late Night", "tracks": [...] }
+  }
+  ```
+
+### Smart Hub & Listening History Features
+
+### [GET] `/api/hub/smart`
+Get a combined bundle of personalized history-based listening nodes.
+- **Example Response**:
+  ```json
+  {
+    "jumpBackIn": [...],
+    "onRepeat": { "title": "On Repeat", "tracks": [...] },
+    "repeatRewind": { "title": "Repeat Rewind", "tracks": [...] },
+    "daylist": { "title": "Lazy Tuesday Afternoon", "tracks": [...] }
+  }
+  ```
+
+### [GET] `/api/hub/jump-back-in`
+Get "Jump Back In" recommendation tiles (tracks/albums recently played).
+
+### [GET] `/api/hub/on-repeat`
+Get the user's current most-played tracks ("On Repeat").
+
+### [GET] `/api/hub/repeat-rewind`
+Get past favorites the user has stopped playing recently ("Repeat Rewind").
+
+### [GET] `/api/hub/daylist`
+Get a daily discovery mix titled by weekday + time-of-day mood. The track list is a discovery-first blend: high-played / hearted tracks (`favorites` pool), mood-adjacent acoustic matches (`acoustic` pool), and never-played or 60-day-stale neighbours (`discovery` pool). The LLM-generated title and description follow the `Mood Weekday TimeOfDay` template (e.g. `Lazy Tuesday Afternoon`). Cached for 4 hours and force-refreshed when the time-of-day bucket rolls over. See [docs/radios.md](./radios.md) for the multi-pool architecture.
+
+### [POST] `/api/hub/artist-radio`
+Generate a 30-track radio playlist seeded by an artist. Built by blending five pools — `seed` (the artist's own most-played tracks), `core` (1280D Discogs-EffNet K-NN around a centroid of the artist's top tracks), `adjacent` (tracks sharing the artist's genre or adjacent genre paths), `bridge` (acoustic midpoint with the library's mainstream), and `discovery` (never-played / dormant neighbours). Deduplicates by MB recording id with normalized-title fallback, enforces artist diversity (max 2 per neighbour artist), and excludes the "Various Artists" pseudo-entity. Cached for 12 hours per (user, artist). See [docs/radios.md](./radios.md) for the multi-pool architecture.
+- **Example Request**:
+  ```json
+  { "artistId": "uuid-v4" }
+  ```
+- **Example Response**:
+  ```json
+  {
+    "playlist": { "title": "Radiohead Radio", "tracks": [...] }
+  }
   ```
 
 ---
@@ -532,9 +749,13 @@ List all artists.
 
 ### [GET] `/api/artists/:id`
 Get artist details with tracks.
+
+### [GET] `/api/artists/:id/similar`
+Get similar artists in the library based on their audio profiles.
+- **Query Params**: `limit` (default: 8)
 - **Example Response**:
   ```json
-  { "id": "uuid", "name": "Led Zeppelin", "tracks": [...] }
+  { "artists": [...] }
   ```
 
 ### Albums
@@ -555,17 +776,102 @@ Get genre details with tracks.
 
 ---
 
+## 📅 Concerts & Live Events
+
+Integrates with JamBase to display upcoming concert listings for subscribed artists.
+
+### Admin Tools
+
+### [GET] `/api/providers/jambase/status`
+Check JamBase key configuration and API monthly usage limits (Admin only).
+
+### [POST] `/api/providers/jambase/test`
+Test key connectivity (Admin only).
+
+### [GET] `/api/providers/jambase/usage`
+Get raw JamBase budget usage logs (Admin only).
+
+### Subscriptions & Auto-Add
+
+### [GET] `/api/concerts/subscriptions`
+Get user's subscribed artists and subscription limit.
+
+### [POST] `/api/concerts/subscriptions/:artistId`
+Subscribe to an artist's tour alerts.
+- **Example Response**: `{ "status": "ok" }`
+
+### [DELETE] `/api/concerts/subscriptions/:artistId`
+Unsubscribe from an artist's tour alerts.
+
+### [POST] `/api/concerts/auto-add/refresh`
+Trigger auto-subscribing open slots with top played artists.
+
+### [GET] `/api/concerts/auto-add/candidates`
+Get candidates for subscription based on play history.
+
+### [GET] `/api/concerts/auto-add/dismissed`
+Get dismissed auto-add candidates.
+
+### [POST] `/api/concerts/auto-add/undismiss/:artistId`
+Allow an artist to be auto-added again.
+
+### Feeds & Events
+
+### [GET] `/api/concerts/hub`
+Get event feed for all subscribed artists (uses local database cache, respects user location settings).
+- **Example Response**:
+  ```json
+  {
+    "events": [
+      {
+        "id": "event-1",
+        "artistName": "Radiohead",
+        "eventName": "Radiohead at Wembley",
+        "date": "2026-08-15",
+        "venue": "Wembley Stadium",
+        "city": "London",
+        "distanceKm": 12.5
+      }
+    ],
+    "stale": false
+  }
+  ```
+
+### [GET] `/api/concerts/artist/:artistId`
+Get upcoming events for a single artist (triggers cache refresh if stale).
+
+### Lookup
+
+### [GET] `/api/concerts/library/artist-search`
+Search only artists present in the user's music library.
+
+### [GET] `/api/concerts/library/top-artists`
+Get top artist candidates based on play counts.
+
+---
+
 ## 🎵 Media & Streaming
 
 ### [GET] `/api/media/stream/:trackId/playlist.m3u8`
-The primary streaming endpoint using **HLS (HTTP Live Streaming)**.
-- **How to use**: Returns an M3U8 playlist. The backend slices the file into 10s segments on-the-fly.
-- **Query Params**: `quality` (`source`, `320k`, `160k`, `128k`, `64k`). Default: `128k`.
+The primary streaming endpoint using **HLS (HTTP Live Streaming)**. Returns an M3U8 master playlist.
+- **Query Params**: `quality` (`source`, `320k`, `160k`, `128k`, `64k`), `codec` (e.g. `aac`, `mp3`, `ac3`), `token` (JWT authorization).
 - **Note**: Requires FFmpeg on the host machine.
 
+### [GET] `/api/media/stream/:trackId/media.m3u8`
+HLS media playlist segment mapping index.
+- **Query Params**: `quality`, `codec`, `token`.
+
+### [POST] `/api/media/stream/:trackId/prewarm`
+Start HLS stream slicing/transcoding in the background before playback begins.
+- **Query Params**: `quality`, `codec`.
+- **Example Response**:
+  ```json
+  { "ok": true, "segmentCount": 10, "finished": false }
+  ```
+
 ### [GET] `/api/media/stream/:trackId/:segment.ts`
-Retrieve a specific HLS transport stream segment.
-- **Cache Policy**: Segments are cached indefinitely (`max-age=31536000, immutable`) as they are immutable for a given track/quality session.
+Retrieve a specific HLS transport stream segment chunk.
+- **Cache Policy**: Segments are cached indefinitely (`max-age=31536000, immutable`).
 
 ### [GET] `/api/media/stream` (Legacy)
 Classic HTTP streaming for non-HLS clients or direct downloads.
@@ -575,164 +881,165 @@ Classic HTTP streaming for non-HLS clients or direct downloads.
 ### [GET] `/api/media/art`
 Retrieve embedded album artwork.
 - **Query Params**: `pathB64` or `path`.
-- **Note**: Proxies the binary data from the file's metadata directly.
+
+### [POST] `/api/cast/log`
+Write ChromeCast receiver logs to the server.
+- **Example Request**:
+  ```json
+  {
+    "level": "error",
+    "source": "ExoPlayer",
+    "message": "MediaCodecVideoRenderer: Decoder initialization failed"
+  }
+  ```
 
 ---
 
-## 🔌 Providers
+## 🔌 Providers & Metadata
 
-### MusicBrainz (proxy + OAuth)
+Third-party service integrations.
 
-### [GET] `/api/providers/musicbrainz/artist/:mbid`
-Proxy request to MusicBrainz artist endpoint.
-
-### [GET] `/api/providers/musicbrainz/release-group/:mbid`
-Proxy request to MusicBrainz release-group endpoint.
-
-### [GET] `/api/providers/musicbrainz/recording/:mbid`
-Proxy request to MusicBrainz recording endpoint.
-
-### [GET] `/api/providers/musicbrainz/isrc/:isrc`
-Lookup recording by ISRC.
-
-### [GET] `/api/providers/musicbrainz/search/artist`
-Search for artists.
-- **Query Params**: `q` (search query), `limit`
-
-### [GET] `/api/providers/musicbrainz/search/release-group`
-Search for release groups.
-
-### [GET] `/api/providers/musicbrainz/test`
-Test MusicBrainz connection.
+### MusicBrainz (OAuth2 integration)
 
 ### [GET] `/api/providers/musicbrainz/authorize`
 Get OAuth2 authorization URL.
 
 ### [GET] `/api/providers/musicbrainz/callback`
-OAuth2 callback handler.
-
-### [POST] `/api/providers/musicbrainz/refresh`
-Refresh OAuth token.
-
-### [POST] `/api/providers/musicbrainz/disconnect`
-Disconnect OAuth.
+OAuth2 callback redirect handler.
 
 ### [GET] `/api/providers/musicbrainz/status`
-Get connection status.
+Check connection status.
 
-### Last.fm (per-user)
+### [POST] `/api/providers/musicbrainz/refresh`
+Refresh access tokens.
+
+### [POST] `/api/providers/musicbrainz/disconnect`
+Disconnect integration.
+
+### [GET] `/api/providers/musicbrainz/artist/:mbid`
+Proxy request to MB artist metadata.
+
+### [GET] `/api/providers/musicbrainz/release-group/:mbid`
+Proxy release-group data.
+
+### [GET] `/api/providers/musicbrainz/recording/:mbid`
+Proxy recording data.
+
+### [GET] `/api/providers/musicbrainz/isrc/:isrc`
+Lookup recording by ISRC.
+
+### [GET] `/api/providers/musicbrainz/search/artist`
+Search artist registry.
+
+### [GET] `/api/providers/musicbrainz/search/release-group`
+Search release-groups.
+
+### [GET] `/api/providers/musicbrainz/test`
+Test connection.
+
+### Last.fm (per-user OAuth)
 
 ### [GET] `/api/providers/lastfm/authorize`
 Get Last.fm authorization URL.
 
+### [POST] `/api/providers/lastfm/complete`
+Verify and complete OAuth connection.
+
 ### [GET] `/api/providers/lastfm/callback`
-OAuth callback handler.
+Callback handler.
 
 ### [POST] `/api/providers/lastfm/disconnect`
-Disconnect Last.fm.
+Disconnect user.
 
 ### [GET] `/api/providers/lastfm/status`
-Get connection status.
+Check scrobble and connection status.
 
 ### [POST] `/api/providers/lastfm/scrobble`
-Scrobble tracks.
+Scrobble track playbacks.
 - **Example Request**:
   ```json
   { "tracks": [{ "artist": "Radiohead", "track": "Creep", "timestamp": 1711968000 }] }
   ```
 
 ### [POST] `/api/providers/lastfm/now-playing`
-Update now playing status.
+Update Last.fm now-playing card.
 
-### [POST] `/api/providers/lastfm/love`
-Love a track.
+### [POST] `/api/providers/lastfm/love` (or `unlove`)
+Love/unlove a track.
 
-### [POST] `/api/providers/lastfm/unlove`
-Unlove a track.
+### [POST] `/api/providers/lastfm/test`
+Test key config.
 
-### [GET] `/api/providers/lastfm/test`
-Test Last.fm connection.
+### ListenBrainz (per-user Token-based)
+
+### [POST] `/api/providers/listenbrainz/connect`
+Connect using user token.
+- **Payload**: `{ "token": "your-listenbrainz-token" }`
+
+### [POST] `/api/providers/listenbrainz/disconnect`
+Disconnect integration.
+
+### [GET] `/api/providers/listenbrainz/status`
+Check scrobble status.
+
+### [POST] `/api/providers/listenbrainz/scrobble`
+Scrobble track playbacks.
+
+### [POST] `/api/providers/listenbrainz/now-playing`
+Update now-playing status.
 
 ### Genius
 
 ### [POST] `/api/providers/genius/search`
-Search for song details or lyrics metadata on Genius.
-- **Example Request**:
-  ```json
-  { "query": "Bohemian Rhapsody" }
-  ```
+Proxy search query.
 
 ### [POST] `/api/providers/genius/artist/:id`
-Get artist details from Genius.
+Proxy artist details.
 
 ### [POST] `/api/providers/genius/test`
-Test Genius API key.
+Test credentials.
 
-### External Metadata (cached, server-side)
+### Cached External Metadata
+
+Unified endpoints caching metadata server-side to save API quotas.
 
 ### [GET] `/api/providers/external/artist`
-Fetch artist data (image, bio, metadata).
-- **Query Params**: `name`, `mbid` (optional)
-- **Note**: Requires authentication.
+Get cached artist biography and artwork.
+- **Query Params**: `name`, `mbid`.
+
+### [GET] `/api/providers/external/artist-top-tracks`
+Get cached top-played track titles.
+- **Query Params**: `name`, `limit`.
+
+### [GET] `/api/providers/external/album`
+Get cached album metadata.
+- **Query Params**: `album`, `artist`, `mbid`.
 
 ### [GET] `/api/providers/external/album-art`
-Fetch album artwork.
-- **Query Params**: `album`, `artist`, `mbid` (optional)
+Get cached album cover image.
 
 ### [GET] `/api/providers/external/genre-image`
-Fetch genre artwork.
+Get genre page visual artwork.
 
 ### [GET] `/api/providers/external/genre-info`
-Fetch genre information.
+Get genre description.
 
 ### [GET] `/api/providers/external/lyrics`
-Fetch lyrics.
-- **Query Params**: `track`, `artist`
+Get track lyrics.
 
 ### [GET] `/api/providers/external/proxy-image`
-Proxy external images server-side to avoid CORS.
-- **Query Params**: `url`
-- **Note**: Only allows known domains (last.fm, genius, coverartarchive.org, iTunes).
+Proxy external image domains bypass CORS.
+- **Query Params**: `url`.
 
 ### [POST] `/api/providers/external/refresh`
-Clear external metadata cache (admin only).
-
----
-
-## ✨ Playback & History
-
-### [POST] `/api/playback/history`
-Record a track as "Played" for the current session.
-- **Payload**: `{ "trackId": "uuid" }`
-- **Role**: Influences the the Infinity Mode decay centroid.
-
-### [POST] `/api/playback/record`
-Record a successful playback (increments play count).
-- **Example Request**:
-  ```json
-  { "trackId": "track-v4-id" }
-  ```
-
-### [POST] `/api/playback/skip`
-Record a track skip.
-
-### [POST] `/api/recommend`
-Request the next track for Infinity Mode.
-- **Payload**: 
-  ```json
-  {
-    "sessionHistoryTrackIds": ["id1", "id2"],
-    "settings": { "genreStrictness": 50 }
-  }
-  ```
-- **Returns**: `{ "track": { ...track metadata... } }`
+Clear the local metadata cache (Admin only).
 
 ---
 
 ## 🌍 Miscellaneous
 
 ### [GET] `/api/health`
-General system health check.
+General server-wide diagnostics (database connectivity, latency, container engine).
 - **Example Response**:
   ```json
   {
@@ -742,5 +1049,14 @@ General system health check.
     "dbLatency": "5ms",
     "container": { "status": "running", "runtime": "docker", "image": "pgvector/pgvector:pg16" },
     "message": "Aurora Media Server is running!"
+  }
+  ```
+
+### [GET] `/api/client-config` (Unauthenticated)
+Exposes public receiver settings (e.g. Chromecast App ID) consumed by cached shells or native PWAs.
+- **Example Response**:
+  ```json
+  {
+    "castReceiverAppId": "E392B45A"
   }
   ```
