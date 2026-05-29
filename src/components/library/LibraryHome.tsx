@@ -1,7 +1,6 @@
 import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
-import { TrackInfo } from '../../utils/fileSystem';
 import { AlbumCard, AlbumCardSkeleton } from './AlbumCard';
 import { ArtistInitial } from './ArtistInitial';
 import { useExternalImage } from '../../hooks/useExternalImage';
@@ -17,16 +16,19 @@ import {
   applyFacetFilters,
   applySort,
   applyQueryResultFilter,
-  deriveAlbumMetadata,
   hasActiveFilters,
   QueryGroup,
-  type EnrichedAlbum,
 } from '../../utils/filterState';
 import type { ArtistInfo } from '../../store/index';
 import { prefetchArtistDetail } from '../../utils/routePrefetch';
 import type { ArtistHeroState } from '../../utils/heroState';
-import { artistTransitionName, withViewTransition } from '../../utils/viewTransition';
 import { VirtualizedCardGrid } from './VirtualizedCardGrid';
+import {
+  getTracksByAlbumAndGenres,
+  getEnrichedAlbums,
+  getArtistFacetValues,
+  getAlbumFacetValues,
+} from '../../utils/libraryDerivations';
 
 const ArtistCardSkeleton: React.FC = () => (
     <div className="flex flex-col items-center animate-pulse">
@@ -62,17 +64,10 @@ const GenreCard: React.FC<{ genre: string }> = ({ genre }) => {
 };
 
 const ArtistLink: React.FC<{ to: string; state: ArtistHeroState; children: React.ReactNode }> = ({ to, state, children }) => {
-    const navigate = useNavigate();
-    const handleClick = useCallback((e: React.MouseEvent<HTMLAnchorElement>) => {
-        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-        e.preventDefault();
-        withViewTransition(() => navigate(to, { state }), prefetchArtistDetail());
-    }, [navigate, state, to]);
     return (
         <Link
             to={to}
             state={state}
-            onClick={handleClick}
             className="no-underline"
             onPointerEnter={prefetchArtistDetail}
             onPointerDown={prefetchArtistDetail}
@@ -83,11 +78,9 @@ const ArtistLink: React.FC<{ to: string; state: ArtistHeroState; children: React
     );
 };
 
-const ArtistCard: React.FC<{ artist: string; artistId?: string }> = ({ artist, artistId }) => {
+const ArtistCard: React.FC<{ artist: string }> = ({ artist }) => {
     const [ref, inView] = useInView();
     const { imageUrl } = useArtistData(artist, undefined, { enabled: inView });
-    const transitionName = artistTransitionName(artistId);
-    const avatarStyle = transitionName ? ({ viewTransitionName: transitionName } as React.CSSProperties) : undefined;
 
     return (
         <div
@@ -95,7 +88,6 @@ const ArtistCard: React.FC<{ artist: string; artistId?: string }> = ({ artist, a
             className="artist-card group flex flex-col items-center cursor-pointer transition-transform duration-300 hover:scale-105"
         >
             <div
-                style={avatarStyle}
                 className="w-full aspect-square rounded-full overflow-hidden shadow-[var(--shadow-sm)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)] mb-4 flex items-center justify-center transition-ui duration-300 group-hover:border-[var(--color-primary)] group-hover:shadow-[var(--shadow-md)]"
             >
                 {imageUrl ? (
@@ -143,63 +135,25 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
     const [mobileOverlayOpen, setMobileOverlayOpen] = useState(false);
     const [mobileOverlayView, setMobileOverlayView] = useState<'artists' | 'albums'>('artists');
 
-    const { genres, tracksByAlbum } = useMemo(() => {
-        const albumGroups = new Map<string, TrackInfo[]>();
-        const genreSet = new Set<string>();
-
-        library.forEach((track) => {
-            if (track.album) {
-                const group = albumGroups.get(track.album) || [];
-                group.push(track);
-                albumGroups.set(track.album, group);
-            }
-            if ((track as any).genre) {
-                genreSet.add((track as any).genre);
-            }
-        });
-
-        const tracksByAlbum = new Map<string, TrackInfo[]>();
-
-        for (const [albumTitle, tracks] of albumGroups.entries()) {
-            const subAlbums = new Map<string, TrackInfo[]>();
-            tracks.forEach(track => {
-                const explicitAA = track.albumArtist || '';
-                const subGroup = subAlbums.get(explicitAA) || [];
-                subGroup.push(track);
-                subAlbums.set(explicitAA, subGroup);
-            });
-
-            for (const [explicitAA, subTracks] of subAlbums.entries()) {
-                const artistName = explicitAA !== ''
-                    ? explicitAA
-                    : (() => {
-                        const uniqueArtists = new Set(subTracks.map(t => t.artist || 'Unknown Artist'));
-                        return uniqueArtists.size === 1 ? Array.from(uniqueArtists)[0] : 'Various Artists';
-                    })();
-                const albumKey = `${albumTitle}::::${artistName}`;
-                const sortedTracks = [...subTracks].sort((a, b) => (a.trackNumber ?? 999) - (b.trackNumber ?? 999));
-                tracksByAlbum.set(albumKey, sortedTracks);
-            }
-        }
-
-        return {
-            genres: Array.from(genreSet).sort(),
-            tracksByAlbum,
-        };
-    }, [library]);
+    // These derivations are memoized at module scope (keyed by the underlying
+    // store array references) so navigating away and back to the library
+    // doesn't recompute whole-library passes. The useMemo here is just a
+    // per-render guard; the real cache survives route unmount. See
+    // utils/libraryDerivations.ts.
+    const { genres, tracksByAlbum } = useMemo(() => getTracksByAlbumAndGenres(library), [library]);
 
     const enrichedAlbums = useMemo(
-        () => deriveAlbumMetadata(albumEntities, library),
+        () => getEnrichedAlbums(albumEntities, library),
         [albumEntities, library]
     );
 
     const artistFacetValues = useMemo(
-        () => ARTIST_FACETS.map(f => f.extractValues(artistEntities)),
+        () => getArtistFacetValues(artistEntities),
         [artistEntities]
     );
 
     const albumFacetValues = useMemo(
-        () => ALBUM_FACETS.map(f => f.extractValues(enrichedAlbums)),
+        () => getAlbumFacetValues(enrichedAlbums),
         [enrichedAlbums]
     );
 
@@ -360,7 +314,6 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                                             onPlay={() => { if (explicitTracks.length) setPlaylist(explicitTracks, 0); }}
                                             linkTo={album.id ? `/library/album/${album.id}` : undefined}
                                             linkState={{ backLabel: 'Back to Library' }}
-                                            albumId={album.id}
                                         />
                                     );
                                 }}
@@ -419,7 +372,7 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                                             to={artistHref}
                                             state={artistHero}
                                         >
-                                            <ArtistCard artist={artistName} artistId={entity.id} />
+                                            <ArtistCard artist={artistName} />
                                         </ArtistLink>
                                     );
                                 }}
