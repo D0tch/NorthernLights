@@ -1,7 +1,30 @@
 import * as mm from 'music-metadata';
+import { hashArt, findImageStart, encodeArt, artExists, ART_SIZES } from '../services/artCache';
 
-// Protocol: Each line on stdin: { id, filePathBase64, nameStr }
-// Each line on stdout: { id, metadata: { ... } } or { id, error }
+// Protocol: Each line on stdin: { id, filePathBase64, nameStr, processArt?, knownArtHash? }
+// Each line on stdout: { id, metadata: { ..., artHash } } or { id, error }
+//
+// artHash semantics in the result: a hex hash = cover encoded (or already
+// present); '' = file processed, no embedded art; undefined = art not processed
+// this run (processArt was false).
+
+// Extract the embedded cover, hash it, and ensure AVIF variants exist on disk.
+// Returns the hash, or '' when the file has no embedded art. Skips re-encoding
+// when the hash matches `knownArtHash` and all sizes already exist.
+async function processArtwork(metadata: mm.IAudioMetadata, knownArtHash?: string | null): Promise<string> {
+  const picture = metadata.common.picture?.[0];
+  if (!picture) return '';
+
+  let data: Uint8Array = picture.data;
+  const start = findImageStart(data);
+  if (start > 0) data = data.subarray(start);
+
+  const hash = hashArt(data);
+  const allPresent = ART_SIZES.every((size) => artExists(hash, size));
+  if (hash === knownArtHash && allPresent) return hash;
+  if (!allPresent) await encodeArt(data, hash);
+  return hash;
+}
 
 function sanitizeUrl(raw: string): string | null {
   if (typeof raw !== 'string') return null;
@@ -326,7 +349,7 @@ process.stdin.on('data', async (chunk: string) => {
 
   for (const line of lines) {
     if (!line.trim()) continue;
-    let msg: { id: string; filePathBase64: string; nameStr: string };
+    let msg: { id: string; filePathBase64: string; nameStr: string; processArt?: boolean; knownArtHash?: string | null };
     try {
       msg = JSON.parse(line);
     } catch {
@@ -341,12 +364,17 @@ process.stdin.on('data', async (chunk: string) => {
       // file lacks a Xing/Info/LAME header or TLEN tag (common for DJ-mix
       // compilations); without it format.duration is undefined and we
       // persist 0 forever.
-      const metadata = await mm.parseFile(utf8Path, { skipCovers: true, duration: true });
+      // skipCovers only when we're not encoding art this run — reading the
+      // cover is extra I/O we avoid on art-less passes.
+      const metadata = await mm.parseFile(utf8Path, { skipCovers: !msg.processArt, duration: true });
       const rawUrls = extractUrlTags(metadata.native || {});
+
+      const artHash = msg.processArt ? await processArtwork(metadata, msg.knownArtHash) : undefined;
 
       process.stdout.write(JSON.stringify({
         id: msg.id,
         metadata: {
+            artHash,
             artist: metadata.common.artist || metadata.common.albumartist || null,
             albumartist: metadata.common.albumartist || null,
             title: metadata.common.title || null,

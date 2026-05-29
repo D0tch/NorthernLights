@@ -3,7 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { ChildProcessPool } from '../workers/processPool';
 import * as mm from 'music-metadata';
-import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTracksWithSimulatedFeatures, getSimulatedFeatureTracks, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getExistingPaths, deleteTracksByPaths, purgeOrphanedEntities, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting, normalizeArtistNames, getPrimaryArtistName, normalizeArtistIdentityKey, setTrackCredits } from '../database';
+import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTracksWithSimulatedFeatures, getSimulatedFeatureTracks, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getPathsWithMeta, countTracksByArtHash, deleteTracksByPaths, purgeOrphanedEntities, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting, normalizeArtistNames, getPrimaryArtistName, normalizeArtistIdentityKey, setTrackCredits } from '../database';
+import { cleanupOrphanArt } from '../services/artCache';
 import { genreMatrixService } from '../services/genreMatrix.service';
 import { loveTrack, unloveTrack } from '../services/lastfm.service';
 import { submitMbRecordingRating } from '../services/musicbrainz.service';
@@ -213,7 +214,12 @@ router.post('/love', async (req, res) => {
 });
 
 // ─── Phase 1: Recursive directory walk ────────────────────────────────
-async function collectAudioFiles(dirBuf: Buffer, results: Buffer[] = []): Promise<Buffer[]> {
+interface WalkedFile {
+  buf: Buffer;
+  mtime: number; // epoch ms, floored
+}
+
+async function collectAudioFiles(dirBuf: Buffer, results: WalkedFile[] = []): Promise<WalkedFile[]> {
   const sep = Buffer.from(path.sep);
   let entries: Buffer[];
   try {
@@ -237,7 +243,7 @@ async function collectAudioFiles(dirBuf: Buffer, results: Buffer[] = []): Promis
     if (stat.isDirectory()) {
       await collectAudioFiles(fullBuf, results);
     } else if (stat.isFile() && nameBuffer.toString('utf8').match(/\.(mp3|wav|ogg|flac|m4a|aac|wma)$/i)) {
-      results.push(fullBuf);
+      results.push({ buf: fullBuf, mtime: Math.floor(stat.mtimeMs) });
     }
   }));
 
@@ -260,13 +266,25 @@ async function getScannerConcurrency(): Promise<number> {
   }
 }
 
-async function processMetadataBatch(fileBufs: Buffer[], concurrency: number): Promise<void> {
+interface ScanItem {
+  buf: Buffer;
+  mtime?: number | null;
+  knownArtHash?: string | null;
+}
+
+// Accepts either raw Buffers (refresh-metadata path) or ScanItems carrying
+// mtime + the previously-stored art hash (incremental scan path).
+async function processMetadataBatch(input: Array<Buffer | ScanItem>, concurrency: number): Promise<void> {
+  const items: ScanItem[] = input.map((it) => (Buffer.isBuffer(it) ? { buf: it } : it));
   const startTime = Date.now();
   let errorCount = 0;
   const { settingsEmitter } = await import('../state');
   let index = 0;
   const activeMap = new Map<number, string>();
-  const total = fileBufs.length;
+  const total = items.length;
+  // Old art hashes displaced by a re-encode (changed cover). Cleaned up after
+  // all upserts complete, so the refcount reflects the final state.
+  const displacedArtHashes = new Set<string>();
 
   let currentConcurrency = Math.min(concurrency, total);
   const pool = new ChildProcessPool(path.resolve(__dirname, '../workers/scanTrack.ts'), currentConcurrency);
@@ -294,11 +312,12 @@ async function processMetadataBatch(fileBufs: Buffer[], concurrency: number): Pr
           console.log('[Scanner] Database reconnected. Resuming metadata batch.');
         }
 
-        const fullBuf = fileBufs[i];
+        const item = items[i];
+        const fullBuf = item.buf;
         const dbPath = fullBuf.toString('base64');
         const utf8StringPath = fullBuf.toString('utf8');
         const nameStr = path.basename(utf8StringPath);
-        let activeLabel = nameStr; 
+        let activeLabel = nameStr;
 
         activeMap.set(i, activeLabel);
         scanStatus.activeFiles = Array.from(activeMap.values());
@@ -310,7 +329,9 @@ async function processMetadataBatch(fileBufs: Buffer[], concurrency: number): Pr
             payload: {
               id: dbPath,
               filePathBase64: dbPath,
-              nameStr: nameStr
+              nameStr: nameStr,
+              processArt: true,
+              knownArtHash: item.knownArtHash ?? null,
             }
           });
 
@@ -409,7 +430,15 @@ async function processMetadataBatch(fileBufs: Buffer[], concurrency: number): Pr
               mbReleaseGroupId: metadata.mbReleaseGroupId || null,
               mbWorkId: metadata.mbWorkId || null,
               rawUrls: metadata.rawUrls || null,
+              artHash: metadata.artHash,
+              fileMtime: item.mtime ?? null,
             });
+
+            // If a re-tag changed the cover, the previous hash may now be
+            // orphaned — queue it for a refcount check after the batch.
+            if (item.knownArtHash && metadata.artHash && item.knownArtHash !== metadata.artHash) {
+              displacedArtHashes.add(item.knownArtHash);
+            }
 
             // Tag-derived multi-role credits (composer, conductor, remixer,
             // producer, etc.). DELETE-then-INSERT is scoped to source='tag'
@@ -427,12 +456,12 @@ async function processMetadataBatch(fileBufs: Buffer[], concurrency: number): Pr
           } else {
             console.warn(`Failed to parse metadata for ${nameStr}: ${result.error}`);
             errorCount++;
-            await addTrack({ path: dbPath, title: nameStr, bitrate: null, format: null });
+            await addTrack({ path: dbPath, title: nameStr, bitrate: null, format: null, fileMtime: item.mtime ?? null });
           }
         } catch (err) {
           console.warn(`Failed metadata processing for ${nameStr}`, err);
           errorCount++;
-          await addTrack({ path: dbPath, title: nameStr, bitrate: null, format: null });
+          await addTrack({ path: dbPath, title: nameStr, bitrate: null, format: null, fileMtime: item.mtime ?? null });
         } finally {
           activeMap.delete(i);
           scanStatus.activeFiles = Array.from(activeMap.values());
@@ -477,6 +506,17 @@ async function processMetadataBatch(fileBufs: Buffer[], concurrency: number): Pr
   orchestrationActive = false;
   settingsEmitter.off('concurrencyChanged', onSettingsChanged);
   pool.terminate();
+
+  // Remove encoded art for covers displaced by a re-tag, but only if no other
+  // track still references the hash (album-shared art stays).
+  if (displacedArtHashes.size > 0) {
+    try {
+      await cleanupOrphanArt(displacedArtHashes, async (h) => (await countTracksByArtHash(h)) > 0);
+    } catch (e) {
+      console.warn('[Scanner] Orphan art cleanup failed:', e);
+    }
+  }
+
   const duration = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`[Scanner] Phase: metadata - Duration: ${duration}s, Errors: ${errorCount}`);
 }
@@ -717,16 +757,16 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
 
   // ── Walk ──
   const walkStartTime = Date.now();
-  const fileBufs = await collectAudioFiles(dirBuf);
+  const walkedFiles = await collectAudioFiles(dirBuf);
   console.log(`[Scanner] Phase: walk - Duration: ${((Date.now() - walkStartTime) / 1000).toFixed(1)}s`);
-  const diskPaths = new Set(fileBufs.map(b => b.toString('base64')));
+  const diskPaths = new Set(walkedFiles.map(f => f.buf.toString('base64')));
 
   // ── Diff against DB ──
-  // Get all paths currently known for this directory
-  const allExisting = await getExistingPaths(); // Set<base64-path>
+  // One query gives us both the known paths and their stored mtime + art hash.
+  const existingMeta = await getPathsWithMeta(); // Map<base64, { mtime, artHash }>
 
   const stalePaths: string[] = [];
-  for (const existingPath of allExisting) {
+  for (const existingPath of existingMeta.keys()) {
     // Only consider tracks that belong to this directory (byte-level prefix check)
     const fileBuf = Buffer.from(existingPath, 'base64');
     const prefixMatches = fileBuf.length >= dirBuf.length &&
@@ -740,8 +780,15 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
     }
   }
 
-  // Remove stale DB entries
+  // Remove stale DB entries (collect their art hashes first so we can clean up
+  // any now-orphaned encoded covers afterwards).
   if (stalePaths.length > 0) {
+    const staleArtHashes = new Set<string>();
+    for (const p of stalePaths) {
+      const h = existingMeta.get(p)?.artHash;
+      if (h) staleArtHashes.add(h);
+    }
+
     console.log(`[Scanner] Removing ${stalePaths.length} stale track(s) from ${dirPath}`);
     await deleteTracksByPaths(stalePaths);
     // Clean up any albums/artists/genres that now have zero tracks
@@ -749,26 +796,45 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
     if (purged.albums > 0 || purged.artists > 0 || purged.genres > 0) {
       console.log(`[Scanner] Purged orphans after stale removal: ${purged.albums} albums, ${purged.artists} artists, ${purged.genres} genres`);
     }
+    if (staleArtHashes.size > 0) {
+      try {
+        await cleanupOrphanArt(staleArtHashes, async (h) => (await countTracksByArtHash(h)) > 0);
+      } catch (e) {
+        console.warn('[Scanner] Orphan art cleanup after stale removal failed:', e);
+      }
+    }
   }
 
-  // Determine truly new files (not already in DB)
-  const newFileBufs = fileBufs.filter(b => !allExisting.has(b.toString('base64')));
+  // New files, plus existing files whose mtime changed (re-tagged / replaced).
+  // A stored mtime of null is a pre-feature row — treat as unchanged here and
+  // let "Refresh metadata" backfill it, rather than reprocessing the whole
+  // library on the first scan after upgrade.
+  const itemsToProcess: ScanItem[] = [];
+  for (const f of walkedFiles) {
+    const b64 = f.buf.toString('base64');
+    const meta = existingMeta.get(b64);
+    if (!meta) {
+      itemsToProcess.push({ buf: f.buf, mtime: f.mtime, knownArtHash: null });
+    } else if (meta.mtime != null && meta.mtime !== f.mtime) {
+      itemsToProcess.push({ buf: f.buf, mtime: f.mtime, knownArtHash: meta.artHash });
+    }
+  }
 
-  if (newFileBufs.length === 0 && stalePaths.length === 0) {
+  if (itemsToProcess.length === 0 && stalePaths.length === 0) {
     console.log(`[Scanner] No changes detected in ${dirPath}`);
     return { removed: stalePaths.length, added: 0 };
   }
 
-  if (newFileBufs.length > 0) {
-    // ── Metadata ──
+  if (itemsToProcess.length > 0) {
+    // ── Metadata (also encodes/updates artwork) ──
     scanStatus.phase = 'metadata';
-    scanStatus.totalFiles = newFileBufs.length;
+    scanStatus.totalFiles = itemsToProcess.length;
     scanStatus.scannedFiles = 0;
     scanStatus.currentFile = '';
     broadcastScanStatus(true);
     const metadataConcurrency = await getScannerConcurrency();
-    await processMetadataBatch(newFileBufs, metadataConcurrency);
-    console.log(`[Scanner] Metadata phase complete: ${newFileBufs.length} new file(s)`);
+    await processMetadataBatch(itemsToProcess, metadataConcurrency);
+    console.log(`[Scanner] Metadata phase complete: ${itemsToProcess.length} new/changed file(s)`);
 
     // ── Analysis ──
     const tracksNeedingAnalysis = await getTracksWithoutFeatures();
@@ -785,7 +851,7 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
   }
 
   // Trigger Genre Matrix regeneration after any change
-  if (newFileBufs.length > 0 || stalePaths.length > 0) {
+  if (itemsToProcess.length > 0 || stalePaths.length > 0) {
     setImmediate(() => {
       genreMatrixService.runDiffAndGenerate()
         .catch(e => console.error('[Genre Matrix] Post-scan categorization failed:', e));
@@ -793,8 +859,8 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
   }
 
   const totalDuration = ((Date.now() - totalStartTime) / 1000).toFixed(1);
-  console.log(`[Scanner] Sync walk complete for ${dirPath}: +${newFileBufs.length} added, -${stalePaths.length} removed (Total: ${totalDuration}s)`);
-  return { removed: stalePaths.length, added: newFileBufs.length };
+  console.log(`[Scanner] Sync walk complete for ${dirPath}: ~${itemsToProcess.length} processed, -${stalePaths.length} removed (Total: ${totalDuration}s)`);
+  return { removed: stalePaths.length, added: itemsToProcess.length };
 }
 
 // Trigger standalone analysis (no scan — analyzes tracks missing features)
@@ -837,10 +903,20 @@ router.post('/refresh-metadata', async (req, res) => {
       scanStatus.scannedFiles = 0;
       scanStatus.currentFile = '';
       broadcastScanStatus(true);
-      
+
       const metadataConcurrency = await getScannerConcurrency();
-      
-      await processMetadataBatch(fileBufs, metadataConcurrency);
+
+      // Re-read every file in the dir (this is also the artwork backfill path:
+      // it encodes any missing covers). Stat for mtime so backfilled rows also
+      // get file_mtime stamped — future incremental scans can then detect
+      // re-tags on these files too.
+      const refreshItems: ScanItem[] = await Promise.all(fileBufs.map(async (buf) => {
+        let mtime: number | null = null;
+        try { mtime = Math.floor((await fs.promises.stat(buf)).mtimeMs); } catch { /* missing → leave null */ }
+        return { buf, mtime };
+      }));
+
+      await processMetadataBatch(refreshItems, metadataConcurrency);
       
       const purged = await purgeOrphanedEntities();
       console.log(`[Scanner] Purged orphaned entities after refresh: ${purged.artists} artists, ${purged.albums} albums, ${purged.genres} genres`);
