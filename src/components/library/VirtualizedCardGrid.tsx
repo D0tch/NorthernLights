@@ -31,11 +31,9 @@ interface VirtualizedCardGridProps<T> {
     items: T[];
     renderItem: (item: T, index: number) => React.ReactNode;
     getKey: (item: T, index: number) => React.Key;
-    // Aspect of the card art (width / height). For album cards (square art +
-    // text below) this is roughly 1. For artist cards (circular + name) it's
-    // also ~1 but with slightly different text trail. Caller supplies the
-    // estimated row height (excluding gap) in pixels so the virtualizer can
-    // place rows without measuring every one.
+    // Caller supplies the estimated row height (excluding gap) in pixels, as a
+    // function of the computed column width, so the virtualizer can place rows
+    // without measuring every one.
     estimatedRowHeight: (columnWidth: number) => number;
     scrollParentRef: React.RefObject<HTMLElement>;
     overscan?: number;
@@ -45,6 +43,15 @@ interface VirtualizedCardGridProps<T> {
 // rows currently in (or near) the viewport. Avoids paying React reconciliation
 // + DOM creation cost for hundreds of cards at once — the original killer on
 // mobile when navigating into the album or artist library.
+//
+// IMPORTANT — width is measured from a dedicated zero-height sentinel, NOT from
+// the tall spacer that carries `height: totalSize`. Observing the tall element
+// created a feedback loop: its height made the page scroll-container overflow,
+// the scrollbar shrank clientWidth, the ResizeObserver fired, state changed,
+// the height changed again… Switching sections (different row heights/counts)
+// destabilised that into a non-converging loop that crashed the tab. The
+// sentinel's height is always 0, so observing it only ever reacts to genuine
+// width changes (viewport resize, scrollbar toggle) and settles immediately.
 export function VirtualizedCardGrid<T>({
     items,
     renderItem,
@@ -53,24 +60,29 @@ export function VirtualizedCardGrid<T>({
     scrollParentRef,
     overscan = 4,
 }: VirtualizedCardGridProps<T>) {
-    const containerRef = useRef<HTMLDivElement>(null);
+    const measureRef = useRef<HTMLDivElement>(null);
     const [containerWidth, setContainerWidth] = useState(0);
 
-    // Track the container's inner width so we can compute column count and row
-    // height. Layout effect + ResizeObserver keeps it in sync with orientation
-    // changes and side-panel toggles.
     useLayoutEffect(() => {
-        const el = containerRef.current;
+        const el = measureRef.current;
         if (!el) return;
-        const measure = () => setContainerWidth(el.clientWidth);
-        measure();
+        const update = () => {
+            const next = Math.round(el.clientWidth);
+            // Bail when the width is unchanged so a scrollbar toggle (or any
+            // observer re-fire) can't bounce state back and forth.
+            setContainerWidth((prev) => (prev === next ? prev : next));
+        };
+        update();
         if (typeof ResizeObserver === 'undefined') return;
-        const ro = new ResizeObserver(measure);
+        const ro = new ResizeObserver(update);
         ro.observe(el);
         return () => ro.disconnect();
     }, []);
 
-    const columns = useMemo(() => columnsForWidth(containerWidth || (typeof window !== 'undefined' ? window.innerWidth : 1024)), [containerWidth]);
+    const columns = useMemo(
+        () => columnsForWidth(containerWidth || (typeof window !== 'undefined' ? window.innerWidth : 1024)),
+        [containerWidth]
+    );
     const columnGap = COLUMN_GAP_BY_WIDTH(containerWidth);
     const rowGap = ROW_GAP_BY_WIDTH(containerWidth);
 
@@ -90,8 +102,9 @@ export function VirtualizedCardGrid<T>({
         overscan,
     });
 
-    // When width or item count changes, re-measure so virtualizer doesn't keep
-    // stale row positions.
+    // Re-measure when geometry changes (column count, row height, item count).
+    // `virtualizer` is a stable instance from @tanstack/react-virtual, so it
+    // doesn't retrigger this effect on its own.
     useEffect(() => {
         virtualizer.measure();
     }, [columns, rowHeight, rowGap, items.length, virtualizer]);
@@ -100,34 +113,42 @@ export function VirtualizedCardGrid<T>({
     const totalSize = virtualizer.getTotalSize();
 
     return (
-        <div ref={containerRef} style={{ position: 'relative', width: '100%', height: totalSize > 0 ? totalSize : undefined }}>
-            {virtualRows.map((virtualRow) => {
-                const rowIndex = virtualRow.index;
-                const startIndex = rowIndex * columns;
-                const rowItems = items.slice(startIndex, startIndex + columns);
-                return (
-                    <div
-                        key={virtualRow.key}
-                        style={{
-                            position: 'absolute',
-                            top: 0,
-                            left: 0,
-                            width: '100%',
-                            transform: `translateY(${virtualRow.start}px)`,
-                            display: 'grid',
-                            gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-                            columnGap: `${columnGap}px`,
-                            rowGap: `${rowGap}px`,
-                        }}
-                    >
-                        {rowItems.map((item, colIndex) => (
-                            <React.Fragment key={getKey(item, startIndex + colIndex)}>
-                                {renderItem(item, startIndex + colIndex)}
-                            </React.Fragment>
-                        ))}
-                    </div>
-                );
-            })}
+        <div style={{ position: 'relative', width: '100%' }}>
+            {/* Width measurement sentinel — height:0 so it never participates in
+                the scroll-height feedback that crashed the tab. */}
+            <div ref={measureRef} aria-hidden style={{ width: '100%', height: 0 }} />
+
+            {/* Spacer that reserves the full virtual height; rows are absolutely
+                positioned within it. */}
+            <div style={{ position: 'relative', width: '100%', height: totalSize > 0 ? totalSize : undefined }}>
+                {virtualRows.map((virtualRow) => {
+                    const rowIndex = virtualRow.index;
+                    const startIndex = rowIndex * columns;
+                    const rowItems = items.slice(startIndex, startIndex + columns);
+                    return (
+                        <div
+                            key={virtualRow.key}
+                            style={{
+                                position: 'absolute',
+                                top: 0,
+                                left: 0,
+                                width: '100%',
+                                transform: `translateY(${virtualRow.start}px)`,
+                                display: 'grid',
+                                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+                                columnGap: `${columnGap}px`,
+                                rowGap: `${rowGap}px`,
+                            }}
+                        >
+                            {rowItems.map((item, colIndex) => (
+                                <React.Fragment key={getKey(item, startIndex + colIndex)}>
+                                    {renderItem(item, startIndex + colIndex)}
+                                </React.Fragment>
+                            ))}
+                        </div>
+                    );
+                })}
+            </div>
         </div>
     );
 }
