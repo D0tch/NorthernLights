@@ -47,34 +47,63 @@ async function serverFetch<T>(path: string): Promise<T | null> {
     }
 }
 
+// In-memory cache for lookup results that resolve to an image URL or summary.
+// The image bytes themselves are already cached by the service worker
+// (vite.config.ts runtimeCaching → /api/art, /api/providers/external/proxy-image,
+// and generic image MIME types). What this cache eliminates is the small JSON
+// lookup that *returns* those URLs — without it, every AlbumArt re-mount on
+// scroll re-hits the server, even though the answer never changes within a
+// session.
+//
+// Storing the Promise (not the resolved value) also dedupes concurrent calls
+// for the same key — if two cards mount simultaneously and both ask for the
+// same album's art, only one network request fires.
+const imageryLookupCache = new Map<string, Promise<unknown>>();
+
+function cachedLookup<T>(key: string, run: () => Promise<T>): Promise<T> {
+    const existing = imageryLookupCache.get(key) as Promise<T> | undefined;
+    if (existing) return existing;
+    const promise = run().catch((err) => {
+        // Don't poison the cache on failure — let the next caller retry.
+        imageryLookupCache.delete(key);
+        throw err;
+    });
+    imageryLookupCache.set(key, promise);
+    return promise;
+}
+
 // ─── Public API ─────────────────────────────────────────────────────
 
-export const fetchArtistData = async (artistName: string, mbArtistId?: string | null): Promise<ArtistData> => {
-    if (!artistName) return {};
+export const fetchArtistData = (artistName: string, mbArtistId?: string | null): Promise<ArtistData> => {
+    if (!artistName) return Promise.resolve({});
 
-    const params = new URLSearchParams({ name: artistName });
-    if (mbArtistId) params.set('mbid', mbArtistId);
+    return cachedLookup(`artist::${artistName}::${mbArtistId || ''}`, async () => {
+        const params = new URLSearchParams({ name: artistName });
+        if (mbArtistId) params.set('mbid', mbArtistId);
 
-    const data = await serverFetch<ArtistData>(`/api/providers/external/artist?${params}`);
-    if (!data) return {};
+        const data = await serverFetch<ArtistData>(`/api/providers/external/artist?${params}`);
+        if (!data) return {};
 
-    // Proxy image URL for CORS-free loading
-    if (data.imageUrl) {
-        data.imageUrl = proxyImageUrl(data.imageUrl);
-    }
-    if (data.artworkUrl) {
-        data.artworkUrl = proxyImageUrl(data.artworkUrl);
-    }
+        // Proxy image URL for CORS-free loading
+        if (data.imageUrl) {
+            data.imageUrl = proxyImageUrl(data.imageUrl);
+        }
+        if (data.artworkUrl) {
+            data.artworkUrl = proxyImageUrl(data.artworkUrl);
+        }
 
-    return data;
+        return data;
+    });
 };
 
-export const fetchArtistTopTracks = async (artistName: string, limit: number = 25): Promise<ArtistTopTrackData[]> => {
-    if (!artistName) return [];
+export const fetchArtistTopTracks = (artistName: string, limit: number = 25): Promise<ArtistTopTrackData[]> => {
+    if (!artistName) return Promise.resolve([]);
 
-    const params = new URLSearchParams({ name: artistName, limit: String(limit) });
-    const data = await serverFetch<{ tracks: ArtistTopTrackData[] }>(`/api/providers/external/artist-top-tracks?${params}`);
-    return data?.tracks || [];
+    return cachedLookup(`artist-top-tracks::${artistName}::${limit}`, async () => {
+        const params = new URLSearchParams({ name: artistName, limit: String(limit) });
+        const data = await serverFetch<{ tracks: ArtistTopTrackData[] }>(`/api/providers/external/artist-top-tracks?${params}`);
+        return data?.tracks || [];
+    });
 };
 
 interface AlbumData {
@@ -85,55 +114,56 @@ interface AlbumData {
     playcount?: string;
 }
 
-export const fetchAlbumData = async (albumName: string, artistName: string, mbAlbumId?: string | null): Promise<AlbumData> => {
-    if (!albumName || !artistName) return {};
+export const fetchAlbumData = (albumName: string, artistName: string, mbAlbumId?: string | null): Promise<AlbumData> => {
+    if (!albumName || !artistName) return Promise.resolve({});
 
-    const params = new URLSearchParams({ album: albumName, artist: artistName });
-    if (mbAlbumId) params.set('mbid', mbAlbumId);
+    return cachedLookup(`album::${albumName}::${artistName}::${mbAlbumId || ''}`, async () => {
+        const params = new URLSearchParams({ album: albumName, artist: artistName });
+        if (mbAlbumId) params.set('mbid', mbAlbumId);
 
-    const data = await serverFetch<AlbumData>(`/api/providers/external/album?${params}`);
-    if (!data) return {};
+        const data = await serverFetch<AlbumData>(`/api/providers/external/album?${params}`);
+        if (!data) return {};
 
-    if (data.imageUrl) {
-        data.imageUrl = proxyImageUrl(data.imageUrl);
-    }
+        if (data.imageUrl) {
+            data.imageUrl = proxyImageUrl(data.imageUrl);
+        }
 
-    return data;
+        return data;
+    });
 };
 
-export const fetchAlbumImage = async (albumName: string, artistName: string, mbAlbumId?: string | null): Promise<string | undefined> => {
-    if (!albumName || !artistName) return undefined;
+export const fetchAlbumImage = (albumName: string, artistName: string, mbAlbumId?: string | null): Promise<string | undefined> => {
+    if (!albumName || !artistName) return Promise.resolve(undefined);
 
-    const params = new URLSearchParams({ album: albumName, artist: artistName });
-    if (mbAlbumId) params.set('mbid', mbAlbumId);
+    const cacheKey = `album-art::${albumName}::${artistName}::${mbAlbumId || ''}`;
+    return cachedLookup(cacheKey, async () => {
+        const params = new URLSearchParams({ album: albumName, artist: artistName });
+        if (mbAlbumId) params.set('mbid', mbAlbumId);
 
-    const data = await serverFetch<{ imageUrl: string | null }>(`/api/providers/external/album-art?${params}`);
-    if (!data?.imageUrl) return undefined;
-
-    return proxyImageUrl(data.imageUrl);
+        const data = await serverFetch<{ imageUrl: string | null }>(`/api/providers/external/album-art?${params}`);
+        if (!data?.imageUrl) return undefined;
+        return proxyImageUrl(data.imageUrl);
+    });
 };
 
-export const fetchGenreImage = async (genreName: string): Promise<string | undefined> => {
-    if (!genreName) return undefined;
+export const fetchGenreImage = (genreName: string): Promise<string | undefined> => {
+    if (!genreName) return Promise.resolve(undefined);
 
-    const data = await serverFetch<{ imageUrl: string | null }>(`/api/providers/external/genre-image?genre=${encodeURIComponent(genreName)}`);
-    if (!data?.imageUrl) return undefined;
-
-    return proxyImageUrl(data.imageUrl);
+    return cachedLookup(`genre-image::${genreName}`, async () => {
+        const data = await serverFetch<{ imageUrl: string | null }>(`/api/providers/external/genre-image?genre=${encodeURIComponent(genreName)}`);
+        if (!data?.imageUrl) return undefined;
+        return proxyImageUrl(data.imageUrl);
+    });
 };
 
-export const fetchGenreInfo = async (genreName: string): Promise<{ imageUrl?: string; summary?: string } | undefined> => {
-    if (!genreName) return undefined;
+export const fetchGenreInfo = (genreName: string): Promise<{ imageUrl?: string; summary?: string } | undefined> => {
+    if (!genreName) return Promise.resolve(undefined);
 
-    const data = await serverFetch<{ imageUrl?: string; summary?: string }>(`/api/providers/external/genre-info?genre=${encodeURIComponent(genreName)}`);
-    if (!data || (!data.imageUrl && !data.summary)) return undefined;
-
-    // Proxy image URL
-    if (data.imageUrl) {
-        data.imageUrl = proxyImageUrl(data.imageUrl);
-    }
-
-    return data;
+    return cachedLookup(`genre-info::${genreName}`, async () => {
+        const data = await serverFetch<{ imageUrl?: string; summary?: string }>(`/api/providers/external/genre-info?genre=${encodeURIComponent(genreName)}`);
+        if (!data || (!data.imageUrl && !data.summary)) return undefined;
+        return data.imageUrl ? { ...data, imageUrl: proxyImageUrl(data.imageUrl) } : data;
+    });
 };
 
 export interface LyricsData {
@@ -156,6 +186,10 @@ export const fetchLyrics = async (trackName: string, artistName: string): Promis
  * No-op on client — server handles cache invalidation.
  */
 export const clearExternalCache = () => {
+    // Drop the client-side lookup cache so the next render forces a fresh
+    // server hit. The server-side cache clears via POST /api/providers/external/refresh
+    // (admin-only), so this client-side reset is what most callers actually need.
+    imageryLookupCache.clear();
     // Server-side cache clearing is admin-only via POST /api/providers/external/refresh
     // This function is kept for backward compatibility with store.saveSettings()
     // The server cache is TTL-based and doesn't need client-side clearing
