@@ -7283,26 +7283,3 @@ body {
 /*  Below md breakpoint: PlayerShell is hidden by wrapper class; nothing   */
 /*  more to do here. MobileMiniPlayer handles small viewports.             */
 /* ─────────────────────────────────────────────────────────────────────── */
-
-/* ─────────────────────────────────────────────────────────────────────── */
-/*  View Transitions — cover/avatar morph from card to detail hero.        */
-/*  We assign a per-entity `view-transition-name` (`vt-album-<id>`,        */
-/*  `vt-artist-<id>`, `vt-playlist-<id>`) on both the card cover and the   */
-/*  matching detail hero; the browser pairs them and morphs.               */
-/*  The wildcard rule trims default timing and uses a Material ease.       */
-/*  The reduced-motion override is required — the browser does not auto-   */
-/*  disable view transitions for that media query.                          */
-/* ─────────────────────────────────────────────────────────────────────── */
-::view-transition-old(*),
-::view-transition-new(*) {
-  animation-duration: 280ms;
-  animation-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  ::view-transition-group(*),
-  ::view-transition-old(*),
-  ::view-transition-new(*) {
-    animation: none !important;
-  }
-}

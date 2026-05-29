@@ -45,7 +45,6 @@ import { useNowPlayingState } from '../../hooks/useNowPlaying';
 import { NowPlayingBadge } from '../now-playing/NowPlayingBadge';
 import { NowPlayingBars } from '../now-playing/NowPlayingBars';
 import { readPlaylistHeroState, type PlaylistHeroState } from '../../utils/heroState';
-import { playlistTransitionName } from '../../utils/viewTransition';
 
 function formatDuration(totalSeconds: number): string {
   const hours = Math.floor(totalSeconds / 3600);
@@ -90,11 +89,9 @@ function getSmartPlaylistPreparationUrl(playlistId: string): string | null {
   return null;
 }
 
-const PlaylistDetailSkeleton: React.FC<{ onBack: () => void; hero?: PlaylistHeroState; playlistId?: string }> = ({ onBack, hero, playlistId }) => {
+const PlaylistDetailSkeleton: React.FC<{ onBack: () => void; hero?: PlaylistHeroState }> = ({ onBack, hero }) => {
   const heroArt = (hero?.artUrls || []).slice(0, 4);
   const hasHero = !!hero && (!!hero.title || heroArt.length > 0);
-  const transitionName = playlistTransitionName(playlistId);
-  const coverStyle = transitionName ? ({ viewTransitionName: transitionName } as React.CSSProperties) : undefined;
 
   return (
     <div className="page-container relative overflow-x-hidden">
@@ -103,7 +100,6 @@ const PlaylistDetailSkeleton: React.FC<{ onBack: () => void; hero?: PlaylistHero
         <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
           {hasHero ? (
             <div
-              style={coverStyle}
               className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5"
             >
               <div className="grid h-full w-full grid-cols-2 gap-0.5">
@@ -122,7 +118,6 @@ const PlaylistDetailSkeleton: React.FC<{ onBack: () => void; hero?: PlaylistHero
             </div>
           ) : (
             <div
-              style={coverStyle}
               className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none"
             />
           )}
@@ -631,7 +626,7 @@ export const PlaylistDetail: React.FC = () => {
 
   if (!playlist) {
     if (isPlaylistsLoading || isPreparingGeneratedPlaylist || !hasCheckedPlaylist) {
-      return <PlaylistDetailSkeleton onBack={() => navigate('/playlists')} hero={heroState} playlistId={playlistId} />;
+      return <PlaylistDetailSkeleton onBack={() => navigate('/playlists')} hero={heroState} />;
     }
 
     return (
@@ -685,7 +680,6 @@ export const PlaylistDetail: React.FC = () => {
 
         <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
           <div
-            style={{ viewTransitionName: playlistTransitionName(playlist.id) } as React.CSSProperties}
             className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5"
           >
             <div className="grid h-full w-full grid-cols-2 gap-0.5">

@@ -1,10 +1,9 @@
 import React, { memo, useCallback } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { AlbumArt } from '../AlbumArt';
 import { Play } from 'lucide-react';
 import { prefetchAlbumDetail } from '../../utils/routePrefetch';
 import { readBackLabel, type AlbumHeroState } from '../../utils/heroState';
-import { albumTransitionName, withViewTransition } from '../../utils/viewTransition';
 
 interface AlbumCardProps {
     title: string;
@@ -16,10 +15,6 @@ interface AlbumCardProps {
     onOpen?: () => void;
     linkTo?: string;
     linkState?: unknown;
-    // Optional: provide the canonical album id for the cover's
-    // view-transition-name. When omitted we derive a name from `linkTo` as a
-    // fallback so callers don't have to pass it everywhere.
-    albumId?: string;
 }
 
 export const AlbumCardSkeleton: React.FC = () => (
@@ -32,8 +27,7 @@ export const AlbumCardSkeleton: React.FC = () => (
     </div>
 );
 
-export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl, subtitle, editionLabel, onPlay, onOpen, linkTo, linkState, albumId }) => {
-    const navigate = useNavigate();
+export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl, subtitle, editionLabel, onPlay, onOpen, linkTo, linkState }) => {
     const handlePrefetch = useCallback(() => {
         if (linkTo) prefetchAlbumDetail();
     }, [linkTo]);
@@ -51,22 +45,6 @@ export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl
             backLabel: readBackLabel(linkState),
         }
         : undefined;
-
-    // Per-entity transition name shared with AlbumDetail's hero. Browser pairs
-    // the matching names across the navigation and morphs them.
-    const transitionId = albumId || linkTo;
-    const coverStyle: React.CSSProperties | undefined = transitionId
-        ? { viewTransitionName: albumTransitionName(transitionId) }
-        : undefined;
-
-    const handleLinkClick = useCallback((e: React.MouseEvent<HTMLAnchorElement>) => {
-        // Preserve middle-click / modifier-click open-in-new-tab behaviour.
-        if (!linkTo || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-        e.preventDefault();
-        // Pass the chunk's import promise so the transition only starts once
-        // AlbumDetail is loaded — prevents the flushSync-suspends freeze.
-        withViewTransition(() => navigate(linkTo, { state: navState }), prefetchAlbumDetail());
-    }, [linkTo, navState, navigate]);
 
     return (
         <div
@@ -89,7 +67,6 @@ export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl
                 <Link
                     to={linkTo}
                     state={navState}
-                    onClick={handleLinkClick}
                     className="absolute inset-0 z-10 rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]"
                     aria-label={`View album: ${title}`}
                 />
@@ -97,7 +74,6 @@ export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl
 
             {/* Art container */}
             <div
-                style={coverStyle}
                 className="relative aspect-square w-full mb-3 rounded-2xl border border-black/5 dark:border-white/5 bg-white/5 dark:bg-black/20 shadow-md overflow-hidden transition-transform duration-300 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100">
                 <AlbumArt
                     artUrl={artUrl}

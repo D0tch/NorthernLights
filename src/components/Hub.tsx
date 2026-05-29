@@ -11,7 +11,6 @@ import { NowPlayingBadge } from './now-playing/NowPlayingBadge';
 import { useResumeContext, useNowPlayingState } from '../hooks/useNowPlaying';
 import { prefetchAlbumDetail, prefetchArtistDetail, prefetchPlaylistDetail } from '../utils/routePrefetch';
 import type { AlbumHeroState, ArtistHeroState, PlaylistHeroState } from '../utils/heroState';
-import { albumTransitionName, artistTransitionName, playlistTransitionName, withViewTransition } from '../utils/viewTransition';
 
 function getTimeAwareWordmark(now: Date = new Date()): string {
   const hour = now.getHours();
@@ -403,8 +402,6 @@ const HubCard: React.FC<HubCardProps> = ({ collection, onOpen, onPlay, onPinTogg
     () => buildRolledCoverGradient(gradientSeed, palette, bgColor),
     [bgColor, gradientSeed, palette]
   );
-  const name = playlistTransitionName(collection.id);
-  const coverStyle = name ? ({ viewTransitionName: name } as React.CSSProperties) : undefined;
 
   return (
     <div
@@ -434,7 +431,7 @@ const HubCard: React.FC<HubCardProps> = ({ collection, onOpen, onPlay, onPinTogg
       />
 
       <div className="relative flex items-center mb-3">
-        <div className="flex items-center" style={coverStyle}>
+        <div className="flex items-center">
           {hasCovers ? (
             artUrls.slice(0, 4).map((url, i) => (
               <img
@@ -530,12 +527,6 @@ const prefetchForTileType = (type: JumpTile['type']) => {
   else if (type === 'album') prefetchAlbumDetail();
 };
 
-const tileTransitionName = (tile: JumpTile): string | undefined => {
-  if (tile.type === 'playlist') return playlistTransitionName(tile.id);
-  if (tile.type === 'artist') return artistTransitionName(tile.id);
-  return albumTransitionName(tile.id);
-};
-
 const JumpTileCard: React.FC<JumpTileCardProps> = ({
   tile,
   onActivate,
@@ -546,8 +537,6 @@ const JumpTileCard: React.FC<JumpTileCardProps> = ({
   const fallback = getJumpTileFallback(tile.type);
   const FallbackIcon = fallback.Icon;
   const handlePrefetch = useCallback(() => prefetchForTileType(tile.type), [tile.type]);
-  const name = tileTransitionName(tile);
-  const coverStyle = name ? ({ viewTransitionName: name } as React.CSSProperties) : undefined;
   return (
     <div
       onClick={() => onActivate(tile)}
@@ -566,7 +555,6 @@ const JumpTileCard: React.FC<JumpTileCardProps> = ({
       aria-label={`open ${tile.title}`}
     >
       <div
-        style={coverStyle}
         className="relative h-[64px] w-[56px] shrink-0 overflow-hidden sm:h-[80px] sm:w-[80px]"
       >
         {tile.imageUrl ? (
@@ -656,9 +644,6 @@ interface UniqueCardProps {
   loading?: boolean;
   coverMotionClassName?: string;
   textMotionClassName?: string;
-  // Optional playlist id used to derive the cover's view-transition-name so
-  // it pairs with PlaylistDetail's hero across the morph.
-  transitionId?: string;
 }
 
 const UniqueCard: React.FC<UniqueCardProps> = ({
@@ -672,9 +657,7 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
   loading = false,
   coverMotionClassName = '',
   textMotionClassName = '',
-  transitionId,
 }) => {
-  const coverTransitionName = playlistTransitionName(transitionId);
   let coverContent: React.ReactNode;
   let badgeLabel: string;
   const shouldUseMosaic =
@@ -791,7 +774,6 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
       aria-label={`open ${title}`}
     >
       <div
-        style={coverTransitionName ? ({ viewTransitionName: coverTransitionName } as React.CSSProperties) : undefined}
         className={`relative w-full aspect-square rounded-[var(--radius)] overflow-hidden shadow-md ring-1 ring-black/10 ${coverMotionClassName}`}
       >
         {coverContent}
@@ -1125,7 +1107,7 @@ export const Hub: React.FC = () => {
         pinned: pl?.pinned || false,
         backLabel: 'Back to Hub',
       };
-      withViewTransition(() => navigate(`/playlists/${tile.id}`, { state: hero }), prefetchPlaylistDetail());
+      navigate(`/playlists/${tile.id}`, { state: hero });
     } else if (tile.type === 'artist') {
       const hero: ArtistHeroState = {
         kind: 'artist',
@@ -1133,7 +1115,7 @@ export const Hub: React.FC = () => {
         imageUrl: tileImage || undefined,
         backLabel: 'Back to Hub',
       };
-      withViewTransition(() => navigate(`/library/artist/${tile.id}`, { state: hero }), prefetchArtistDetail());
+      navigate(`/library/artist/${tile.id}`, { state: hero });
     } else if (tile.type === 'album') {
       const hero: AlbumHeroState = {
         kind: 'album',
@@ -1142,7 +1124,7 @@ export const Hub: React.FC = () => {
         artUrl: tileImage || undefined,
         backLabel: 'Back to Hub',
       };
-      withViewTransition(() => navigate(`/library/album/${encodeURIComponent(tile.id)}`, { state: hero }), prefetchAlbumDetail());
+      navigate(`/library/album/${encodeURIComponent(tile.id)}`, { state: hero });
     }
   };
 
@@ -1197,7 +1179,7 @@ export const Hub: React.FC = () => {
       await fetchPlaylistsFromServer();
       if (playlist?.id) {
         const fresh = usePlayerStore.getState().playlists.find((p) => p.id === playlist.id);
-        withViewTransition(() => navigate(`/playlists/${playlist.id}`, { state: buildPlaylistHero(fresh) }), prefetchPlaylistDetail());
+        navigate(`/playlists/${playlist.id}`, { state: buildPlaylistHero(fresh) });
       }
     } catch (e) {
       console.error('[Artist Radio] Failed', e);
@@ -1253,7 +1235,7 @@ export const Hub: React.FC = () => {
         await fetchPlaylistsFromServer();
       }
       const fresh = usePlayerStore.getState().playlists.find((p) => p.id === collection.id) || collection;
-      withViewTransition(() => navigate(`/playlists/${collection.id}`, { state: buildPlaylistHero(fresh) }), prefetchPlaylistDetail());
+      navigate(`/playlists/${collection.id}`, { state: buildPlaylistHero(fresh) });
     } finally {
       setOpeningSmartPlaylistId(null);
     }
@@ -1378,7 +1360,7 @@ export const Hub: React.FC = () => {
               artUrl: track.artUrl || undefined,
               backLabel: 'Back to Hub',
             };
-            withViewTransition(() => navigate(`/library/album/${track.albumId}`, { state: hero }), prefetchAlbumDetail());
+            navigate(`/library/album/${track.albumId}`, { state: hero });
           } else if (track.artistId) {
             const hero: ArtistHeroState = {
               kind: 'artist',
@@ -1386,7 +1368,7 @@ export const Hub: React.FC = () => {
               imageUrl: track.artUrl || undefined,
               backLabel: 'Back to Hub',
             };
-            withViewTransition(() => navigate(`/library/artist/${track.artistId}`, { state: hero }), prefetchArtistDetail());
+            navigate(`/library/artist/${track.artistId}`, { state: hero });
           }
         }}
         onRefresh={aiPlaylists.length > 0 ? handleGeneratePlaylists : undefined}
@@ -1499,7 +1481,7 @@ export const Hub: React.FC = () => {
               <HubCard
                 key={collection.id}
                 collection={collection}
-                onOpen={() => collection.id && withViewTransition(() => navigate(`/playlists/${collection.id}`, { state: buildPlaylistHero(collection) }), prefetchPlaylistDetail())}
+                onOpen={() => collection.id && navigate(`/playlists/${collection.id}`, { state: buildPlaylistHero(collection) })}
                 onPlay={() => handlePlayCollection(collection.tracks)}
                 onPinToggle={() =>
                   collection.id && handleTogglePin(collection.id, !collection.pinned)
@@ -1632,8 +1614,7 @@ export const Hub: React.FC = () => {
                     title={displayCollection.title || 'system mix'}
                     subtitle={displayCollection.description || undefined}
                     tracks={displayCollection.tracks}
-                    onClick={() => displayCollection.id && withViewTransition(() => navigate(`/playlists/${displayCollection.id}`, { state: buildPlaylistHero(displayCollection) }), prefetchPlaylistDetail())}
-                    transitionId={displayCollection.id}
+                    onClick={() => displayCollection.id && navigate(`/playlists/${displayCollection.id}`, { state: buildPlaylistHero(displayCollection) })}
                     onPlay={() => handlePlayCollection(displayCollection.tracks)}
                     coverMotionClassName={getTileMotionClassName(phase)}
                     textMotionClassName={getTileTextMotionClassName(phase)}

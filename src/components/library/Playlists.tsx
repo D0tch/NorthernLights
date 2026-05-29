@@ -13,7 +13,6 @@ import {
 } from './PlaylistContextMenu';
 import { prefetchPlaylistDetail } from '../../utils/routePrefetch';
 import type { PlaylistHeroState } from '../../utils/heroState';
-import { playlistTransitionName, withViewTransition } from '../../utils/viewTransition';
 
 // ─── Playlist Card ────────────────────────────────────────────────────────────
 
@@ -25,7 +24,6 @@ const PlaylistCard: React.FC<{
 }> = ({ playlist, onOpen, onMenuOpen, onPlay }) => {
   const { artUrls, bgColor } = useDominantColor(playlist.tracks);
   const hasCovers = artUrls.length > 0;
-  const coverStyle: React.CSSProperties = { viewTransitionName: playlistTransitionName(playlist.id) };
 
   return (
     <div
@@ -49,7 +47,7 @@ const PlaylistCard: React.FC<{
 
       {/* Top row: stacked art + kebab */}
       <div className="relative flex items-start justify-between mb-4">
-        <div className="flex items-center" style={coverStyle}>
+        <div className="flex items-center">
           {hasCovers ? (
             artUrls.slice(0, 4).map((url, i) => (
               <img
@@ -433,7 +431,7 @@ export const Playlists: React.FC = () => {
               <PlaylistCard
                 key={pl.id}
                 playlist={pl}
-                onOpen={() => withViewTransition(() => navigate(`/playlists/${pl.id}`, { state: hero }), prefetchPlaylistDetail())}
+                onOpen={() => navigate(`/playlists/${pl.id}`, { state: hero })}
                 onPlay={() => { if (pl.tracks.length > 0) setPlaylist(pl.tracks, 0); }}
                 onMenuOpen={(x, y) => openMenu(pl, x, y)}
               />

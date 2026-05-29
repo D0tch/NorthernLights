@@ -18,7 +18,6 @@ import { NowPlayingBars } from '../now-playing/NowPlayingBars';
 import { MoreHorizontal, Play, Clock, ExternalLink, Headphones, BarChart2, Link2, Music2, Calendar, Gauge, Disc3, X, Search, Plus, Users, Layers, Settings } from 'lucide-react';
 import type { AlbumInfo, TrackCredit } from '../../store/index';
 import { readAlbumHeroState, type AlbumHeroState } from '../../utils/heroState';
-import { albumTransitionName } from '../../utils/viewTransition';
 
 interface EditionRow extends AlbumInfo {
     track_count?: number;
@@ -86,24 +85,20 @@ const TrackRowSkeleton: React.FC = () => (
     </div>
 );
 
-const AlbumDetailSkeleton: React.FC<{ onBack: () => void; hero?: AlbumHeroState; albumId?: string }> = ({ onBack, hero, albumId }) => {
+const AlbumDetailSkeleton: React.FC<{ onBack: () => void; hero?: AlbumHeroState }> = ({ onBack, hero }) => {
     const hasHero = !!hero && (!!hero.title || !!hero.artUrl);
-    const transitionName = albumTransitionName(albumId);
-    const coverStyle = transitionName ? ({ viewTransitionName: transitionName } as React.CSSProperties) : undefined;
     return (
         <div className="flex flex-col overflow-hidden p-4 md:p-8 lg:p-12 flex-1">
             <div className="shrink-0 mb-6"><BackButton onClick={onBack} /></div>
             <div className="flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
                 {hasHero ? (
                     <div
-                        style={coverStyle}
                         className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5"
                     >
                         <AlbumArt artUrl={hero?.artUrl} artist={hero?.artist} size={240} className="w-full h-full object-cover rounded-2xl" />
                     </div>
                 ) : (
                     <div
-                        style={coverStyle}
                         className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none"
                     />
                 )}
@@ -830,12 +825,12 @@ export const AlbumDetail: React.FC = () => {
     // ── Navigation helpers ─────────────────────────────────────────────────
 
     if (!albumId || (isLibraryLoading && albumTracks.length === 0)) {
-        return <AlbumDetailSkeleton onBack={() => navigate(-1)} hero={heroState} albumId={albumId} />;
+        return <AlbumDetailSkeleton onBack={() => navigate(-1)} hero={heroState} />;
     }
 
     if (albumTracks.length === 0) {
         if (heroState && (heroState.title || heroState.artUrl)) {
-            return <AlbumDetailSkeleton onBack={() => navigate(-1)} hero={heroState} albumId={albumId} />;
+            return <AlbumDetailSkeleton onBack={() => navigate(-1)} hero={heroState} />;
         }
         return <div className="flex-1 flex justify-center items-center text-[var(--color-text-muted)]">Album not found.</div>;
     }
@@ -853,7 +848,6 @@ export const AlbumDetail: React.FC = () => {
 
             <div className="shrink-0 flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
                 <div
-                    style={{ viewTransitionName: albumTransitionName(albumId) } as React.CSSProperties}
                     className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5"
                 >
                     <AlbumArt artUrl={artUrl} artist={albumArtist} size={240} className="w-full h-full object-cover rounded-2xl" />

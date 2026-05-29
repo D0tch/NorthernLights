@@ -20,7 +20,6 @@ import { NowPlayingBadge } from '../now-playing/NowPlayingBadge';
 import { NowPlayingBars } from '../now-playing/NowPlayingBars';
 import { prefetchArtistDetail } from '../../utils/routePrefetch';
 import { readArtistHeroState, type ArtistHeroState } from '../../utils/heroState';
-import { artistTransitionName, withViewTransition } from '../../utils/viewTransition';
 
 // ─── Link label helpers ───────────────────────────────────────────────────────
 
@@ -135,26 +134,17 @@ type SimilarArtist = {
 
 const SimilarArtistRow: React.FC<{ artist: SimilarArtist }> = ({ artist }) => {
     const href = `/library/artist/${artist.id}`;
-    const navigate = useNavigate();
     const heroState: ArtistHeroState = {
         kind: 'artist',
         name: artist.name,
         imageUrl: artist.imageUrl || undefined,
         backLabel: 'Back to Artist',
     };
-    const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
-        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-        e.preventDefault();
-        withViewTransition(() => navigate(href, { state: heroState }), prefetchArtistDetail());
-    };
-    const transitionName = artistTransitionName(artist.id);
-    const avatarStyle = transitionName ? ({ viewTransitionName: transitionName } as React.CSSProperties) : undefined;
 
     return (
         <Link
             to={href}
             state={heroState}
-            onClick={handleClick}
             onPointerEnter={prefetchArtistDetail}
             onPointerDown={prefetchArtistDetail}
             onFocus={prefetchArtistDetail}
@@ -162,7 +152,6 @@ const SimilarArtistRow: React.FC<{ artist: SimilarArtist }> = ({ artist }) => {
         >
             <div className="flex items-start gap-3">
                 <div
-                    style={avatarStyle}
                     className="h-14 w-14 shrink-0 overflow-hidden rounded-full border border-black/10 bg-black/10 dark:border-white/10 dark:bg-white/10"
                 >
                     {artist.imageUrl ? (
@@ -224,7 +213,7 @@ const SimilarArtistsSection: React.FC<{ artists: SimilarArtist[]; loading: boole
     );
 };
 
-const ArtistDetailSkeleton: React.FC<{ onBack: () => void; hero?: ArtistHeroState; artistId?: string }> = ({ onBack, hero, artistId }) => {
+const ArtistDetailSkeleton: React.FC<{ onBack: () => void; hero?: ArtistHeroState }> = ({ onBack, hero }) => {
     const hasHero = !!hero && (!!hero.name || !!hero.imageUrl);
     return (
         <div className="artist-detail page-container relative">
@@ -233,21 +222,18 @@ const ArtistDetailSkeleton: React.FC<{ onBack: () => void; hero?: ArtistHeroStat
                 <section className="flex flex-col md:flex-row items-center md:items-end gap-8 mb-10 md:mb-14">
                     {hasHero && hero?.imageUrl ? (
                         <div
-                            style={{ viewTransitionName: artistTransitionName(artistId) } as React.CSSProperties}
                             className="w-48 h-48 md:w-64 md:h-64 rounded-full overflow-hidden shrink-0 shadow-[var(--shadow-md)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)]"
                         >
                             <img src={hero.imageUrl} alt={hero.name || ''} className="w-full h-full object-cover" />
                         </div>
                     ) : hasHero ? (
                         <div
-                            style={{ viewTransitionName: artistTransitionName(artistId) } as React.CSSProperties}
                             className="w-48 h-48 md:w-64 md:h-64 rounded-full overflow-hidden shrink-0 shadow-[var(--shadow-md)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)] flex items-center justify-center"
                         >
                             <ArtistInitial name={hero.name || ''} />
                         </div>
                     ) : (
                         <div
-                            style={{ viewTransitionName: artistTransitionName(artistId) } as React.CSSProperties}
                             className="w-48 h-48 md:w-64 md:h-64 rounded-full shrink-0 bg-[var(--color-surface-variant)] animate-pulse motion-reduce:animate-none"
                         />
                     )}
@@ -679,12 +665,12 @@ export const ArtistDetail: React.FC = () => {
     const hasAnyContent = primaryTracks.length > 0 || collaborationTracks.length > 0 || featuredTracks.length > 0;
 
     if (isLibraryLoading && (!artistName || !hasAnyContent)) {
-        return <ArtistDetailSkeleton onBack={() => navigate(-1)} hero={heroState} artistId={artistId} />;
+        return <ArtistDetailSkeleton onBack={() => navigate(-1)} hero={heroState} />;
     }
 
     if (!artistName || !hasAnyContent) {
         if (heroState && (heroState.name || heroState.imageUrl)) {
-            return <ArtistDetailSkeleton onBack={() => navigate(-1)} hero={heroState} artistId={artistId} />;
+            return <ArtistDetailSkeleton onBack={() => navigate(-1)} hero={heroState} />;
         }
         return (
             <div className="flex-1 flex flex-col items-center justify-center p-8 text-center">
@@ -704,14 +690,12 @@ export const ArtistDetail: React.FC = () => {
                 <div className="flex flex-col md:flex-row gap-8 items-start mb-8 md:mb-12">
                     {imageUrl ? (
                         <div
-                            style={{ viewTransitionName: artistTransitionName(artistId) } as React.CSSProperties}
                             className="w-48 h-48 md:w-64 md:h-64 rounded-full overflow-hidden shrink-0 shadow-[var(--shadow-md)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)]"
                         >
                             <img src={imageUrl} alt={artistName} className="w-full h-full object-cover" />
                         </div>
                     ) : (
                         <div
-                            style={{ viewTransitionName: artistTransitionName(artistId) } as React.CSSProperties}
                             className={`w-48 h-48 md:w-64 md:h-64 rounded-full overflow-hidden shrink-0 shadow-[var(--shadow-md)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)] flex items-center justify-center ${artistLoading ? 'animate-pulse motion-reduce:animate-none' : ''}`}
                         >
                             <ArtistInitial name={artistName} />
