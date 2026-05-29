@@ -4,7 +4,8 @@ import path from 'path';
 import { spawn } from 'child_process';
 import * as mm from 'music-metadata';
 import { isPathAllowed, pathToBuffer } from '../state';
-import { initDB } from '../database';
+import { initDB, getArtHashForPath } from '../database';
+import { artCachePath, isValidArtSize, DEFAULT_ART_SIZE, findImageStart, type ArtSize } from '../services/artCache';
 import {
   getOrCreateHlsSession,
   getSessionInfo,
@@ -19,25 +20,6 @@ const router = Router();
 const HLS_SEGMENT_LINE = /^(segment\d+\.ts)$/gm;
 const HLS_MEDIA_PLAYLIST_NAME = 'media.m3u8';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-// Scan for the first JPEG/PNG/GIF/WebP/BMP signature in `buf`. Returns the
-// offset, or -1 if none found within the first 4 KiB. Used to recover the
-// real image data when music-metadata's WMA WM/Picture parser slices the
-// buffer at the wrong offset (the description terminator is skipped),
-// leaving a small UTF-16LE prefix in front of the actual image bytes.
-function findImageStart(buf: Uint8Array): number {
-  const maxScan = Math.min(buf.length - 12, 4096);
-  for (let i = 0; i <= maxScan; i++) {
-    const b0 = buf[i], b1 = buf[i + 1], b2 = buf[i + 2], b3 = buf[i + 3];
-    if (b0 === 0xFF && b1 === 0xD8 && b2 === 0xFF) return i;
-    if (b0 === 0x89 && b1 === 0x50 && b2 === 0x4E && b3 === 0x47) return i;
-    if (b0 === 0x47 && b1 === 0x49 && b2 === 0x46 && b3 === 0x38) return i;
-    if (b0 === 0x52 && b1 === 0x49 && b2 === 0x46 && b3 === 0x46
-        && buf[i + 8] === 0x57 && buf[i + 9] === 0x45 && buf[i + 10] === 0x42 && buf[i + 11] === 0x50) return i;
-    if (b0 === 0x42 && b1 === 0x4D) return i;
-  }
-  return -1;
-}
 
 // Mime type map
 const MIME_TYPES: Record<string, string> = {
@@ -582,15 +564,61 @@ router.all('/stream', async (req, res) => {
   }
 });
 
-// Get album art by track path
+const ART_IMMUTABLE_CACHE = 'public, max-age=31536000, immutable';
+
+function resolveArtSize(raw: unknown): ArtSize {
+  const n = typeof raw === 'string' ? parseInt(raw, 10) : NaN;
+  return isValidArtSize(n) ? n : DEFAULT_ART_SIZE;
+}
+
+// Stream a pre-encoded AVIF cache file. Returns false (without touching the
+// response) when the file is absent/empty so the caller can fall back.
+function streamArtFile(res: any, filePath: string): boolean {
+  try {
+    if (fs.statSync(filePath).size === 0) return false;
+  } catch {
+    return false;
+  }
+  res.setHeader('Content-Type', 'image/avif');
+  res.setHeader('Cache-Control', ART_IMMUTABLE_CACHE);
+  fs.createReadStream(filePath).pipe(res);
+  return true;
+}
+
+// Album art. Two addressing modes:
+//   ?hash=<contentHash>&size=256|640|1024  → serve the pre-encoded AVIF directly
+//   ?pathB64=<base64 path>                 → resolve the track's art_hash, then
+//                                            serve the cache file; falls back to
+//                                            live raw extraction for tracks not
+//                                            yet processed (pre-backfill).
 router.get('/art', async (req, res) => {
+  const size = resolveArtSize(req.query.size);
+  const hashParam = typeof req.query.hash === 'string' ? req.query.hash : null;
+
+  // ── Hash-addressed (the common, fast path) ──
+  if (hashParam) {
+    if (!/^[0-9a-f]{1,64}$/.test(hashParam)) return res.status(400).send('Bad hash');
+    if (streamArtFile(res, artCachePath(hashParam, size))) return;
+    return res.status(404).send('Not found');
+  }
+
   const b64Path = req.query.pathB64 as string;
   const rawPath = req.query.path as string;
-
   if (!b64Path && !rawPath) return res.status(404).send('Not found');
-
   const dbPathStr = b64Path ? decodeURIComponent(b64Path) : rawPath;
 
+  // ── Path-addressed: resolve the stored art hash ──
+  // hash → serve cache file; '' → processed, no embedded art; null → not yet
+  // processed (pre-backfill) → live extraction below.
+  const artHash = await getArtHashForPath(dbPathStr).catch(() => null);
+  if (artHash) {
+    if (streamArtFile(res, artCachePath(artHash, size))) return;
+    // Cache file vanished (cache dir cleared) → fall through to live extraction.
+  } else if (artHash === '') {
+    return res.status(404).send('No art found');
+  }
+
+  // ── Live raw extraction fallback ──
   const fileBuf = pathToBuffer(dbPathStr);
   if (!fs.existsSync(fileBuf)) {
     return res.status(404).send('Not found');
