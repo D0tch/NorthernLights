@@ -138,6 +138,18 @@ export async function initDB(): Promise<Pool> {
         CREATE INDEX IF NOT EXISTS tracks_genius_song_id_idx ON tracks(genius_song_id);
         CREATE INDEX IF NOT EXISTS tracks_mb_recording_id_idx ON tracks(mb_recording_id);
 
+        DO $$
+        BEGIN
+          -- art_hash: NULL = needs processing; '' = processed, no embedded art;
+          -- otherwise the content hash of the encoded cover (see services/artCache.ts).
+          -- file_mtime: epoch ms of the source file, for change detection on re-scan.
+          ALTER TABLE tracks ADD COLUMN IF NOT EXISTS art_hash TEXT;
+          ALTER TABLE tracks ADD COLUMN IF NOT EXISTS file_mtime BIGINT;
+        EXCEPTION
+          WHEN OTHERS THEN null;
+        END $$;
+        CREATE INDEX IF NOT EXISTS tracks_art_hash_idx ON tracks(art_hash);
+
         CREATE TABLE IF NOT EXISTS track_features (
           track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE PRIMARY KEY,
           bpm NUMERIC,
@@ -936,6 +948,7 @@ function mapTrackRow(row: any) {
     rawUrls: parseObjectArrayField<{ url: string; type: string }>(row.raw_urls),
     playlistAddedAt: row.playlist_added_at ? new Date(row.playlist_added_at).getTime() : undefined,
     isLoved: row.is_loved === true,
+    artHash: row.art_hash ?? undefined,
   };
 }
 
@@ -966,6 +979,37 @@ export async function getExistingPaths(): Promise<Set<string>> {
   return new Set(res.rows.map((r: any) => r.path));
 }
 
+// Path (base64) → { mtime, artHash } for incremental change detection during a
+// scan. mtime is epoch ms (null for rows predating the file_mtime column).
+export async function getPathsWithMeta(): Promise<Map<string, { mtime: number | null; artHash: string | null }>> {
+  const db = await initDB();
+  const res = await db.query('SELECT path, file_mtime, art_hash FROM tracks');
+  const map = new Map<string, { mtime: number | null; artHash: string | null }>();
+  for (const r of res.rows) {
+    if (!r.path) continue;
+    map.set(r.path, {
+      mtime: r.file_mtime != null ? Number(r.file_mtime) : null,
+      artHash: r.art_hash ?? null,
+    });
+  }
+  return map;
+}
+
+// Whether any track still references an art hash — drives orphan cleanup.
+export async function countTracksByArtHash(hash: string): Promise<number> {
+  const db = await initDB();
+  const res = await db.query('SELECT 1 FROM tracks WHERE art_hash = $1 LIMIT 1', [hash]);
+  return res.rows.length;
+}
+
+// art_hash for a single track path (base64), or null if unknown / unprocessed.
+export async function getArtHashForPath(b64Path: string): Promise<string | null> {
+  const db = await initDB();
+  const res = await db.query('SELECT art_hash FROM tracks WHERE path = $1 LIMIT 1', [b64Path]);
+  if (res.rows.length === 0) return null;
+  return res.rows[0].art_hash ?? null;
+}
+
 // Returns a Buffer array of decoded UTF-8 paths matching a specific directory prefix
 export async function getPathsForDirectory(dirPath: string): Promise<Buffer[]> {
   const db = await initDB();
@@ -993,8 +1037,8 @@ export async function addTrack(track: any) {
   const sanitizeArray = (arr: any) => Array.isArray(arr) ? arr.map(sanitizeString) : arr;
 
   await db.query(`
-    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls, art_hash, file_mtime)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
     ON CONFLICT (id) DO UPDATE SET
       title = EXCLUDED.title,
       artist = EXCLUDED.artist,
@@ -1023,7 +1067,11 @@ export async function addTrack(track: any) {
       mb_album_artist_id = EXCLUDED.mb_album_artist_id,
       mb_release_group_id = EXCLUDED.mb_release_group_id,
       mb_work_id = EXCLUDED.mb_work_id,
-      raw_urls = EXCLUDED.raw_urls
+      raw_urls = EXCLUDED.raw_urls,
+      -- COALESCE so a metadata-parse-failure re-insert (which passes no art
+      -- fields) never wipes an already-encoded cover.
+      art_hash = COALESCE(EXCLUDED.art_hash, tracks.art_hash),
+      file_mtime = COALESCE(EXCLUDED.file_mtime, tracks.file_mtime)
     WHERE
       tracks.title IS DISTINCT FROM EXCLUDED.title OR
       tracks.artist IS DISTINCT FROM EXCLUDED.artist OR
@@ -1052,7 +1100,11 @@ export async function addTrack(track: any) {
       tracks.mb_album_artist_id IS DISTINCT FROM EXCLUDED.mb_album_artist_id OR
       tracks.mb_release_group_id IS DISTINCT FROM EXCLUDED.mb_release_group_id OR
       tracks.mb_work_id IS DISTINCT FROM EXCLUDED.mb_work_id OR
-      tracks.raw_urls IS DISTINCT FROM EXCLUDED.raw_urls
+      tracks.raw_urls IS DISTINCT FROM EXCLUDED.raw_urls OR
+      -- Trigger the upsert when only the artwork or the file mtime changed, so
+      -- a re-tag (identical text metadata, new cover) still records the update.
+      (EXCLUDED.art_hash IS NOT NULL AND tracks.art_hash IS DISTINCT FROM EXCLUDED.art_hash) OR
+      (EXCLUDED.file_mtime IS NOT NULL AND tracks.file_mtime IS DISTINCT FROM EXCLUDED.file_mtime)
   `, [
     id,
     sanitizeString(track.title) || path.basename(track.path),
@@ -1083,6 +1135,8 @@ export async function addTrack(track: any) {
     track.mbReleaseGroupId || null,
     track.mbWorkId || null,
     track.rawUrls ? JSON.stringify(track.rawUrls) : null,
+    track.artHash ?? null,
+    track.fileMtime ?? null,
   ]);
 
   if (track.audioFeatures) {
