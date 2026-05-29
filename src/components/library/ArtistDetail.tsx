@@ -145,7 +145,7 @@ const SimilarArtistRow: React.FC<{ artist: SimilarArtist }> = ({ artist }) => {
     const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
         if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         e.preventDefault();
-        withViewTransition(() => navigate(href, { state: heroState }));
+        withViewTransition(() => navigate(href, { state: heroState }), prefetchArtistDetail());
     };
     const transitionName = artistTransitionName(artist.id);
     const avatarStyle = transitionName ? ({ viewTransitionName: transitionName } as React.CSSProperties) : undefined;

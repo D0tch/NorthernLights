@@ -433,7 +433,7 @@ export const Playlists: React.FC = () => {
               <PlaylistCard
                 key={pl.id}
                 playlist={pl}
-                onOpen={() => withViewTransition(() => navigate(`/playlists/${pl.id}`, { state: hero }))}
+                onOpen={() => withViewTransition(() => navigate(`/playlists/${pl.id}`, { state: hero }), prefetchPlaylistDetail())}
                 onPlay={() => { if (pl.tracks.length > 0) setPlaylist(pl.tracks, 0); }}
                 onMenuOpen={(x, y) => openMenu(pl, x, y)}
               />

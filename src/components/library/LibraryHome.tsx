@@ -66,7 +66,7 @@ const ArtistLink: React.FC<{ to: string; state: ArtistHeroState; children: React
     const handleClick = useCallback((e: React.MouseEvent<HTMLAnchorElement>) => {
         if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         e.preventDefault();
-        withViewTransition(() => navigate(to, { state }));
+        withViewTransition(() => navigate(to, { state }), prefetchArtistDetail());
     }, [navigate, state, to]);
     return (
         <Link

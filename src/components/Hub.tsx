@@ -1125,7 +1125,7 @@ export const Hub: React.FC = () => {
         pinned: pl?.pinned || false,
         backLabel: 'Back to Hub',
       };
-      withViewTransition(() => navigate(`/playlists/${tile.id}`, { state: hero }));
+      withViewTransition(() => navigate(`/playlists/${tile.id}`, { state: hero }), prefetchPlaylistDetail());
     } else if (tile.type === 'artist') {
       const hero: ArtistHeroState = {
         kind: 'artist',
@@ -1133,7 +1133,7 @@ export const Hub: React.FC = () => {
         imageUrl: tileImage || undefined,
         backLabel: 'Back to Hub',
       };
-      withViewTransition(() => navigate(`/library/artist/${tile.id}`, { state: hero }));
+      withViewTransition(() => navigate(`/library/artist/${tile.id}`, { state: hero }), prefetchArtistDetail());
     } else if (tile.type === 'album') {
       const hero: AlbumHeroState = {
         kind: 'album',
@@ -1142,7 +1142,7 @@ export const Hub: React.FC = () => {
         artUrl: tileImage || undefined,
         backLabel: 'Back to Hub',
       };
-      withViewTransition(() => navigate(`/library/album/${encodeURIComponent(tile.id)}`, { state: hero }));
+      withViewTransition(() => navigate(`/library/album/${encodeURIComponent(tile.id)}`, { state: hero }), prefetchAlbumDetail());
     }
   };
 
@@ -1197,7 +1197,7 @@ export const Hub: React.FC = () => {
       await fetchPlaylistsFromServer();
       if (playlist?.id) {
         const fresh = usePlayerStore.getState().playlists.find((p) => p.id === playlist.id);
-        withViewTransition(() => navigate(`/playlists/${playlist.id}`, { state: buildPlaylistHero(fresh) }));
+        withViewTransition(() => navigate(`/playlists/${playlist.id}`, { state: buildPlaylistHero(fresh) }), prefetchPlaylistDetail());
       }
     } catch (e) {
       console.error('[Artist Radio] Failed', e);
@@ -1253,7 +1253,7 @@ export const Hub: React.FC = () => {
         await fetchPlaylistsFromServer();
       }
       const fresh = usePlayerStore.getState().playlists.find((p) => p.id === collection.id) || collection;
-      withViewTransition(() => navigate(`/playlists/${collection.id}`, { state: buildPlaylistHero(fresh) }));
+      withViewTransition(() => navigate(`/playlists/${collection.id}`, { state: buildPlaylistHero(fresh) }), prefetchPlaylistDetail());
     } finally {
       setOpeningSmartPlaylistId(null);
     }
@@ -1378,7 +1378,7 @@ export const Hub: React.FC = () => {
               artUrl: track.artUrl || undefined,
               backLabel: 'Back to Hub',
             };
-            withViewTransition(() => navigate(`/library/album/${track.albumId}`, { state: hero }));
+            withViewTransition(() => navigate(`/library/album/${track.albumId}`, { state: hero }), prefetchAlbumDetail());
           } else if (track.artistId) {
             const hero: ArtistHeroState = {
               kind: 'artist',
@@ -1386,7 +1386,7 @@ export const Hub: React.FC = () => {
               imageUrl: track.artUrl || undefined,
               backLabel: 'Back to Hub',
             };
-            withViewTransition(() => navigate(`/library/artist/${track.artistId}`, { state: hero }));
+            withViewTransition(() => navigate(`/library/artist/${track.artistId}`, { state: hero }), prefetchArtistDetail());
           }
         }}
         onRefresh={aiPlaylists.length > 0 ? handleGeneratePlaylists : undefined}
@@ -1499,7 +1499,7 @@ export const Hub: React.FC = () => {
               <HubCard
                 key={collection.id}
                 collection={collection}
-                onOpen={() => collection.id && withViewTransition(() => navigate(`/playlists/${collection.id}`, { state: buildPlaylistHero(collection) }))}
+                onOpen={() => collection.id && withViewTransition(() => navigate(`/playlists/${collection.id}`, { state: buildPlaylistHero(collection) }), prefetchPlaylistDetail())}
                 onPlay={() => handlePlayCollection(collection.tracks)}
                 onPinToggle={() =>
                   collection.id && handleTogglePin(collection.id, !collection.pinned)
@@ -1632,7 +1632,7 @@ export const Hub: React.FC = () => {
                     title={displayCollection.title || 'system mix'}
                     subtitle={displayCollection.description || undefined}
                     tracks={displayCollection.tracks}
-                    onClick={() => displayCollection.id && withViewTransition(() => navigate(`/playlists/${displayCollection.id}`, { state: buildPlaylistHero(displayCollection) }))}
+                    onClick={() => displayCollection.id && withViewTransition(() => navigate(`/playlists/${displayCollection.id}`, { state: buildPlaylistHero(displayCollection) }), prefetchPlaylistDetail())}
                     transitionId={displayCollection.id}
                     onPlay={() => handlePlayCollection(displayCollection.tracks)}
                     coverMotionClassName={getTileMotionClassName(phase)}

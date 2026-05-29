@@ -63,7 +63,9 @@ export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl
         // Preserve middle-click / modifier-click open-in-new-tab behaviour.
         if (!linkTo || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
         e.preventDefault();
-        withViewTransition(() => navigate(linkTo, { state: navState }));
+        // Pass the chunk's import promise so the transition only starts once
+        // AlbumDetail is loaded — prevents the flushSync-suspends freeze.
+        withViewTransition(() => navigate(linkTo, { state: navState }), prefetchAlbumDetail());
     }, [linkTo, navState, navigate]);
 
     return (
