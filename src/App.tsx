@@ -18,14 +18,11 @@ import { playbackManager } from './utils/PlaybackManager';
 import { GlobalScanningIndicator } from './components/GlobalScanningIndicator';
 import { applyPendingPwaUpdate } from './utils/pwaUpdate';
 
-import { AlbumDetail, ArtistDetail, PlaylistDetail } from './utils/routePrefetch';
+import { AlbumDetail, ArtistDetail, PlaylistDetail, LibraryHome, Hub, Playlists, prefetchForTabPath } from './utils/routePrefetch';
 
-const LibraryHome = React.lazy(() => import('./components/library/LibraryHome').then(module => ({ default: module.LibraryHome })));
 const GenreDetail = React.lazy(() => import('./components/library/GenreDetail').then(module => ({ default: module.GenreDetail })));
 const SetupWizard = React.lazy(() => import('./components/SetupWizard').then(module => ({ default: module.SetupWizard })));
 const LoginPage = React.lazy(() => import('./components/LoginPage').then(module => ({ default: module.LoginPage })));
-const Hub = React.lazy(() => import('./components/Hub').then(module => ({ default: module.Hub })));
-const Playlists = React.lazy(() => import('./components/library/Playlists').then(module => ({ default: module.Playlists })));
 const GlobalSearch = React.lazy(() => import('./components/GlobalSearch').then(module => ({ default: module.GlobalSearch })));
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(module => ({ default: module.SettingsModal })));
 const InviteRegister = React.lazy(() => import('./components/InviteRegister').then(module => ({ default: module.InviteRegister })));
@@ -621,6 +618,9 @@ const App: React.FC = () => {
                         key={tab.path}
                         to={tab.path}
                         end={tab.end}
+                        onPointerEnter={() => prefetchForTabPath(tab.path)}
+                        onPointerDown={() => prefetchForTabPath(tab.path)}
+                        onFocus={() => prefetchForTabPath(tab.path)}
                         className={({ isActive }) => `
                             capitalize font-semibold text-sm px-5 py-2 rounded-full
                             border backdrop-blur-md whitespace-nowrap

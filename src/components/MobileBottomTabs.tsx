@@ -1,5 +1,6 @@
 import { NavLink, useLocation } from 'react-router-dom';
 import { Home, ListMusic, Mic2, Disc3, Palette } from 'lucide-react';
+import { prefetchForTabPath } from '../utils/routePrefetch';
 
 const TAB_CONFIG = [
   { path: '/library', label: 'Hub', icon: Home, end: true },
@@ -33,6 +34,9 @@ const MobileBottomTabs: React.FC = () => {
               key={tab.path}
               to={tab.path}
               end={tab.end}
+              onPointerEnter={() => prefetchForTabPath(tab.path)}
+              onPointerDown={() => prefetchForTabPath(tab.path)}
+              onFocus={() => prefetchForTabPath(tab.path)}
               className={`flex flex-col items-center gap-0.5 px-2 py-1 rounded-lg transition-colors duration-150 no-underline min-w-[52px] ${
                 isActive
                   ? 'text-[var(--color-primary)]'
