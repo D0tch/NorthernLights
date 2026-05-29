@@ -95,7 +95,7 @@ const AlbumDetailSkeleton: React.FC<{ onBack: () => void; hero?: AlbumHeroState 
                     <div
                         className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5"
                     >
-                        <AlbumArt artUrl={hero?.artUrl} artist={hero?.artist} size={240} className="w-full h-full object-cover rounded-2xl" />
+                        <AlbumArt artUrl={hero?.artUrl} artist={hero?.artist} size={640} className="w-full h-full object-cover rounded-2xl" />
                     </div>
                 ) : (
                     <div
@@ -850,7 +850,7 @@ export const AlbumDetail: React.FC = () => {
                 <div
                     className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5"
                 >
-                    <AlbumArt artUrl={artUrl} artist={albumArtist} size={240} className="w-full h-full object-cover rounded-2xl" />
+                    <AlbumArt artUrl={artUrl} artist={albumArtist} size={640} className="w-full h-full object-cover rounded-2xl" />
                 </div>
                 <div className="flex flex-col justify-end items-center md:items-start max-w-full">
                     {/* Release type label — dynamic */}

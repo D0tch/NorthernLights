@@ -79,7 +79,7 @@ export const AlbumCard: React.FC<AlbumCardProps> = memo(({ title, artist, artUrl
                     artUrl={artUrl}
                     artist={artist}
                     album={title}
-                    size={400}
+                    size={256}
                     className="w-full h-full object-cover"
                 />
 

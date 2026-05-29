@@ -52,6 +52,15 @@ const AlbumArt: React.FC<AlbumArtProps> = ({ artUrl, artist, album, size = 300, 
     activeUrl = fetchedArtUrl;
   }
 
+  // For server-served covers (/api/art), request the smallest pre-encoded size
+  // that still looks crisp at this display size. This is where the decoded-
+  // bitmap memory win lands: a grid of thumbnails decodes 256px covers, not the
+  // full-resolution embedded art. External proxied images are left untouched.
+  const sizeBucket = size <= 256 ? 256 : size <= 640 ? 640 : 1024;
+  const displaySrc = activeUrl && activeUrl.includes('/api/art') && !/[?&]size=/.test(activeUrl)
+    ? `${activeUrl}&size=${sizeBucket}`
+    : activeUrl;
+
   const handleError = () => {
     if (activeUrl === artUrl) {
       setLocalError(true);
@@ -66,9 +75,9 @@ const AlbumArt: React.FC<AlbumArtProps> = ({ artUrl, artist, album, size = 300, 
       ref={ref}
       className={`relative overflow-hidden bg-[var(--glass-bg)] rounded-sm ${className}`}
     >
-      {activeUrl ? (
+      {displaySrc ? (
         <img
-          src={activeUrl}
+          src={displaySrc}
           alt={artist ? `${artist} album artwork` : 'Album artwork'}
           className="w-full h-full object-cover"
           onError={handleError}

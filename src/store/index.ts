@@ -32,21 +32,29 @@ export interface ToastItem {
 // Re-entrancy guard: incremented on each playAtIndex call to discard stale callbacks
 let playGeneration = 0;
 
-const buildTrackUrls = (trackId: string, path: string, token: string, quality: string = '128k') => {
+const buildTrackUrls = (trackId: string, path: string, token: string, quality: string = '128k', artHash?: string) => {
   const base = `${window.location.protocol}//${window.location.host}`;
   const tokenParam = token ? `&token=${token}` : '';
   // path is already base64 from the DB — just URL-encode for safe transport
   const pathB64 = encodeURIComponent(path);
+  // Prefer a content-hash art URL when the cover has been pre-encoded: it's
+  // identical across every track of an album, so the service worker caches and
+  // the browser decodes it ONCE per album instead of once per track. Tracks not
+  // yet processed (no artHash) fall back to the path-addressed URL, which the
+  // server resolves and serves (or live-extracts) transparently.
+  const artUrl = artHash
+    ? `${base}/api/art?hash=${artHash}${tokenParam}`
+    : `${base}/api/art?pathB64=${pathB64}${tokenParam}`;
   return {
     url: `${base}/api/stream/${encodeURIComponent(trackId)}/playlist.m3u8?quality=${quality}${tokenParam}`,
     rawUrl: `${base}/api/stream?pathB64=${pathB64}${tokenParam}`,
-    artUrl: `${base}/api/art?pathB64=${pathB64}${tokenParam}`,
+    artUrl,
   };
 };
 
 const hydrateServerTrack = (track: TrackInfo, token: string, quality: string): TrackInfo => ({
   ...track,
-  ...buildTrackUrls(track.id, track.path, token, quality),
+  ...buildTrackUrls(track.id, track.path, token, quality, (track as any).artHash),
 });
 
 const dedupeTrackIds = (trackIds: string[]): string[] => {
@@ -136,7 +144,7 @@ const hydratePlaylistTracks = (
     .filter((track): track is TrackInfo => Boolean(track?.id && track?.path))
     .map((track) => ({
       ...track,
-      ...buildTrackUrls(track.id, track.path, authToken, quality),
+      ...buildTrackUrls(track.id, track.path, authToken, quality, (track as any).artHash),
     }));
 };
 
@@ -1394,7 +1402,7 @@ export const usePlayerStore = create<PlayerState>()(
                        const quality = (get().streamingQuality === 'auto' ? '128k' : get().streamingQuality);
                        return {
                          ...track,
-                         ...buildTrackUrls(track.id, track.path, token, quality),
+                         ...buildTrackUrls(track.id, track.path, token, quality, (track as any).artHash),
                        };
                     }).filter(Boolean);
                     return { ...pl, tracks: mappedTracks };
@@ -1433,7 +1441,7 @@ export const usePlayerStore = create<PlayerState>()(
                  if (!track.path) return null;
                  return {
                    ...track,
-                   ...buildTrackUrls(track.id, track.path, token, quality),
+                   ...buildTrackUrls(track.id, track.path, token, quality, (track as any).artHash),
                  };
               }).filter(Boolean);
 
