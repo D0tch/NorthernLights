@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useCallback, useEffect } from 'react';
+import React, { useMemo, useState, useCallback, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { TrackInfo } from '../../utils/fileSystem';
@@ -26,6 +26,7 @@ import type { ArtistInfo } from '../../store/index';
 import { prefetchArtistDetail } from '../../utils/routePrefetch';
 import type { ArtistHeroState } from '../../utils/heroState';
 import { artistTransitionName, withViewTransition } from '../../utils/viewTransition';
+import { VirtualizedCardGrid } from './VirtualizedCardGrid';
 
 const ArtistCardSkeleton: React.FC = () => (
     <div className="flex flex-col items-center animate-pulse">
@@ -136,6 +137,7 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
     const setAlbumQueryResultIds = usePlayerStore(state => state.setAlbumQueryResultIds);
 
     const isMobile = useIsMobile();
+    const pageRef = useRef<HTMLDivElement>(null);
     const [queryBuilderOpen, setQueryBuilderOpen] = useState(false);
     const [queryBuilderView, setQueryBuilderView] = useState<'artists' | 'albums'>('artists');
     const [mobileOverlayOpen, setMobileOverlayOpen] = useState(false);
@@ -267,7 +269,7 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
 
     if (isLibraryLoading && library.length === 0) {
         return (
-            <div className="library-home page-container">
+            <div className="library-home page-container" ref={pageRef}>
                 <div className="library-sections">
                     {showAlbums && (
                         <section className="library-section mb-8 md:mb-12">
@@ -306,7 +308,7 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
     }
 
     return (
-        <div className="library-home page-container">
+        <div className="library-home page-container" ref={pageRef}>
             <div className="library-sections">
                 {showAlbums && (
                     <section className="library-section mb-8 md:mb-12">
@@ -338,28 +340,31 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                                 </button>
                             </div>
                         ) : (
-                            <div className="album-grid">
-                                {filteredAlbums.map((album: any) => {
+                            <VirtualizedCardGrid
+                                items={filteredAlbums as any[]}
+                                getKey={(album: any) => album.id || `${album.title}::::${album.artist_name || ''}`}
+                                estimatedRowHeight={(colWidth) => colWidth + 52}
+                                scrollParentRef={pageRef}
+                                renderItem={(album: any) => {
                                     const albumKey = `${album.title}::::${album.artist_name || ''}`;
                                     let explicitTracks = tracksByAlbum.get(albumKey) || [];
                                     if (explicitTracks.length === 0 && album.id) {
                                         explicitTracks = library.filter(t => t.albumId === album.id);
                                     }
-
                                     return (
                                         <AlbumCard
-                                            key={album.id || albumKey}
                                             title={album.title}
                                             artist={album.artist_name || ''}
                                             artUrl={album.image_url || (explicitTracks.find(t => t.artUrl)?.artUrl)}
                                             subtitle={album.artist_name || ''}
-                                            onPlay={(e) => { if (explicitTracks.length) setPlaylist(explicitTracks, 0); }}
+                                            onPlay={() => { if (explicitTracks.length) setPlaylist(explicitTracks, 0); }}
                                             linkTo={album.id ? `/library/album/${album.id}` : undefined}
                                             linkState={{ backLabel: 'Back to Library' }}
+                                            albumId={album.id}
                                         />
                                     );
-                                })}
-                            </div>
+                                }}
+                            />
                         )}
                     </section>
                 )}
@@ -394,10 +399,14 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                                 </button>
                             </div>
                         ) : (
-                            <div className="artist-grid">
-                                {filteredArtists.map((entity: any) => {
+                            <VirtualizedCardGrid
+                                items={filteredArtists as any[]}
+                                getKey={(entity: any) => entity.id || entity.name || ''}
+                                estimatedRowHeight={(colWidth) => colWidth + 40}
+                                scrollParentRef={pageRef}
+                                renderItem={(entity: any) => {
                                     const artistName = entity.name || '';
-                                    if (!entity.id) return <ArtistCard key={artistName} artist={artistName} />;
+                                    if (!entity.id) return <ArtistCard artist={artistName} />;
                                     const artistHref = `/library/artist/${entity.id}`;
                                     const artistHero: ArtistHeroState = {
                                         kind: 'artist',
@@ -407,15 +416,14 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                                     };
                                     return (
                                         <ArtistLink
-                                            key={artistName}
                                             to={artistHref}
                                             state={artistHero}
                                         >
                                             <ArtistCard artist={artistName} artistId={entity.id} />
                                         </ArtistLink>
                                     );
-                                })}
-                            </div>
+                                }}
+                            />
                         )}
                     </section>
                 )}
