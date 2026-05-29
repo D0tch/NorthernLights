@@ -38,6 +38,9 @@ server/models/musicnn
 scratch/
 server/scratch/
 
+# Art cache (generated at runtime by artCache service)
+art-cache/
+
 # Agent skills (generated at runtime)
 .agents/
 .antigravitycli/
