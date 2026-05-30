@@ -1,5 +1,6 @@
 import { Pool } from 'pg';
 import path from 'path';
+import fs from 'fs';
 
 let pool: Pool | null = null;
 let initPromise: Promise<Pool> | null = null;
@@ -143,8 +144,10 @@ export async function initDB(): Promise<Pool> {
           -- art_hash: NULL = needs processing; '' = processed, no embedded art;
           -- otherwise the content hash of the encoded cover (see services/artCache.ts).
           -- file_mtime: epoch ms of the source file, for change detection on re-scan.
+          -- file_size: bytes of the source file, surfaced as Subsonic Child.size.
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS art_hash TEXT;
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS file_mtime BIGINT;
+          ALTER TABLE tracks ADD COLUMN IF NOT EXISTS file_size BIGINT;
         EXCEPTION
           WHEN OTHERS THEN null;
         END $$;
@@ -933,6 +936,7 @@ function mapTrackRow(row: any) {
     lastPlayedAt: row.last_played_at ? new Date(row.last_played_at).getTime() : 0,
     bitrate: row.bitrate,
     format: row.format,
+    fileSize: row.file_size != null ? Number(row.file_size) : undefined,
     artistId: row.artist_id,
     albumId: row.album_id,
     genreId: row.genre_id,
@@ -1037,8 +1041,8 @@ export async function addTrack(track: any) {
   const sanitizeArray = (arr: any) => Array.isArray(arr) ? arr.map(sanitizeString) : arr;
 
   await db.query(`
-    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls, art_hash, file_mtime)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31)
+    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls, art_hash, file_mtime, file_size)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
     ON CONFLICT (id) DO UPDATE SET
       title = EXCLUDED.title,
       artist = EXCLUDED.artist,
@@ -1071,7 +1075,8 @@ export async function addTrack(track: any) {
       -- COALESCE so a metadata-parse-failure re-insert (which passes no art
       -- fields) never wipes an already-encoded cover.
       art_hash = COALESCE(EXCLUDED.art_hash, tracks.art_hash),
-      file_mtime = COALESCE(EXCLUDED.file_mtime, tracks.file_mtime)
+      file_mtime = COALESCE(EXCLUDED.file_mtime, tracks.file_mtime),
+      file_size = COALESCE(EXCLUDED.file_size, tracks.file_size)
     WHERE
       tracks.title IS DISTINCT FROM EXCLUDED.title OR
       tracks.artist IS DISTINCT FROM EXCLUDED.artist OR
@@ -1104,7 +1109,8 @@ export async function addTrack(track: any) {
       -- Trigger the upsert when only the artwork or the file mtime changed, so
       -- a re-tag (identical text metadata, new cover) still records the update.
       (EXCLUDED.art_hash IS NOT NULL AND tracks.art_hash IS DISTINCT FROM EXCLUDED.art_hash) OR
-      (EXCLUDED.file_mtime IS NOT NULL AND tracks.file_mtime IS DISTINCT FROM EXCLUDED.file_mtime)
+      (EXCLUDED.file_mtime IS NOT NULL AND tracks.file_mtime IS DISTINCT FROM EXCLUDED.file_mtime) OR
+      (EXCLUDED.file_size IS NOT NULL AND tracks.file_size IS DISTINCT FROM EXCLUDED.file_size)
   `, [
     id,
     sanitizeString(track.title) || path.basename(track.path),
@@ -1137,6 +1143,7 @@ export async function addTrack(track: any) {
     track.rawUrls ? JSON.stringify(track.rawUrls) : null,
     track.artHash ?? null,
     track.fileMtime ?? null,
+    track.fileSize ?? null,
   ]);
 
   if (track.audioFeatures) {
@@ -1155,6 +1162,32 @@ export async function addTrack(track: any) {
 export async function clearTracks() {
   const db = await initDB();
   await db.query('DELETE FROM tracks');
+}
+
+// One-time backfill of file_size for rows scanned before the column existed.
+// Cheap: it only stats files (no metadata parse) for rows missing a size and
+// updates them. Once every on-disk track has a size this is a no-op query, so
+// it is safe to call at the end of every scan.
+export async function backfillTrackFileSizes(): Promise<number> {
+  const db = await initDB();
+  const res = await db.query('SELECT id, path FROM tracks WHERE file_size IS NULL AND path IS NOT NULL');
+  if (res.rows.length === 0) return 0;
+  let updated = 0;
+  const CONCURRENCY = 16;
+  for (let i = 0; i < res.rows.length; i += CONCURRENCY) {
+    const batch = res.rows.slice(i, i + CONCURRENCY);
+    await Promise.all(batch.map(async (row: any) => {
+      try {
+        const realPath = Buffer.from(row.path, 'base64'); // raw filesystem-path bytes
+        const stat = await fs.promises.stat(realPath);
+        await db.query('UPDATE tracks SET file_size = $2 WHERE id = $1', [row.id, stat.size]);
+        updated++;
+      } catch {
+        // File missing/unreadable — leave NULL; nothing to surface.
+      }
+    }));
+  }
+  return updated;
 }
 
 export async function addTrackFeatures(trackId: string, audioFeatures: { bpm: number; acoustic_vector: number[]; embedding_vector?: number[]; is_simulated?: boolean }) {

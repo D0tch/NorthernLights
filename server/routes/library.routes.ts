@@ -217,6 +217,7 @@ router.post('/love', async (req, res) => {
 interface WalkedFile {
   buf: Buffer;
   mtime: number; // epoch ms, floored
+  size: number;  // bytes
 }
 
 async function collectAudioFiles(dirBuf: Buffer, results: WalkedFile[] = []): Promise<WalkedFile[]> {
@@ -243,7 +244,7 @@ async function collectAudioFiles(dirBuf: Buffer, results: WalkedFile[] = []): Pr
     if (stat.isDirectory()) {
       await collectAudioFiles(fullBuf, results);
     } else if (stat.isFile() && nameBuffer.toString('utf8').match(/\.(mp3|wav|ogg|flac|m4a|aac|wma)$/i)) {
-      results.push({ buf: fullBuf, mtime: Math.floor(stat.mtimeMs) });
+      results.push({ buf: fullBuf, mtime: Math.floor(stat.mtimeMs), size: stat.size });
     }
   }));
 
@@ -269,6 +270,7 @@ async function getScannerConcurrency(): Promise<number> {
 interface ScanItem {
   buf: Buffer;
   mtime?: number | null;
+  size?: number | null;
   knownArtHash?: string | null;
 }
 
@@ -432,6 +434,7 @@ async function processMetadataBatch(input: Array<Buffer | ScanItem>, concurrency
               rawUrls: metadata.rawUrls || null,
               artHash: metadata.artHash,
               fileMtime: item.mtime ?? null,
+              fileSize: item.size ?? null,
             });
 
             // If a re-tag changed the cover, the previous hash may now be
@@ -456,12 +459,12 @@ async function processMetadataBatch(input: Array<Buffer | ScanItem>, concurrency
           } else {
             console.warn(`Failed to parse metadata for ${nameStr}: ${result.error}`);
             errorCount++;
-            await addTrack({ path: dbPath, title: nameStr, bitrate: null, format: null, fileMtime: item.mtime ?? null });
+            await addTrack({ path: dbPath, title: nameStr, bitrate: null, format: null, fileMtime: item.mtime ?? null, fileSize: item.size ?? null });
           }
         } catch (err) {
           console.warn(`Failed metadata processing for ${nameStr}`, err);
           errorCount++;
-          await addTrack({ path: dbPath, title: nameStr, bitrate: null, format: null, fileMtime: item.mtime ?? null });
+          await addTrack({ path: dbPath, title: nameStr, bitrate: null, format: null, fileMtime: item.mtime ?? null, fileSize: item.size ?? null });
         } finally {
           activeMap.delete(i);
           scanStatus.activeFiles = Array.from(activeMap.values());
@@ -814,10 +817,21 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
     const b64 = f.buf.toString('base64');
     const meta = existingMeta.get(b64);
     if (!meta) {
-      itemsToProcess.push({ buf: f.buf, mtime: f.mtime, knownArtHash: null });
+      itemsToProcess.push({ buf: f.buf, mtime: f.mtime, size: f.size, knownArtHash: null });
     } else if (meta.mtime != null && meta.mtime !== f.mtime) {
-      itemsToProcess.push({ buf: f.buf, mtime: f.mtime, knownArtHash: meta.artHash });
+      itemsToProcess.push({ buf: f.buf, mtime: f.mtime, size: f.size, knownArtHash: meta.artHash });
     }
+  }
+
+  // Backfill file_size for rows that predate the column (cheap stat-only pass;
+  // a no-op once every on-disk track has a size). Runs even when there are no
+  // metadata changes so an existing library gets sizes on the next scan.
+  try {
+    const { backfillTrackFileSizes } = await import('../database');
+    const filled = await backfillTrackFileSizes();
+    if (filled > 0) console.log(`[Scanner] Backfilled file_size for ${filled} track(s)`);
+  } catch (e) {
+    console.warn('[Scanner] file_size backfill failed:', e);
   }
 
   if (itemsToProcess.length === 0 && stalePaths.length === 0) {
@@ -912,8 +926,9 @@ router.post('/refresh-metadata', async (req, res) => {
       // re-tags on these files too.
       const refreshItems: ScanItem[] = await Promise.all(fileBufs.map(async (buf) => {
         let mtime: number | null = null;
-        try { mtime = Math.floor((await fs.promises.stat(buf)).mtimeMs); } catch { /* missing → leave null */ }
-        return { buf, mtime };
+        let size: number | null = null;
+        try { const st = await fs.promises.stat(buf); mtime = Math.floor(st.mtimeMs); size = st.size; } catch { /* missing → leave null */ }
+        return { buf, mtime, size };
       }));
 
       await processMetadataBatch(refreshItems, metadataConcurrency);
