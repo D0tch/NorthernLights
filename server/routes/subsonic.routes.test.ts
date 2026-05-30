@@ -130,6 +130,42 @@ describe('subsonic route helpers', () => {
     expect(song.duration).toBe(0);
   });
 
+  it('derives a valid slash-free suffix and correct contentType from the base64-encoded path', () => {
+    const b64 = (p: string) => Buffer.from(p, 'utf8').toString('base64');
+    const cases = [
+      { path: '/music/A/B/song.mp3', format: 'MPEG', suffix: 'mp3', contentType: 'audio/mpeg' },
+      { path: '/music/A/B/song.m4a', format: 'M4A/mp42/isom', suffix: 'm4a', contentType: 'audio/mp4' },
+      { path: '/music/A/B/song.wma', format: 'ASF/audio', suffix: 'wma', contentType: 'audio/x-ms-wma' },
+      { path: '/music/A/B/song.wav', format: 'WAVE', suffix: 'wav', contentType: 'audio/wav' },
+      { path: '/music/A/B/song.flac', format: 'FLAC', suffix: 'flac', contentType: 'audio/flac' },
+    ];
+    for (const c of cases) {
+      const song = mapTrackToSubsonic({ id: 't', path: b64(c.path), format: c.format, title: 'x' });
+      expect(song.suffix).toBe(c.suffix);
+      expect(String(song.suffix)).not.toContain('/');
+      expect(song.contentType).toBe(c.contentType);
+    }
+  });
+
+  it('emits size from file_size and created from file_mtime (BIGINT comes back as a string from pg)', () => {
+    const b64 = Buffer.from('/music/A/B/song.mp3', 'utf8').toString('base64');
+    const song = mapTrackToSubsonic({
+      id: 't', path: b64, format: 'MPEG', title: 'x',
+      file_size: '7654321',      // pg returns BIGINT as a string
+      file_mtime: '1700000000000',
+    });
+    expect(song.size).toBe(7654321);
+    expect(typeof song.size).toBe('number');
+    expect(song.created).toBe(new Date(1700000000000).toISOString());
+  });
+
+  it('falls back to a slash-free suffix from the container name when a track has no path', () => {
+    const song = mapTrackToSubsonic({ id: 't', path: null, format: 'M4A/mp42/isom', title: 'x' });
+    expect(song.suffix).toBe('m4a');
+    expect(String(song.suffix)).not.toContain('/');
+    expect(song.contentType).toBe('audio/mp4');
+  });
+
   it('includes a title on artist directory entries for directory-browsing clients', () => {
     const artist = mapArtist({ id: 'artist-1', name: 'Artist' }, 3);
 
