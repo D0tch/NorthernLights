@@ -106,13 +106,15 @@ DB_NAME=musicdb
 DB_CONTAINER_NAME=music-postgres
 DB_DATA_DIR=/home/aurora/aurora-data/postgres
 MBDB_WORK_DIR=/home/aurora/aurora-data/mbdb
+ART_CACHE_DIR=/home/aurora/aurora-data/art-cache
 ```
 
 Notes:
 
 - `ALLOWED_ORIGINS` must include the browser origin that loads the app.
 - `SERVER_URL` should be the public HTTPS base URL when using Last.fm or MusicBrainz OAuth.
-- Keep `DB_DATA_DIR` and `MBDB_WORK_DIR` on a disk with enough free space.
+- Keep `DB_DATA_DIR`, `MBDB_WORK_DIR`, and `ART_CACHE_DIR` on a disk with enough free space.
+- `ART_CACHE_DIR` (default `./art-cache`) holds pre-encoded AVIF cover thumbnails generated during scans. It is a derived cache — safe to delete; covers are re-encoded on the next scan or via Settings → Library → Refresh Metadata. Keep it on a persistent disk so it survives restarts.
 - Keep `.env` private. It contains secrets.
 - OpenSubsonic clients use the same public base URL with `/rest` endpoints. Create per-client API keys in Settings -> My Account; do not expose Aurora account JWTs to third-party clients.
 
@@ -237,6 +239,8 @@ Back up:
 - `DB_DATA_DIR`
 - any manually hosted Chromecast receiver files
 - optional `logs/` if you need diagnostics
+
+`ART_CACHE_DIR` does **not** need backing up — it is a derived cache of pre-encoded covers and rebuilds on the next scan or via Settings → Library → Refresh Metadata.
 
 At minimum, stop Aurora before copying a file-backed database volume:
 

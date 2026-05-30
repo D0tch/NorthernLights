@@ -1014,8 +1014,10 @@ Classic HTTP streaming for non-HLS clients or direct downloads.
 - **Features**: Full HTTP `Range` support. WMA files auto-transcode to MP3.
 
 ### [GET] `/api/media/art`
-Retrieve embedded album artwork.
-- **Query Params**: `pathB64` or `path`.
+Retrieve album artwork. Covers are pre-encoded to AVIF during library scans (see [docs/audio_management.md](./audio_management.md) → Album Artwork Pipeline) and served from a content-hash cache.
+- **Query Params** (two addressing modes):
+  - `hash` + `size` — serve the pre-encoded AVIF directly. `size` ∈ `256 | 640 | 1024` (default `640`). Response is `image/avif`, `Cache-Control: immutable`. This is the URL the client uses once a cover is encoded (shared across all tracks of an album).
+  - `pathB64` or `path` — resolve the track's stored art hash and serve the cache file; for tracks not yet processed, falls back to live raw extraction of the embedded picture.
 
 ### [POST] `/api/cast/log`
 Write ChromeCast receiver logs to the server.

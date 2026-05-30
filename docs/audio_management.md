@@ -96,12 +96,16 @@ Configured via Workbox in `vite.config.ts`:
 
 Segments are immutable (cache-forever safe). Playlists use NetworkFirst so they're always fresh, with cache fallback for offline.
 
+### Album Artwork
+
+Covers are **pre-encoded to AVIF during library scans** rather than extracted and resized on every request. See "Album Artwork Pipeline" below. Because the cached art URL is keyed by the cover's content hash (`/api/art?hash=<hash>&size=<256|640|1024>`), every track on an album shares one URL — so the service worker stores **one** entry and the browser decodes **one** bitmap per album, not one per track. The hashed responses are served `immutable`, so a cache hit never revalidates.
+
 ## Audio Analysis Pipeline
 
 ### Overview
 The application extracts acoustic features from audio files to power the recommendation engine (Infinity Mode, Hub playlists). This is implemented as a **three-phase process**:
 
-1. **Metadata Phase** (Library Scan): ID3/Vorbis/ASF tags extracted and stored in PostgreSQL.
+1. **Metadata Phase** (Library Scan): ID3/Vorbis/ASF tags extracted and stored in PostgreSQL. The embedded cover is also encoded to AVIF here (see "Album Artwork Pipeline").
 2. **Analysis Phase** (Worker Threads): ffmpeg + Python + TensorFlow extract high-dimensional feature vectors:
    - **8D Acoustic Vector** (Rhythm, style, and instrumentation)
    - **1280D Discogs-EffNet Embedding** (Neural timbre and production fingerprint)
@@ -189,6 +193,22 @@ For electronic/synthetic playlists (target acousticness < 0.3), Discogs-EffNet e
 
 ### SQL-Level Acousticness Dealbreaker
 An asymmetric penalty applied in SQL: if the playlist targets EDM (acousticness < 0.2) but a track is fully acoustic (> 0.5), it receives a +5.0 distance spike at the query level.
+
+## Album Artwork Pipeline
+
+Embedded covers are encoded once, at ingestion time, instead of being extracted and resized on every request. This removes a per-request audio-file parse and, more importantly, caps decoded-bitmap memory in the browser (a full-resolution embedded cover can be 1000–3000px; a grid of them decoded at full size used to consume hundreds of MB and could OOM mobile tabs).
+
+**Encoding (scan time).** During the Metadata Phase, the `scanTrack` worker reads the embedded picture, hashes its bytes (SHA-256, first 32 hex chars), and encodes AVIF variants at **256 / 640 / 1024 px** via `sharp` (`quality 62`, `effort 4`). Files are written to `ART_CACHE_DIR` (default `./art-cache`), sharded by hash prefix: `art-cache/<ab>/<hash>_<size>.avif`. Encoding is keyed by content hash and skips any variant already on disk, so an album's tracks that share identical art produce **one** file set.
+
+**Change detection.** `tracks.file_mtime` is recorded per file. A scan reprocesses a file when it is new **or** its mtime changed (a re-tag), so replaced covers are re-encoded; the displaced hash is removed if no other track still references it. Files predating this feature have a null mtime and are treated as unchanged — run **Settings → Library → Refresh Metadata** once to backfill their art (Refresh Metadata re-reads every file in a folder through the same encoding path).
+
+**Serving.** `tracks.art_hash` stores the result (`NULL` = not yet processed, `''` = no embedded art, otherwise the hash). `GET /api/art` serves:
+- `?hash=<hash>&size=<256|640|1024>` → streams the pre-encoded AVIF directly, `Cache-Control: immutable`.
+- `?pathB64=<path>` → resolves the track's `art_hash` and serves the cache file; for un-processed tracks (`NULL`) it falls back to live raw extraction so art still appears before a backfill.
+
+The client requests a hash URL when `art_hash` is known (see `buildTrackUrls`) and appends `&size=` per context via `AlbumArt` (grids 256, detail hero 640, now-playing up to 1024).
+
+**Operational notes.** `ART_CACHE_DIR` is a derived cache — safe to delete; it rebuilds on the next scan or Refresh Metadata, so it does not need to be backed up. `sharp` is a runtime dependency (native module); `npm ci` installs the prebuilt binary on Linux automatically.
 
 ## Audio Processing (Planned)
 - **Web Audio API**: The audio element is wrapped with an `AudioContext` (initialized on first user interaction). Currently routes `MediaElementAudioSourceNode` → `destination`.
