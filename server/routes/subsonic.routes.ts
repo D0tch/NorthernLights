@@ -35,10 +35,29 @@ const MIME_TYPES: Record<string, string> = {
   mp3: 'audio/mpeg',
   flac: 'audio/flac',
   ogg: 'audio/ogg',
+  opus: 'audio/ogg',
   m4a: 'audio/mp4',
   aac: 'audio/aac',
   wav: 'audio/wav',
   wma: 'audio/x-ms-wma',
+  aiff: 'audio/aiff',
+};
+
+// music-metadata reports a *container* name (e.g. "MPEG", "M4A/mp42/isom",
+// "ASF/audio", "WAVE"), not a file extension. Map those — and any real
+// extension — to a canonical, slash-free Subsonic suffix that is also a
+// MIME_TYPES key, so contentType resolves correctly. Clients such as
+// Symfonium treat `suffix` as a filename extension and reject/mis-handle
+// values that contain a '/' or are not a recognised codec token.
+const FORMAT_TO_SUFFIX: Record<string, string> = {
+  mp3: 'mp3', mpeg: 'mp3', mp2: 'mp3',
+  flac: 'flac',
+  ogg: 'ogg', vorbis: 'ogg', opus: 'opus',
+  m4a: 'm4a', mp4: 'm4a', mp42: 'm4a', m4b: 'm4a', isom: 'm4a', alac: 'm4a',
+  aac: 'aac', adts: 'aac',
+  asf: 'wma', wma: 'wma',
+  wav: 'wav', wave: 'wav',
+  aiff: 'aiff', aif: 'aiff', aifc: 'aiff',
 };
 
 type RateLimitEntry = { count: number; resetAt: number };
@@ -129,9 +148,13 @@ function writeSubsonicLog(line: string) {
 function subsonicRateLimiter(req: Request, res: Response, next: NextFunction) {
   const method = normalizeMethod(String(req.params.method || ''));
   const mediaMethods = new Set(['stream', 'download', 'hlssegment']);
+  // Library syncs enumerate per-artist/per-album: folder-mode Symfonium can
+  // call getMusicDirectory once per artist *and* per album, so a large library
+  // legitimately issues many thousands of metadata requests in a burst. The
+  // old 300/5min cap caused mid-sync 429s ("errors on tracks").
   const limit = mediaMethods.has(method)
     ? { windowMs: 60 * 1000, max: 900 }
-    : { windowMs: 5 * 60 * 1000, max: 300 };
+    : { windowMs: 5 * 60 * 1000, max: 12000 };
   const now = Date.now();
 
   for (const [key, entry] of rateLimitBuckets) {
@@ -358,9 +381,27 @@ function toIso(value: unknown): string | undefined {
   return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
 }
 
+function extensionOf(p: string): string {
+  return p ? path.extname(p).slice(1).toLowerCase() : '';
+}
+
 function suffixFor(track: any): string {
-  const ext = track.path ? path.extname(String(track.path)).slice(1).toLowerCase() : '';
-  return ext || String(track.format || 'mp3').toLowerCase();
+  // tracks.path is base64 of the raw filesystem-path bytes, so a literal
+  // path.extname() yields '' for real rows. Try the value verbatim first
+  // (covers already-decoded paths / tests), then base64-decode it.
+  const rawPath = track.path ? String(track.path) : '';
+  let decoded = '';
+  try { decoded = rawPath ? Buffer.from(rawPath, 'base64').toString('utf8') : ''; } catch { /* not base64 */ }
+  for (const ext of [extensionOf(rawPath), extensionOf(decoded)]) {
+    if (ext && MIME_TYPES[ext]) return ext;
+    if (ext && FORMAT_TO_SUFFIX[ext]) return FORMAT_TO_SUFFIX[ext];
+  }
+  // Fall back to the container name (e.g. "m4a/mp42/isom"), probing each token.
+  const container = String(track.format || '').toLowerCase();
+  for (const token of container.split(/[\/\s]+/).filter(Boolean)) {
+    if (FORMAT_TO_SUFFIX[token]) return FORMAT_TO_SUFFIX[token];
+  }
+  return 'mp3';
 }
 
 export function mapTrackToSubsonic(track: any, userId?: string) {
@@ -379,14 +420,16 @@ export function mapTrackToSubsonic(track: any, userId?: string) {
     year: track.year || undefined,
     genre: track.genre || undefined,
     coverArt: subsonicSongId(track.id),
-    size: track.size || undefined,
+    size: track.file_size != null ? Number(track.file_size) : (track.size != null ? Number(track.size) : undefined),
     contentType: MIME_TYPES[suffix] || 'audio/mpeg',
     suffix,
     duration,
     bitRate,
     path: undefined,
     isVideo: false,
-    created: toIso(track.created_at),
+    // tracks has no created_at; use the source file's mtime (epoch ms) as the
+    // library "created" timestamp. toIso() handles the epoch-ms form.
+    created: toIso(track.created_at ?? track.file_mtime),
     albumId: track.album_id ? subsonicAlbumId(track.album_id) : undefined,
     artistId: track.artist_id ? subsonicArtistId(track.artist_id) : undefined,
     type: 'music',
@@ -756,7 +799,15 @@ async function handleBrowsing(req: Request, res: Response, method: string, ctx: 
       const album = await db.query('SELECT * FROM albums WHERE id = $1', [id]);
       if (!album.rows[0]) return sendError(req, res, 70, 'Album not found');
       const tracks = await db.query('SELECT t.*, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved FROM tracks t LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $2 LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $2 WHERE t.album_id = $1 ORDER BY t.disc_number NULLS LAST, t.track_number NULLS LAST, t.title', [id, ctx.userId]);
-      const summary = mapAlbum(album.rows[0], tracks.rows.length, tracks.rows.reduce((sum, row) => sum + Number(row.duration || 0), 0));
+      // albums rows have no artist_id/genre columns; derive them from the
+      // tracks so the AlbumID3 payload carries artistId/genre for clients.
+      const albumRow = album.rows[0];
+      const firstTrack = tracks.rows[0];
+      if (albumRow && firstTrack) {
+        albumRow.artist_id = albumRow.artist_id ?? firstTrack.artist_id;
+        albumRow.genre = albumRow.genre ?? firstTrack.genre;
+      }
+      const summary = mapAlbum(albumRow, tracks.rows.length, tracks.rows.reduce((sum, row) => sum + Number(row.duration || 0), 0));
       writeSubsonicLog(`getAlbum id=${id} songs=${tracks.rows.length}`);
       return sendSubsonic(req, res, subsonicSuccess({ album: { ...summary, song: tracks.rows.map((row) => mapTrackToSubsonic(row, ctx.userId)) } }));
     }
@@ -776,6 +827,11 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
     case 'getalbumlist':
     case 'getalbumlist2': {
       const type = (getParam(req, 'type') || 'alphabeticalByName').toLowerCase();
+      // Aurora tracks loved songs only, not starred albums (getStarred2 also
+      // reports none); return an empty list rather than the whole catalogue.
+      if (type === 'starred') {
+        return sendSubsonic(req, res, subsonicSuccess(buildAlbumListPayload(method, [])));
+      }
       const size = Math.max(1, Math.min(500, parseInt(getParam(req, 'size') || '10', 10) || 10));
       const offset = Math.max(0, parseInt(getParam(req, 'offset') || '0', 10) || 0);
       const genre = getParam(req, 'genre');
@@ -814,10 +870,19 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
     }
     case 'getrandomsongs': {
       const size = Math.max(1, Math.min(500, parseInt(getParam(req, 'size') || '10', 10) || 10));
-      const countRes = await db.query('SELECT COUNT(*)::int AS count FROM tracks');
-      const totalTracks = Number(countRes.rows[0]?.count || 0);
-      const randomOffset = totalTracks > size ? Math.floor(Math.random() * Math.max(1, totalTracks - size)) : 0;
-      const songs = await db.query('SELECT t.*, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved FROM tracks t LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1 LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $1 ORDER BY t.id OFFSET $2 LIMIT $3', [ctx.userId, randomOffset, size]);
+      const genre = getParam(req, 'genre');
+      const fromYear = parseInt(getParam(req, 'fromYear') || '', 10);
+      const toYear = parseInt(getParam(req, 'toYear') || '', 10);
+      const params: unknown[] = [ctx.userId];
+      const conditions: string[] = [];
+      if (genre) { params.push(genre); conditions.push(`LOWER(t.genre) = LOWER($${params.length})`); }
+      if (Number.isFinite(fromYear)) { params.push(fromYear); conditions.push(`t.year >= $${params.length}`); }
+      if (Number.isFinite(toYear)) { params.push(toYear); conditions.push(`t.year <= $${params.length}`); }
+      params.push(size);
+      const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+      // ORDER BY random() gives a true sample; the old COUNT+offset scheme
+      // returned one contiguous block (tracks.id sorts albums together).
+      const songs = await db.query(`SELECT t.*, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved FROM tracks t LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1 LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $1 ${where} ORDER BY random() LIMIT $${params.length}`, params);
       return sendSubsonic(req, res, subsonicSuccess({ randomSongs: { song: songs.rows.map((row) => mapTrackToSubsonic(row, ctx.userId)) } }));
     }
     case 'getsongsbygenre': {
@@ -891,7 +956,12 @@ async function handlePlaylists(req: Request, res: Response, method: string, ctx:
   switch (method) {
     case 'getplaylists': {
       const playlists = await getPlaylists(ctx.userId);
-      return sendSubsonic(req, res, subsonicSuccess({ playlists: { playlist: playlists.map((playlist: any) => ({ id: playlist.id, name: playlist.title, comment: playlist.description || undefined, songCount: 0, public: false, owner: ctx.username, created: toIso(playlist.createdAt), changed: toIso(playlist.createdAt), readOnly: !!playlist.isSystem })) } }));
+      const db = await initDB();
+      const counts = playlists.length > 0
+        ? await db.query('SELECT playlist_id, COUNT(*)::int AS c FROM playlist_tracks WHERE playlist_id = ANY($1) GROUP BY playlist_id', [playlists.map((p: any) => p.id)])
+        : { rows: [] as any[] };
+      const countMap = new Map<string, number>(counts.rows.map((r: any) => [r.playlist_id, Number(r.c)]));
+      return sendSubsonic(req, res, subsonicSuccess({ playlists: { playlist: playlists.map((playlist: any) => ({ id: playlist.id, name: playlist.title, comment: playlist.description || undefined, songCount: countMap.get(playlist.id) || 0, public: false, owner: ctx.username, created: toIso(playlist.createdAt), changed: toIso(playlist.createdAt), readOnly: !!playlist.isSystem })) } }));
     }
     case 'getplaylist': {
       const id = getParam(req, 'id') || '';
