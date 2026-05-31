@@ -4,7 +4,7 @@ import bcrypt from 'bcrypt';
 import fs from 'fs';
 import path from 'path';
 import * as mm from 'music-metadata';
-import { initDB, touchSubsonicApiKey, getActiveSubsonicApiKeyByPrefix, updateSubsonicApiKeyHash, getPlaylists, getPlaylistTracks, getPlaylistMeta, createPlaylist, addTracksToPlaylist, deletePlaylist, recordPlaybackForUser, setTrackLovedForUser, setTrackRatingForUser, getUserSetting, setUserSetting } from '../database';
+import { initDB, touchSubsonicApiKey, getActiveSubsonicApiKeyByPrefix, updateSubsonicApiKeyHash, getPlaylists, getPlaylistTracks, getPlaylistMeta, createPlaylist, addTracksToPlaylist, deletePlaylist, recordPlaybackForUser, setTrackLovedForUser, setTrackRatingForUser, getUserSetting, setUserSetting, getSystemSetting } from '../database';
 import { fetchCandidatePool, computeArtistCentroids } from '../services/candidatePool.service';
 import { isPathAllowed, pathToBuffer } from '../state';
 import { getOrCreateHlsSession, getSessionInfo, touchSession, getSessionOutputDir } from '../services/hlsStream.service';
@@ -19,6 +19,7 @@ const DEFAULT_HLS_QUALITY = '192';
 const DEFAULT_HLS_CODEC = 'aac';
 const SUBSONIC_KEY_PREFIX_LENGTH = 18;
 const SUBSONIC_KEY_USAGE_TOUCH_MS = 5 * 60 * 1000;
+const OPEN_SUBSONIC_ENABLED_CACHE_MS = 2_000;
 // Per-user saved play queue (Subsonic getPlayQueue/savePlayQueue + the
 // indexBasedQueue extension) is stored as a JSON blob in user_settings.
 const PLAYQUEUE_SETTING_KEY = 'subsonic:playqueue';
@@ -92,6 +93,15 @@ export function openSubsonicExtensionsPayload(): Record<string, unknown> {
 
 // Methods the OpenSubsonic spec requires to be served without authentication.
 const PUBLIC_SUBSONIC_METHODS = new Set(['getopensubsonicextensions']);
+let openSubsonicEnabledCache = { value: true, expiresAt: 0 };
+
+async function isOpenSubsonicEnabled(): Promise<boolean> {
+  const now = Date.now();
+  if (openSubsonicEnabledCache.expiresAt > now) return openSubsonicEnabledCache.value;
+  const value = (await getSystemSetting('openSubsonicEnabled')) !== false;
+  openSubsonicEnabledCache = { value, expiresAt: now + OPEN_SUBSONIC_ENABLED_CACHE_MS };
+  return value;
+}
 
 const EMPTY_STUB_PAYLOADS: Record<string, Record<string, unknown>> = {
   getpodcasts: { podcasts: { channel: [] } },
@@ -1393,6 +1403,11 @@ async function dispatch(req: Request, res: Response, method: string, ctx: Subson
 router.all('/:method', subsonicRateLimiter, async (req, res) => {
   const method = normalizeMethod(String(req.params.method));
   try {
+    if (!(await isOpenSubsonicEnabled())) {
+      writeSubsonicLog(`disabled method=${method} ${clientInfo(req)}`);
+      return sendError(req, res, 50, 'OpenSubsonic API is disabled by the server administrator.', 503);
+    }
+
     // Spec-required public endpoints (currently only getOpenSubsonicExtensions)
     // are served before authentication so clients can discover apiKey auth
     // support before they have any way to log in. Without this, Symfonium can't
