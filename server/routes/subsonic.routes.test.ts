@@ -36,6 +36,7 @@ import {
   mapAlbum,
   mapArtist,
   mapTrackToSubsonic,
+  openSubsonicExtensionsPayload,
   parseSubsonicAuthParams,
   subsonicError,
   subsonicSuccess,
@@ -52,6 +53,17 @@ describe('subsonic route helpers', () => {
     expect(parseSubsonicAuthParams({ t: 'token', s: 'salt' }).error?.code).toBe(42);
     expect(parseSubsonicAuthParams({ apiKey: 'aurora_sub_test', u: 'alice' }).error?.code).toBe(43);
     expect(parseSubsonicAuthParams({}).error?.code).toBe(43);
+  });
+
+  it('advertises apiKeyAuthentication so clients can discover apiKey auth before logging in', () => {
+    const payload = openSubsonicExtensionsPayload();
+    const extensions = (payload.openSubsonicExtensions as any).extension as Array<{ name: string; versions: number[] }>;
+    const names = extensions.map((e) => e.name);
+    expect(names).toContain('apiKeyAuthentication');
+    expect(names).toContain('formPost');
+    // The extensions list must be self-contained (no auth context) so the
+    // endpoint can be served before authentication, per the OpenSubsonic spec.
+    expect(extensions.every((e) => Array.isArray(e.versions) && e.versions.length > 0)).toBe(true);
   });
 
   it('builds standard success and error envelopes', () => {

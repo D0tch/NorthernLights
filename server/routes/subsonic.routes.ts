@@ -64,6 +64,28 @@ type RateLimitEntry = { count: number; resetAt: number };
 const rateLimitBuckets = new Map<string, RateLimitEntry>();
 const keyTouchCache = new Map<string, number>();
 
+// OpenSubsonic spec: getOpenSubsonicExtensions advertises which extensions the
+// server supports. Crucially it MUST be reachable WITHOUT authentication — it's
+// how a client discovers that `apiKeyAuthentication` exists *before* it has any
+// way to log in. Aurora is API-key-only (it stores one-way bcrypt password
+// hashes, so it can't support Subsonic token/salt auth at all), which means
+// apiKey auth is the *only* path a client like Symfonium has. If this endpoint
+// requires auth, the client never learns apiKey auth is available, falls back
+// to token/password, gets rejected, and the sync never initiates.
+export function openSubsonicExtensionsPayload(): Record<string, unknown> {
+  return {
+    openSubsonicExtensions: {
+      extension: [
+        { name: 'apiKeyAuthentication', versions: [1] },
+        { name: 'formPost', versions: [1] },
+      ],
+    },
+  };
+}
+
+// Methods the OpenSubsonic spec requires to be served without authentication.
+const PUBLIC_SUBSONIC_METHODS = new Set(['getopensubsonicextensions']);
+
 const EMPTY_STUB_PAYLOADS: Record<string, Record<string, unknown>> = {
   getpodcasts: { podcasts: { channel: [] } },
   createpodcastchannel: {},
@@ -661,14 +683,9 @@ async function handleSystem(req: Request, res: Response, method: string, ctx: Su
     case 'getlicense':
       return sendSubsonic(req, res, subsonicSuccess({ license: { valid: true } }));
     case 'getopensubsonicextensions':
-      return sendSubsonic(req, res, subsonicSuccess({
-        openSubsonicExtensions: {
-          extension: [
-            { name: 'apiKeyAuthentication', versions: [1] },
-            { name: 'formPost', versions: [1] },
-          ],
-        },
-      }));
+      // Normally served before the auth gate (see router.all below); handled
+      // here too so it still works if reached with valid auth.
+      return sendSubsonic(req, res, subsonicSuccess(openSubsonicExtensionsPayload()));
     case 'tokeninfo':
       return sendSubsonic(req, res, subsonicSuccess({
         tokenInfo: {
@@ -920,7 +937,7 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
           ) t ON t.artist_id = a.id
           ${hasQuery ? 'WHERE a.name ILIKE $1' : ''}
           GROUP BY a.id
-          ORDER BY a.name
+          ORDER BY a.name, a.id
           LIMIT $${hasQuery ? 2 : 1} OFFSET $${hasQuery ? 3 : 2}
         `, hasQuery ? [term, artistCount, artistOffset] : [artistCount, artistOffset]),
         db.query(`
@@ -930,7 +947,7 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
           LEFT JOIN tracks t ON t.album_id = a.id
           ${hasQuery ? 'WHERE a.title ILIKE $1 OR a.artist_name ILIKE $1' : ''}
           GROUP BY a.id
-          ORDER BY a.title
+          ORDER BY a.title, a.id
           LIMIT $${hasQuery ? 2 : 1} OFFSET $${hasQuery ? 3 : 2}
         `, hasQuery ? [term, albumCount, albumOffset] : [albumCount, albumOffset]),
         db.query(`
@@ -1053,6 +1070,14 @@ async function dispatch(req: Request, res: Response, method: string, ctx: Subson
 router.all('/:method', subsonicRateLimiter, async (req, res) => {
   const method = normalizeMethod(String(req.params.method));
   try {
+    // Spec-required public endpoints (currently only getOpenSubsonicExtensions)
+    // are served before authentication so clients can discover apiKey auth
+    // support before they have any way to log in. Without this, Symfonium can't
+    // detect apiKeyAuthentication, falls back to token/password auth (which
+    // Aurora can't support), and the sync fails to initiate.
+    if (PUBLIC_SUBSONIC_METHODS.has(method)) {
+      return sendSubsonic(req, res, subsonicSuccess(openSubsonicExtensionsPayload()));
+    }
     const auth = method === 'hlssegment'
       ? await authenticateHlsSegment(req)
       : await authenticateSubsonic(req);
