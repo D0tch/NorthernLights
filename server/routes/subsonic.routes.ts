@@ -4,7 +4,8 @@ import bcrypt from 'bcrypt';
 import fs from 'fs';
 import path from 'path';
 import * as mm from 'music-metadata';
-import { initDB, touchSubsonicApiKey, getActiveSubsonicApiKeyByPrefix, updateSubsonicApiKeyHash, getPlaylists, getPlaylistTracks, getPlaylistMeta, createPlaylist, addTracksToPlaylist, deletePlaylist, recordPlaybackForUser, setTrackLovedForUser, setTrackRatingForUser } from '../database';
+import { initDB, touchSubsonicApiKey, getActiveSubsonicApiKeyByPrefix, updateSubsonicApiKeyHash, getPlaylists, getPlaylistTracks, getPlaylistMeta, createPlaylist, addTracksToPlaylist, deletePlaylist, recordPlaybackForUser, setTrackLovedForUser, setTrackRatingForUser, getUserSetting, setUserSetting } from '../database';
+import { fetchCandidatePool, computeArtistCentroids } from '../services/candidatePool.service';
 import { isPathAllowed, pathToBuffer } from '../state';
 import { getOrCreateHlsSession, getSessionInfo, touchSession, getSessionOutputDir } from '../services/hlsStream.service';
 import { generateScopedToken, verifyScopedToken } from '../services/scopedToken.service';
@@ -18,6 +19,10 @@ const DEFAULT_HLS_QUALITY = '192';
 const DEFAULT_HLS_CODEC = 'aac';
 const SUBSONIC_KEY_PREFIX_LENGTH = 18;
 const SUBSONIC_KEY_USAGE_TOUCH_MS = 5 * 60 * 1000;
+// Per-user saved play queue (Subsonic getPlayQueue/savePlayQueue + the
+// indexBasedQueue extension) is stored as a JSON blob in user_settings.
+const PLAYQUEUE_SETTING_KEY = 'subsonic:playqueue';
+const EFFNET_SIMILARITY_WEIGHT = 0.55;
 
 type SubsonicContext = {
   userId: string;
@@ -78,6 +83,8 @@ export function openSubsonicExtensionsPayload(): Record<string, unknown> {
       extension: [
         { name: 'apiKeyAuthentication', versions: [1] },
         { name: 'formPost', versions: [1] },
+        { name: 'songLyrics', versions: [1] },
+        { name: 'indexBasedQueue', versions: [1] },
       ],
     },
   };
@@ -93,6 +100,7 @@ const EMPTY_STUB_PAYLOADS: Record<string, Record<string, unknown>> = {
   deletepodcastepisode: {},
   downloadpodcastepisode: {},
   refreshpodcasts: {},
+  getpodcastepisode: {},
   getnewestpodcasts: { newestPodcasts: { episode: [] } },
   getshares: { shares: { share: [] } },
   createshare: {},
@@ -696,6 +704,146 @@ async function getAlbumSummaries(userId: string, where = '', params: unknown[] =
   return res.rows.map((row) => mapAlbum(row));
 }
 
+// Subsonic getUser: Aurora is apiKey-only with out-of-band user management, so
+// remote user administration / password change are intentionally unsupported.
+// We still expose real capability flags derived from the account role so
+// clients can enable the right features on connect.
+export function buildSubsonicUser(username: string, role: string) {
+  const isAdmin = role === 'admin';
+  return {
+    username,
+    scrobblingEnabled: true,
+    adminRole: isAdmin,
+    settingsRole: isAdmin,
+    downloadRole: true,
+    uploadRole: false,
+    playlistRole: true,
+    coverArtRole: true,
+    commentRole: false,
+    podcastRole: false,
+    streamRole: true,
+    jukeboxRole: false,
+    shareRole: false,
+    videoConversionRole: false,
+    folder: [1],
+  };
+}
+
+// Map music-metadata ILyricsTag[] (embedded USLT/SYLT etc.) to the
+// OpenSubsonic songLyrics `structuredLyrics` shape. Synced lyrics carry
+// per-line `start` ms; unsynced lyrics are split into value-only lines.
+export function buildStructuredLyrics(tags: any[], displayArtist?: string, displayTitle?: string) {
+  const out: Array<Record<string, unknown>> = [];
+  for (const tag of tags || []) {
+    const lang = typeof tag?.language === 'string' && /^[a-z]{2,3}$/i.test(tag.language)
+      ? tag.language.toLowerCase()
+      : 'und';
+    if (Array.isArray(tag?.syncText) && tag.syncText.length > 0) {
+      out.push({
+        displayArtist, displayTitle, lang, offset: 0, synced: true,
+        line: tag.syncText.map((l: any) => ({
+          start: Math.max(0, Math.round(Number(l?.timestamp) || 0)),
+          value: String(l?.text ?? ''),
+        })),
+      });
+    } else if (tag?.text && String(tag.text).trim()) {
+      out.push({
+        displayArtist, displayTitle, lang, offset: 0, synced: false,
+        line: String(tag.text).replace(/\r\n?/g, '\n').split('\n').map((value) => ({ value })),
+      });
+    }
+  }
+  return out;
+}
+
+async function readEmbeddedLyrics(fileBuf: Buffer): Promise<any[]> {
+  const metadata = await mm.parseFile(fileBuf.toString('utf8'));
+  return (metadata.common?.lyrics as any[]) || [];
+}
+
+// Resolve a list of internal track ids to Subsonic song rows, preserving the
+// requested order and dropping ids that no longer exist (used by play queue).
+async function fetchOrderedTracks(ids: string[], userId: string) {
+  if (!ids.length) return [] as any[];
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT t.*, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved
+    FROM tracks t
+    LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $2
+    LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $2
+    WHERE t.id = ANY($1)
+  `, [ids, userId]);
+  const byId = new Map<string, any>(res.rows.map((r: any) => [r.id, r]));
+  return ids.map((id) => byId.get(id)).filter(Boolean);
+}
+
+// Resolve a getSimilarSongs seed (song/album/artist id) to acoustic vectors for
+// the EffNet/MusiCNN nearest-neighbour search. Returns null when the seed has
+// no analysed features yet (caller falls back to genre/artist matching).
+async function resolveSimilarSeed(rawId: string, userId: string): Promise<{ vectorStr: string; embeddingCentroidStr: string | null; excludeIds: string[] } | null> {
+  const db = await initDB();
+  if (rawId.startsWith('artist:')) {
+    const c = await computeArtistCentroids(userId, artistId(rawId), 8);
+    return c?.acousticVectorStr ? { vectorStr: c.acousticVectorStr, embeddingCentroidStr: c.embeddingCentroidStr, excludeIds: [] } : null;
+  }
+  if (rawId.startsWith('album:')) {
+    const r = (await db.query(
+      `SELECT tf.acoustic_vector_8d::text AS v8, tf.embedding_vector::text AS emb
+       FROM tracks t JOIN track_features tf ON tf.track_id = t.id
+       WHERE t.album_id = $1 AND tf.acoustic_vector_8d IS NOT NULL
+       ORDER BY t.disc_number NULLS LAST, t.track_number NULLS LAST LIMIT 1`,
+      [albumId(rawId)],
+    )).rows[0];
+    return r?.v8 ? { vectorStr: r.v8, embeddingCentroidStr: r.emb || null, excludeIds: [] } : null;
+  }
+  const seedId = songId(rawId);
+  const r = (await db.query(
+    `SELECT tf.acoustic_vector_8d::text AS v8, tf.embedding_vector::text AS emb
+     FROM track_features tf WHERE tf.track_id = $1`,
+    [seedId],
+  )).rows[0];
+  return r?.v8 ? { vectorStr: r.v8, embeddingCentroidStr: r.emb || null, excludeIds: [seedId] } : null;
+}
+
+// Genre/artist fallback for getSimilarSongs when the seed has no acoustic
+// features (e.g. not yet analysed). Same-artist tracks rank ahead of same-genre.
+async function fallbackSimilarSongs(rawId: string, count: number, userId: string) {
+  const db = await initDB();
+  let seedArtistId: string | null = null;
+  let seedGenre: string | null = null;
+  let seedSongInternal: string | null = null;
+  if (rawId.startsWith('artist:')) {
+    seedArtistId = artistId(rawId);
+  } else if (rawId.startsWith('album:')) {
+    const r = (await db.query('SELECT artist_id::text AS artist_id, genre FROM tracks WHERE album_id = $1 LIMIT 1', [albumId(rawId)])).rows[0];
+    seedArtistId = r?.artist_id || null; seedGenre = r?.genre || null;
+  } else {
+    seedSongInternal = songId(rawId);
+    const r = (await db.query('SELECT artist_id::text AS artist_id, genre FROM tracks WHERE id = $1', [seedSongInternal])).rows[0];
+    seedArtistId = r?.artist_id || null; seedGenre = r?.genre || null;
+  }
+  const params: unknown[] = [userId];
+  const where: string[] = ['t.path IS NOT NULL'];
+  const orParts: string[] = [];
+  if (seedArtistId) { params.push(seedArtistId); orParts.push(`t.artist_id::text = $${params.length}`); }
+  if (seedGenre) { params.push(seedGenre); orParts.push(`LOWER(t.genre) = LOWER($${params.length})`); }
+  if (orParts.length) where.push(`(${orParts.join(' OR ')})`);
+  if (seedSongInternal) { params.push(seedSongInternal); where.push(`t.id <> $${params.length}`); }
+  let order = 'random()';
+  if (seedArtistId) { params.push(seedArtistId); order = `(t.artist_id::text = $${params.length}) DESC, random()`; }
+  params.push(count);
+  const rows = (await db.query(`
+    SELECT t.*, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved
+    FROM tracks t
+    LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
+    LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $1
+    WHERE ${where.join(' AND ')}
+    ORDER BY ${order}
+    LIMIT $${params.length}
+  `, params)).rows;
+  return rows;
+}
+
 async function handleSystem(req: Request, res: Response, method: string, ctx: SubsonicContext) {
   const db = await initDB();
   switch (method) {
@@ -715,6 +863,20 @@ async function handleSystem(req: Request, res: Response, method: string, ctx: Su
           role: ctx.role,
         },
       }));
+    case 'getuser': {
+      const requested = getParam(req, 'username');
+      let username = ctx.username;
+      let role = ctx.role;
+      if (requested && requested !== ctx.username) {
+        // Only an admin may inspect another user; mirror Subsonic's 50.
+        if (ctx.role !== 'admin') return sendError(req, res, 50, 'Not authorized to get details for another user');
+        const other = await db.query('SELECT username, role FROM users WHERE username = $1', [requested]);
+        if (!other.rows[0]) return sendError(req, res, 70, 'User not found');
+        username = other.rows[0].username;
+        role = other.rows[0].role;
+      }
+      return sendSubsonic(req, res, subsonicSuccess({ user: buildSubsonicUser(username, role) }));
+    }
     case 'getscanstatus': {
       const count = await db.query('SELECT COUNT(*)::int AS count FROM tracks');
       return sendSubsonic(req, res, subsonicSuccess({
@@ -986,6 +1148,32 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
       writeSubsonicLog(`search method=${method} rawQuery=${JSON.stringify(String(rawQuery)).slice(0, 60)} emptyQuery=${!hasQuery} artistCount=${countPayloadItems(payload, 'artist')} albumCount=${countPayloadItems(payload, 'album')} songCount=${countPayloadItems(payload, 'song')} artistOffset=${artistOffset} albumOffset=${albumOffset} songOffset=${songOffset}`);
       return sendSubsonic(req, res, subsonicSuccess(buildSearchPayload(method, payload)));
     }
+    case 'getsimilarsongs':
+    case 'getsimilarsongs2': {
+      const rawId = getParam(req, 'id') || '';
+      const count = Math.max(1, Math.min(500, parseInt(getParam(req, 'count') || '50', 10) || 50));
+      const seed = await resolveSimilarSeed(rawId, ctx.userId);
+      let rows: any[];
+      if (seed) {
+        // EffNet/MusiCNN acoustic nearest-neighbour — the same engine the
+        // daylist/recommendation builder uses (8-d mood vector + 1280-d EffNet
+        // embedding, blended via EFFNET_SIMILARITY_WEIGHT).
+        rows = await fetchCandidatePool({
+          name: 'acoustic',
+          limit: count,
+          vectorStr: seed.vectorStr,
+          embeddingCentroidStr: seed.embeddingCentroidStr,
+          effnetWeight: EFFNET_SIMILARITY_WEIGHT,
+          userId: ctx.userId,
+          excludeIds: seed.excludeIds,
+        });
+      } else {
+        // Seed not analysed yet → genre/artist fallback so we still return songs.
+        rows = await fallbackSimilarSongs(rawId, count, ctx.userId);
+      }
+      const key = method === 'getsimilarsongs2' ? 'similarSongs2' : 'similarSongs';
+      return sendSubsonic(req, res, subsonicSuccess({ [key]: { song: rows.map((row) => mapTrackToSubsonic(row, ctx.userId)) } }));
+    }
     default:
       return false;
   }
@@ -1068,6 +1256,117 @@ async function handleAnnotations(req: Request, res: Response, method: string, ct
   }
 }
 
+async function handleQueue(req: Request, res: Response, method: string, ctx: SubsonicContext) {
+  switch (method) {
+    case 'saveplayqueue':
+    case 'saveplayqueuebyindex': {
+      const ids = getParamList(req, 'id').map(songId).filter(Boolean);
+      if (ids.length === 0) {
+        // Per spec, a save with no ids clears the queue.
+        await setUserSetting(ctx.userId, PLAYQUEUE_SETTING_KEY, null);
+        return sendSubsonic(req, res, subsonicSuccess({}));
+      }
+      let currentIndex: number;
+      if (method === 'saveplayqueuebyindex') {
+        currentIndex = parseInt(getParam(req, 'currentIndex') || '0', 10);
+      } else {
+        const current = getParam(req, 'current');
+        currentIndex = current ? ids.indexOf(songId(current)) : 0;
+      }
+      if (!Number.isFinite(currentIndex) || currentIndex < 0 || currentIndex >= ids.length) currentIndex = 0;
+      const position = Math.max(0, parseInt(getParam(req, 'position') || '0', 10) || 0);
+      await setUserSetting(ctx.userId, PLAYQUEUE_SETTING_KEY, {
+        ids,
+        currentIndex,
+        position,
+        changed: new Date().toISOString(),
+        changedBy: getParam(req, 'c') || DEFAULT_CLIENT,
+      });
+      return sendSubsonic(req, res, subsonicSuccess({}));
+    }
+    case 'getplayqueue':
+    case 'getplayqueuebyindex': {
+      const saved = await getUserSetting(ctx.userId, PLAYQUEUE_SETTING_KEY);
+      if (!saved || !Array.isArray(saved.ids) || saved.ids.length === 0) {
+        // No saved queue → empty success, per spec.
+        return sendSubsonic(req, res, subsonicSuccess({}));
+      }
+      const rows = await fetchOrderedTracks(saved.ids, ctx.userId);
+      if (rows.length === 0) return sendSubsonic(req, res, subsonicSuccess({}));
+      // Keep `current` pointing at the right track even if some queue entries
+      // were deleted from the library since the queue was saved.
+      const savedIndex = Math.min(Math.max(0, Number(saved.currentIndex) || 0), saved.ids.length - 1);
+      const currentInternalId = saved.ids[savedIndex];
+      const survivingIds = rows.map((r: any) => r.id);
+      const currentIndex = Math.max(0, survivingIds.indexOf(currentInternalId));
+      const common = {
+        position: Math.max(0, Number(saved.position) || 0),
+        username: ctx.username,
+        changed: typeof saved.changed === 'string' ? saved.changed : new Date().toISOString(),
+        changedBy: saved.changedBy || DEFAULT_CLIENT,
+        entry: rows.map((row: any) => mapTrackToSubsonic(row, ctx.userId)),
+      };
+      if (method === 'getplayqueuebyindex') {
+        return sendSubsonic(req, res, subsonicSuccess({ playQueueByIndex: { currentIndex, ...common } }));
+      }
+      return sendSubsonic(req, res, subsonicSuccess({ playQueue: { current: subsonicSongId(survivingIds[currentIndex]), ...common } }));
+    }
+    default:
+      return false;
+  }
+}
+
+async function handleLyrics(req: Request, res: Response, method: string, ctx: SubsonicContext) {
+  switch (method) {
+    case 'getlyricsbysongid': {
+      const rawId = getParam(req, 'id') || '';
+      const track = await getTrackRow(rawId, ctx.userId);
+      let structured: Array<Record<string, unknown>> = [];
+      if (track?.path) {
+        try {
+          const { fileBuf } = await resolvePlayableTrack(rawId, ctx.userId);
+          if (fs.existsSync(fileBuf)) {
+            const tags = await readEmbeddedLyrics(fileBuf);
+            structured = buildStructuredLyrics(tags, track.artist || undefined, track.title || undefined);
+          }
+        } catch { /* missing/forbidden file → empty lyrics */ }
+      }
+      return sendSubsonic(req, res, subsonicSuccess(
+        structured.length ? { lyricsList: { structuredLyrics: structured } } : { lyricsList: {} },
+      ));
+    }
+    case 'getlyrics': {
+      const artist = (getParam(req, 'artist') || '').trim();
+      const title = (getParam(req, 'title') || '').trim();
+      if (!artist && !title) return sendSubsonic(req, res, subsonicSuccess({ lyrics: {} }));
+      const db = await initDB();
+      const conds: string[] = ['path IS NOT NULL'];
+      const params: unknown[] = [];
+      if (title) { params.push(title); conds.push(`title ILIKE $${params.length}`); }
+      if (artist) { params.push(artist); conds.push(`artist ILIKE $${params.length}`); }
+      const row = (await db.query(`SELECT id, artist, title FROM tracks WHERE ${conds.join(' AND ')} LIMIT 1`, params)).rows[0];
+      let value = '';
+      if (row?.id) {
+        try {
+          const { fileBuf } = await resolvePlayableTrack(subsonicSongId(row.id), ctx.userId);
+          if (fs.existsSync(fileBuf)) {
+            const tags = await readEmbeddedLyrics(fileBuf);
+            const tag = tags.find((t: any) => t?.text && String(t.text).trim())
+              || tags.find((t: any) => Array.isArray(t?.syncText) && t.syncText.length > 0);
+            if (tag?.text) value = String(tag.text);
+            else if (tag?.syncText) value = tag.syncText.map((l: any) => String(l?.text ?? '')).join('\n');
+          }
+        } catch { /* ignore */ }
+      }
+      return sendSubsonic(req, res, subsonicSuccess({
+        lyrics: { artist: row?.artist || artist || undefined, title: row?.title || title || undefined, value },
+      }));
+    }
+    default:
+      return false;
+  }
+}
+
 async function dispatch(req: Request, res: Response, method: string, ctx: SubsonicContext) {
   if (await handleSystem(req, res, method, ctx) !== false) return;
   if (method === 'stream') return streamFile(req, res, getParam(req, 'id') || '', ctx.userId, false);
@@ -1079,6 +1378,8 @@ async function dispatch(req: Request, res: Response, method: string, ctx: Subson
   if (await handleLists(req, res, method, ctx) !== false) return;
   if (await handlePlaylists(req, res, method, ctx) !== false) return;
   if (await handleAnnotations(req, res, method, ctx) !== false) return;
+  if (await handleQueue(req, res, method, ctx) !== false) return;
+  if (await handleLyrics(req, res, method, ctx) !== false) return;
   if (method === 'getnowplaying') return sendSubsonic(req, res, subsonicSuccess({ nowPlaying: { entry: [] } }));
   if (method === 'getartistinfo') return sendSubsonic(req, res, subsonicSuccess({ artistInfo: {} }));
   if (method === 'getartistinfo2') return sendSubsonic(req, res, subsonicSuccess({ artistInfo2: {} }));

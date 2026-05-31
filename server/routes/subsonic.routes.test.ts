@@ -13,6 +13,7 @@ jest.mock('../database', () => ({
   recordPlaybackForUser: jest.fn(),
   setTrackLovedForUser: jest.fn(),
   setTrackRatingForUser: jest.fn(),
+  getSystemSetting: jest.fn(),
 }));
 jest.mock('../state', () => ({
   isPathAllowed: jest.fn(),
@@ -32,6 +33,8 @@ jest.mock('../services/scopedToken.service', () => ({
 import {
   buildAlbumListPayload,
   buildSearchPayload,
+  buildStructuredLyrics,
+  buildSubsonicUser,
   buildSubsonicXml,
   mapAlbum,
   mapArtist,
@@ -79,6 +82,40 @@ describe('subsonic route helpers', () => {
     expect(normalizeSearchQuery('rock')).toBe('rock');
     expect(normalizeSearchQuery('"hello world"')).toBe('hello world');
     expect(normalizeSearchQuery('  beatles ')).toBe('beatles');
+  });
+
+  it('advertises songLyrics and indexBasedQueue alongside apiKey auth', () => {
+    const names = ((openSubsonicExtensionsPayload().openSubsonicExtensions as any).extension as any[]).map((e) => e.name);
+    expect(names).toEqual(expect.arrayContaining(['apiKeyAuthentication', 'formPost', 'songLyrics', 'indexBasedQueue']));
+  });
+
+  it('maps user role to Subsonic capability flags (admin gets adminRole/settingsRole)', () => {
+    const admin = buildSubsonicUser('root', 'admin');
+    expect(admin).toMatchObject({ username: 'root', adminRole: true, settingsRole: true, streamRole: true, scrobblingEnabled: true });
+    const user = buildSubsonicUser('alice', 'user');
+    expect(user).toMatchObject({ username: 'alice', adminRole: false, settingsRole: false, downloadRole: true, playlistRole: true });
+    // Out-of-scope server-side features are off; no legacy/admin-over-Subsonic.
+    expect(user.podcastRole).toBe(false);
+    expect(user.shareRole).toBe(false);
+    expect(user.jukeboxRole).toBe(false);
+  });
+
+  it('builds structuredLyrics for synced and unsynced embedded lyrics', () => {
+    const synced = buildStructuredLyrics(
+      [{ language: 'eng', syncText: [{ timestamp: 0, text: 'one' }, { timestamp: 1500, text: 'two' }] }],
+      'Artist', 'Title',
+    );
+    expect(synced).toHaveLength(1);
+    expect(synced[0]).toMatchObject({ displayArtist: 'Artist', displayTitle: 'Title', lang: 'eng', synced: true });
+    expect((synced[0] as any).line).toEqual([{ start: 0, value: 'one' }, { start: 1500, value: 'two' }]);
+
+    const unsynced = buildStructuredLyrics([{ text: 'line a\r\nline b' }], 'A', 'T');
+    expect(unsynced[0]).toMatchObject({ synced: false, lang: 'und' });
+    expect((unsynced[0] as any).line).toEqual([{ value: 'line a' }, { value: 'line b' }]);
+
+    // No lyric tags → no structured entries (caller returns empty lyricsList).
+    expect(buildStructuredLyrics([])).toEqual([]);
+    expect(buildStructuredLyrics([{ text: '   ' }])).toEqual([]);
   });
 
   it('builds standard success and error envelopes', () => {
