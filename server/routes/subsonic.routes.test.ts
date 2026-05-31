@@ -36,6 +36,7 @@ import {
   mapAlbum,
   mapArtist,
   mapTrackToSubsonic,
+  normalizeSearchQuery,
   openSubsonicExtensionsPayload,
   parseSubsonicAuthParams,
   subsonicError,
@@ -64,6 +65,20 @@ describe('subsonic route helpers', () => {
     // The extensions list must be self-contained (no auth context) so the
     // endpoint can be served before authentication, per the OpenSubsonic spec.
     expect(extensions.every((e) => Array.isArray(e.versions) && e.versions.length > 0)).toBe(true);
+  });
+
+  it('treats the Subsonic match-all query ("" / empty / whitespace) as an empty query for full-library sync', () => {
+    // Symfonium (compatibility mode OFF) enumerates the library via search3
+    // with query="", which arrives as the literal two characters "".
+    expect(normalizeSearchQuery('""')).toBe('');
+    expect(normalizeSearchQuery("''")).toBe('');
+    expect(normalizeSearchQuery('')).toBe('');
+    expect(normalizeSearchQuery('   ')).toBe('');
+    expect(normalizeSearchQuery(undefined)).toBe('');
+    // A real query is preserved; wrapping quotes are stripped, inner text kept.
+    expect(normalizeSearchQuery('rock')).toBe('rock');
+    expect(normalizeSearchQuery('"hello world"')).toBe('hello world');
+    expect(normalizeSearchQuery('  beatles ')).toBe('beatles');
   });
 
   it('builds standard success and error envelopes', () => {

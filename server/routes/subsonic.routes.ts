@@ -134,6 +134,27 @@ function normalizeMethod(raw: string): string {
   return raw.replace(/\.view$/i, '').toLowerCase();
 }
 
+// Subsonic "match everything" convention: to enumerate the whole library via
+// search3, clients (including Symfonium with compatibility mode OFF) send
+// query="" — which arrives as the literal characters "" (or ''). Strip wrapping
+// quotes/whitespace; if nothing remains it's an empty (match-all) query, not a
+// literal search for quote characters (which matches nothing and makes sync
+// return 0 results).
+export function normalizeSearchQuery(raw: string | undefined): string {
+  return String(raw ?? '').trim().replace(/^["'\s]+|["'\s]+$/g, '');
+}
+
+// Diagnostics only — never logs secret values, just which auth params are
+// present so we can see what a client (e.g. Symfonium) actually sends.
+function clientInfo(req: Request): string {
+  return `c=${getParam(req, 'c') || '-'} v=${getParam(req, 'v') || '-'}`;
+}
+
+function authParamShape(req: Request): string {
+  const present = (...names: string[]) => (names.some((n) => (getParam(req, n) ?? '') !== '') ? 1 : 0);
+  return `apiKey=${present('apiKey', 'api_key', 'apikey', 'key')} u=${present('u', 'username')} p=${present('p', 'password')} t=${present('t', 'token')} s=${present('s', 'salt')}`;
+}
+
 function hashSubsonicApiKey(apiKey: string): string {
   return `sha256:${crypto.createHash('sha256').update(apiKey, 'utf8').digest('hex')}`;
 }
@@ -917,7 +938,8 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
     case 'search':
     case 'search2':
     case 'search3': {
-      const query = (getParam(req, 'query') || getParam(req, 'any') || '').trim();
+      const rawQuery = getParam(req, 'query') ?? getParam(req, 'any') ?? '';
+      const query = normalizeSearchQuery(rawQuery);
       const artistCount = parseBoundedInt(getParam(req, 'artistCount'), 20, 0, 500);
       const albumCount = parseBoundedInt(getParam(req, 'albumCount'), 20, 0, 500);
       const songCount = parseBoundedInt(getParam(req, 'songCount'), 50, 0, 500);
@@ -961,7 +983,7 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
         `, hasQuery ? [term, ctx.userId, songCount, songOffset] : [ctx.userId, songCount, songOffset]),
       ]);
       const payload = { artist: artists.rows.map((row) => mapArtist(row, row.album_count)), album: albums.rows.map((row) => mapAlbum(row)), song: songs.rows.map((row) => mapTrackToSubsonic(row, ctx.userId)) };
-      writeSubsonicLog(`search method=${method} emptyQuery=${!hasQuery} artistCount=${countPayloadItems(payload, 'artist')} albumCount=${countPayloadItems(payload, 'album')} songCount=${countPayloadItems(payload, 'song')} artistOffset=${artistOffset} albumOffset=${albumOffset} songOffset=${songOffset}`);
+      writeSubsonicLog(`search method=${method} rawQuery=${JSON.stringify(String(rawQuery)).slice(0, 60)} emptyQuery=${!hasQuery} artistCount=${countPayloadItems(payload, 'artist')} albumCount=${countPayloadItems(payload, 'album')} songCount=${countPayloadItems(payload, 'song')} artistOffset=${artistOffset} albumOffset=${albumOffset} songOffset=${songOffset}`);
       return sendSubsonic(req, res, subsonicSuccess(buildSearchPayload(method, payload)));
     }
     default:
@@ -1076,13 +1098,14 @@ router.all('/:method', subsonicRateLimiter, async (req, res) => {
     // detect apiKeyAuthentication, falls back to token/password auth (which
     // Aurora can't support), and the sync fails to initiate.
     if (PUBLIC_SUBSONIC_METHODS.has(method)) {
+      writeSubsonicLog(`public method=${method} ${clientInfo(req)} ${authParamShape(req)}`);
       return sendSubsonic(req, res, subsonicSuccess(openSubsonicExtensionsPayload()));
     }
     const auth = method === 'hlssegment'
       ? await authenticateHlsSegment(req)
       : await authenticateSubsonic(req);
     if (auth.error || !auth.ctx) {
-      writeSubsonicLog(`auth_error method=${method} code=${auth.error?.code || 44} message=${auth.error?.message || 'Authentication failed'}`);
+      writeSubsonicLog(`auth_error method=${method} code=${auth.error?.code || 44} ${clientInfo(req)} ${authParamShape(req)} message=${auth.error?.message || 'Authentication failed'}`);
       return sendError(req, res, auth.error?.code || 44, auth.error?.message || 'Authentication failed');
     }
     await dispatch(req, res, method, auth.ctx);
