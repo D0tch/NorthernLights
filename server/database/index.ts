@@ -3982,6 +3982,19 @@ export async function updateSubsonicApiKeyHash(keyId: string, keyHash: string) {
   await db.query('UPDATE subsonic_api_keys SET key_hash = $2 WHERE id = $1', [keyId, keyHash]);
 }
 
+export async function rotateSubsonicApiKey(userId: string, keyId: string, keyPrefix: string, keyHash: string) {
+  const db = await initDB();
+  const res = await db.query(`
+    UPDATE subsonic_api_keys
+    SET key_prefix = $3,
+        key_hash = $4,
+        last_used_at = NULL
+    WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+    RETURNING id, user_id, name, key_prefix, created_at, last_used_at, revoked_at
+  `, [keyId, userId, keyPrefix, keyHash]);
+  return res.rows[0] || null;
+}
+
 export async function touchSubsonicApiKey(keyId: string) {
   const db = await initDB();
   await db.query(`
@@ -3998,6 +4011,16 @@ export async function revokeSubsonicApiKey(userId: string, keyId: string) {
     UPDATE subsonic_api_keys
     SET revoked_at = NOW()
     WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL
+    RETURNING id
+  `, [keyId, userId]);
+  return (res.rowCount || 0) > 0;
+}
+
+export async function deleteRevokedSubsonicApiKey(userId: string, keyId: string) {
+  const db = await initDB();
+  const res = await db.query(`
+    DELETE FROM subsonic_api_keys
+    WHERE id = $1 AND user_id = $2 AND revoked_at IS NOT NULL
     RETURNING id
   `, [keyId, userId]);
   return (res.rowCount || 0) > 0;

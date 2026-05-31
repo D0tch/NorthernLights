@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import crypto from 'crypto';
-import { hasUsers, createUser, getUserByUsername, getUserById, updateUser, deleteUser, updateLastLogin, createInvite, getInvite, isInviteValid, incrementInviteUses, createSubsonicApiKey, listSubsonicApiKeys, revokeSubsonicApiKey } from '../database';
+import { hasUsers, createUser, getUserByUsername, getUserById, updateUser, deleteUser, updateLastLogin, createInvite, getInvite, isInviteValid, incrementInviteUses, createSubsonicApiKey, listSubsonicApiKeys, revokeSubsonicApiKey, rotateSubsonicApiKey, deleteRevokedSubsonicApiKey } from '../database';
 import { hashPassword, verifyPassword, generateToken, JwtPayload } from '../services/auth.service';
 import { generateScopedToken } from '../services/scopedToken.service';
 import { queueLlmHubRefreshForUser } from '../services/hubRefresh.service';
@@ -8,6 +8,7 @@ import { createRateLimiter } from '../middleware/rateLimit';
 
 const router = Router();
 const MIN_PASSWORD_LENGTH = 12;
+const SUBSONIC_API_KEY_PREFIX_LENGTH = 18;
 const AUTH_WINDOW_MS = 15 * 60 * 1000;
 const AUTH_BLOCK_MS = 15 * 60 * 1000;
 const AUTH_LIMITS: Record<string, number> = {
@@ -83,6 +84,26 @@ function consumeAuthAttempt(req: any, res: any, bucket: keyof typeof AUTH_LIMITS
 
   authAttempts.set(key, next);
   return true;
+}
+
+function generateSubsonicApiKeySecret() {
+  const key = `aurora_sub_${crypto.randomBytes(32).toString('base64url')}`;
+  return {
+    key,
+    keyPrefix: key.slice(0, SUBSONIC_API_KEY_PREFIX_LENGTH),
+    keyHash: `sha256:${crypto.createHash('sha256').update(key, 'utf8').digest('hex')}`,
+  };
+}
+
+function serializeSubsonicApiKey(row: any) {
+  return {
+    id: row.id,
+    name: row.name,
+    prefix: row.key_prefix,
+    createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
+    lastUsedAt: row.last_used_at ? new Date(row.last_used_at).getTime() : null,
+    revokedAt: row.revoked_at ? new Date(row.revoked_at).getTime() : null,
+  };
 }
 
 function clearAuthAttempts(req: any, bucket: keyof typeof AUTH_LIMITS, username?: unknown) {
@@ -236,14 +257,7 @@ router.get('/subsonic-api-keys', authStatusRateLimit, async (req, res) => {
     if (!req.user?.userId) return res.status(401).json({ error: 'Not authenticated' });
     const keys = await listSubsonicApiKeys(req.user.userId);
     res.json({
-      keys: keys.map((key: any) => ({
-        id: key.id,
-        name: key.name,
-        prefix: key.key_prefix,
-        createdAt: key.created_at ? new Date(key.created_at).getTime() : null,
-        lastUsedAt: key.last_used_at ? new Date(key.last_used_at).getTime() : null,
-        revokedAt: key.revoked_at ? new Date(key.revoked_at).getTime() : null,
-      })),
+      keys: keys.map(serializeSubsonicApiKey),
     });
   } catch (error) {
     console.error('Subsonic key list error:', error);
@@ -256,20 +270,11 @@ router.post('/subsonic-api-keys', authKeyMutationRateLimit, async (req, res) => 
     if (!req.user?.userId) return res.status(401).json({ error: 'Not authenticated' });
     const rawName = typeof req.body?.name === 'string' ? req.body.name.trim() : '';
     const name = rawName.slice(0, 80) || 'Subsonic client';
-    const key = `aurora_sub_${crypto.randomBytes(32).toString('base64url')}`;
-    const keyPrefix = key.slice(0, 18);
-    const keyHash = `sha256:${crypto.createHash('sha256').update(key, 'utf8').digest('hex')}`;
+    const { key, keyPrefix, keyHash } = generateSubsonicApiKeySecret();
     const row = await createSubsonicApiKey(req.user.userId, name, keyPrefix, keyHash);
     res.status(201).json({
       key,
-      record: {
-        id: row.id,
-        name: row.name,
-        prefix: row.key_prefix,
-        createdAt: row.created_at ? new Date(row.created_at).getTime() : null,
-        lastUsedAt: null,
-        revokedAt: null,
-      },
+      record: serializeSubsonicApiKey(row),
     });
   } catch (error) {
     console.error('Subsonic key create error:', error);
@@ -277,15 +282,36 @@ router.post('/subsonic-api-keys', authKeyMutationRateLimit, async (req, res) => 
   }
 });
 
+router.post('/subsonic-api-keys/:id/rotate', authKeyMutationRateLimit, async (req, res) => {
+  try {
+    if (!req.user?.userId) return res.status(401).json({ error: 'Not authenticated' });
+    const { key, keyPrefix, keyHash } = generateSubsonicApiKeySecret();
+    const row = await rotateSubsonicApiKey(req.user.userId, String(req.params.id), keyPrefix, keyHash);
+    if (!row) return res.status(404).json({ error: 'Active API key not found' });
+    res.json({
+      key,
+      record: serializeSubsonicApiKey(row),
+    });
+  } catch (error) {
+    console.error('Subsonic key rotate error:', error);
+    res.status(500).json({ error: 'Failed to rotate API key' });
+  }
+});
+
 router.delete('/subsonic-api-keys/:id', authKeyMutationRateLimit, async (req, res) => {
   try {
     if (!req.user?.userId) return res.status(401).json({ error: 'Not authenticated' });
-    const revoked = await revokeSubsonicApiKey(req.user.userId, String(req.params.id));
-    if (!revoked) return res.status(404).json({ error: 'API key not found' });
+    const keyId = String(req.params.id);
+    const revoked = await revokeSubsonicApiKey(req.user.userId, keyId);
+    if (!revoked) {
+      const deleted = await deleteRevokedSubsonicApiKey(req.user.userId, keyId);
+      if (!deleted) return res.status(404).json({ error: 'API key not found' });
+      return res.json({ status: 'deleted' });
+    }
     res.json({ status: 'revoked' });
   } catch (error) {
-    console.error('Subsonic key revoke error:', error);
-    res.status(500).json({ error: 'Failed to revoke API key' });
+    console.error('Subsonic key delete error:', error);
+    res.status(500).json({ error: 'Failed to update API key' });
   }
 });
 
