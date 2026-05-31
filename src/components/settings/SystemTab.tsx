@@ -54,12 +54,14 @@ export const SystemTab: React.FC = () => {
     const systemPlaylistConfig = usePlayerStore(state => state.systemPlaylistConfig);
     const hlsLoggingEnabled = usePlayerStore(state => state.hlsLoggingEnabled);
     const ffmpegLoggingEnabled = usePlayerStore(state => state.ffmpegLoggingEnabled);
+    const openSubsonicEnabled = usePlayerStore(state => state.openSubsonicEnabled);
     const setSettings = usePlayerStore(state => state.setSettings);
     const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
 
     const { addToast } = useToast();
     const [activeSubTab, setActiveSubTab] = useState<SystemSubTab>('processing');
     const [confirmDialog, setConfirmDialog] = useState<{ title: string; message: string; confirmLabel?: string; onConfirm: () => void } | null>(null);
+    const [subsonicToggleSaving, setSubsonicToggleSaving] = useState(false);
 
     type ServiceStatus = {
         runtime: 'pm2' | 'systemd' | 'manual';
@@ -123,6 +125,29 @@ export const SystemTab: React.FC = () => {
                 }
             },
         });
+    };
+
+    const updateOpenSubsonicEnabled = async (enabled: boolean) => {
+        const previous = openSubsonicEnabled;
+        setSettings({ openSubsonicEnabled: enabled });
+        setSubsonicToggleSaving(true);
+        try {
+            const res = await fetch('/api/settings', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                body: JSON.stringify({ openSubsonicEnabled: enabled }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                throw new Error(data.error || 'Failed to update OpenSubsonic setting');
+            }
+            addToast(enabled ? 'OpenSubsonic enabled' : 'OpenSubsonic disabled', 'success');
+        } catch (e: any) {
+            setSettings({ openSubsonicEnabled: previous });
+            addToast(e?.message || 'Failed to update OpenSubsonic setting', 'error');
+        } finally {
+            setSubsonicToggleSaving(false);
+        }
     };
 
     return (
@@ -259,6 +284,30 @@ export const SystemTab: React.FC = () => {
 
             {activeSubTab === 'service' && (
                 <div>
+                    <div className="mb-6 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-4">
+                        <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0">
+                                <h4 className="text-lg font-semibold text-[var(--color-text-primary)]">OpenSubsonic API</h4>
+                                <p className="mt-1 text-xs leading-relaxed text-[var(--color-text-muted)]">
+                                    Allow third-party Subsonic clients to use Aurora API keys against the /rest endpoint. Disabling this blocks existing keys without deleting them.
+                                </p>
+                            </div>
+                            <button
+                                type="button"
+                                aria-pressed={openSubsonicEnabled}
+                                aria-label="Toggle OpenSubsonic API"
+                                disabled={subsonicToggleSaving}
+                                onClick={() => updateOpenSubsonicEnabled(!openSubsonicEnabled)}
+                                className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${openSubsonicEnabled ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${openSubsonicEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                            </button>
+                        </div>
+                        <p className="mt-3 text-xs font-medium text-[var(--color-text-secondary)]">
+                            Status: {subsonicToggleSaving ? 'Updating OpenSubsonic access' : openSubsonicEnabled ? 'OpenSubsonic client access enabled' : 'OpenSubsonic client access disabled'}
+                        </p>
+                    </div>
+
                     <div className="flex items-center justify-between gap-3 mb-3">
                         <h4 className="text-lg font-semibold text-[var(--color-text-primary)]">Aurora Auto-Start</h4>
                         <button
