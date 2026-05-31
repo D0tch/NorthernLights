@@ -101,7 +101,7 @@ Copy `.env.example` to `.env` and review at least:
 
 Most provider keys and AI settings can also be configured from the app settings UI.
 
-Third-party Subsonic clients should connect to the Aurora base URL and use an API key from Settings -> My Account -> OpenSubsonic API Keys. Username/password and token/salt Subsonic auth are intentionally disabled.
+Third-party Subsonic clients should connect to the Aurora base URL and use an API key from Settings -> API Keys. Username/password and token/salt Subsonic auth are intentionally disabled. Admins can disable OpenSubsonic client access from Settings -> System -> Service without deleting existing keys.
 
 ## Production
 

@@ -31,7 +31,9 @@ Aurora implements an API-key-only OpenSubsonic surface for clients that support 
 
 ### Authentication
 
-Create keys in Aurora at **Settings -> My Account -> OpenSubsonic API Keys**. The raw key is shown once; later lists show only the prefix, creation time, last-used time, and revocation state. Revoking a key immediately blocks future `/rest` requests that use it.
+Create keys in Aurora at **Settings -> API Keys**. The raw key is shown once; later lists show only the prefix, creation time, last-used time, and revocation state. Rotating a key replaces the secret on the same record and shows the new raw key once. Revoking a key immediately blocks future `/rest` requests that use it, and revoked records can be deleted from the list.
+
+Admins can disable OpenSubsonic client access from **Settings -> System -> Service**. When disabled, `/rest` returns OpenSubsonic error `50` and existing API keys remain stored but unusable until access is enabled again.
 
 Pass the key as one of:
 
@@ -75,19 +77,24 @@ These are Aurora JWT endpoints, not `/rest` endpoints.
 | --- | --- | --- |
 | `GET` | `/api/auth/subsonic-api-keys` | List current user's keys and revoked records. |
 | `POST` | `/api/auth/subsonic-api-keys` | Body: `{ "name": "Client name" }`. Returns the raw key once. |
-| `DELETE` | `/api/auth/subsonic-api-keys/:id` | Revoke one key owned by the current user. |
+| `POST` | `/api/auth/subsonic-api-keys/:id/rotate` | Rotate one active key owned by the current user. Returns the replacement raw key once. |
+| `DELETE` | `/api/auth/subsonic-api-keys/:id` | Revoke an active key. If the key is already revoked, delete the revoked record. |
 
 ### Supported Endpoint Matrix
 
 | Group | Endpoints |
 | --- | --- |
-| System | `ping`, `getLicense`, `getOpenSubsonicExtensions`, `tokenInfo`, `getScanStatus`, `startScan` |
+| System | `ping`, `getLicense`, `getOpenSubsonicExtensions`, `tokenInfo`, `getScanStatus`, `startScan`, `getUser` |
 | Browsing/library | `getMusicFolders`, `getIndexes`, `getMusicDirectory`, `getGenres`, `getArtists`, `getArtist`, `getAlbum`, `getSong`, empty `getArtistInfo`/`getArtistInfo2`/`getAlbumInfo`/`getAlbumInfo2` |
-| Lists/search | `getAlbumList`, `getAlbumList2`, `getRandomSongs`, `getSongsByGenre`, `getStarred`, `getStarred2`, `getNowPlaying`, `getTopSongs`, `search`, `search2`, `search3` |
+| Lists/search | `getAlbumList`, `getAlbumList2`, `getRandomSongs`, `getSongsByGenre`, `getStarred`, `getStarred2`, `getSimilarSongs`, `getSimilarSongs2`, `search`, `search2`, `search3`, empty `getNowPlaying`/`getTopSongs` |
+| Lyrics | `getLyricsBySongId` (`songLyrics` extension) and legacy `getLyrics`, sourced from embedded synced/unsynced file lyrics |
+| Play queue | `getPlayQueue`, `savePlayQueue`, and the `indexBasedQueue` variants `getPlayQueueByIndex`/`savePlayQueueByIndex` |
 | Playlists | `getPlaylists`, `getPlaylist`, `createPlaylist`, `updatePlaylist`, `deletePlaylist` |
 | Media | `stream`, `download`, `hls`, internal `hlsSegment`, `getCoverArt` |
 | Annotation/playback | `star`, `unstar`, `setRating`, `scrobble` |
 | Empty compatibility stubs | Podcasts, shares, internet radio, chat, bookmarks, videos, captions, avatar, and jukebox probes return successful empty payloads where Aurora has no equivalent feature. |
+
+`getOpenSubsonicExtensions` advertises `apiKeyAuthentication`, `formPost`, `songLyrics`, and `indexBasedQueue`. `getSimilarSongs`/`getSimilarSongs2` use Aurora's acoustic similarity engine (EffNet/MusiCNN embeddings) rather than last.fm, falling back to genre/artist matching for not-yet-analysed seeds. The play queue is persisted per user, so `getPlayQueue` resumes across devices.
 
 Aurora exposes opaque Subsonic IDs as `artist:<uuid>`, `album:<uuid>`, and URL-safe `song:v1:<encodedTrackId>` values. Use IDs returned by browsing/search/list endpoints instead of constructing IDs manually. Older `song:<rawTrackId>` IDs are still accepted for compatibility.
 

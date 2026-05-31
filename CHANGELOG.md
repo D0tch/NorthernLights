@@ -25,6 +25,13 @@
 
 ## [Unreleased]
 
+### API
+- **Subsonic Key Rotation**: Added `POST /api/auth/subsonic-api-keys/:id/rotate` to replace a key secret in place and return the new raw key once. `DELETE /api/auth/subsonic-api-keys/:id` now deletes already-revoked key records after the first delete revokes active keys.
+- **OpenSubsonic Service Toggle**: Added the `openSubsonicEnabled` system setting. When disabled from Settings -> System -> Service, `/rest` returns OpenSubsonic error `50` without deleting existing keys.
+
+### UI
+- **API Keys Tab**: Moved OpenSubsonic key management out of My Account into a dedicated Settings -> API Keys tab with create, rotate, revoke, delete, and disabled-service states.
+
 ## [v1.0.0-rc.3] - 2026-05-19
 
 ### Library

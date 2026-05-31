@@ -116,7 +116,7 @@ Notes:
 - Keep `DB_DATA_DIR`, `MBDB_WORK_DIR`, and `ART_CACHE_DIR` on a disk with enough free space.
 - `ART_CACHE_DIR` (default `./art-cache`) holds pre-encoded AVIF cover thumbnails generated during scans. It is a derived cache — safe to delete; covers are re-encoded on the next scan or via Settings → Library → Refresh Metadata. Keep it on a persistent disk so it survives restarts.
 - Keep `.env` private. It contains secrets.
-- OpenSubsonic clients use the same public base URL with `/rest` endpoints. Create per-client API keys in Settings -> My Account; do not expose Aurora account JWTs to third-party clients.
+- OpenSubsonic clients use the same public base URL with `/rest` endpoints. Create per-client API keys in Settings -> API Keys; do not expose Aurora account JWTs to third-party clients. Admins can disable OpenSubsonic client access from Settings -> System -> Service without deleting stored keys.
 
 ## Running With PM2
 
@@ -257,7 +257,7 @@ For larger installs, prefer PostgreSQL-native backups from inside the container.
 - Audio analysis is CPU and memory heavy. Start with Balanced or Background CPU usage in Settings.
 - Chromecast uses AAC-in-HLS for reliability.
 - Hub LLM playlists refresh only for active users on login or Hub access. Prompt-generated playlists are durable.
-- OpenSubsonic `/rest` accepts only Aurora API keys. Username/password and token/salt Subsonic authentication are disabled.
+- OpenSubsonic `/rest` accepts only Aurora API keys when the server-wide OpenSubsonic switch is enabled. Username/password and token/salt Subsonic authentication are disabled.
 - MusicBrainz import needs temporary disk space and can take a while.
 - If scans fail on unusual filenames, check FFmpeg availability and `logs/`.
 
