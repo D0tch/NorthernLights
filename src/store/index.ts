@@ -396,6 +396,7 @@ export interface PlayerState {
   systemPlaylistConfig: Record<string, boolean>;
   hlsLoggingEnabled: boolean;
   ffmpegLoggingEnabled: boolean;
+  openSubsonicEnabled: boolean;
   llmBaseUrl: string;
   llmApiKey: string;
   llmModelName: string;
@@ -901,6 +902,7 @@ export const usePlayerStore = create<PlayerState>()(
         systemPlaylistConfig: { ...defaultSystemPlaylistConfig },
         hlsLoggingEnabled: false,
         ffmpegLoggingEnabled: false,
+        openSubsonicEnabled: true,
         llmBaseUrl: '',
         llmApiKey: '',
         llmModelName: '',
@@ -1116,6 +1118,7 @@ export const usePlayerStore = create<PlayerState>()(
                 systemPlaylistConfig: normalizeSystemPlaylistConfig(data.systemPlaylistConfig),
                 hlsLoggingEnabled: data.hlsLoggingEnabled === true,
                 ffmpegLoggingEnabled: data.ffmpegLoggingEnabled === true,
+                openSubsonicEnabled: data.openSubsonicEnabled !== false,
                 llmBaseUrl: data.llmBaseUrl || '',
                 llmApiKey: data.llmApiKey || '',
                 llmModelName: data.llmModelName || '',
@@ -1199,6 +1202,7 @@ export const usePlayerStore = create<PlayerState>()(
                 systemPlaylistConfig: state.systemPlaylistConfig,
                 hlsLoggingEnabled: state.hlsLoggingEnabled,
                 ffmpegLoggingEnabled: state.ffmpegLoggingEnabled,
+                openSubsonicEnabled: state.openSubsonicEnabled,
                 llmBaseUrl: state.llmBaseUrl,
                 llmApiKey: state.llmApiKey,
                 llmModelName: state.llmModelName,
