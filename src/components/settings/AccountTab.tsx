@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { CheckCircle2, Copy, KeyRound, Plus, Radio, ShieldAlert, Trash2, UserRound } from 'lucide-react';
+import { CheckCircle2, KeyRound, Radio, ShieldAlert, UserRound } from 'lucide-react';
 import { usePlayerStore } from '../../store/index';
 import { useToast } from '../../hooks/useToast';
 import { ConfirmModal } from '../ConfirmModal';
@@ -7,15 +7,6 @@ import { PromptModal } from '../PromptModal';
 
 interface AccountTabProps {
     onClose: () => void;
-}
-
-interface SubsonicApiKeyRecord {
-    id: string;
-    name: string;
-    prefix: string;
-    createdAt: number | null;
-    lastUsedAt: number | null;
-    revokedAt: number | null;
 }
 
 export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
@@ -44,9 +35,6 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
     const [lbTokenInput, setLbTokenInput] = useState('');
     const [lbConnecting, setLbConnecting] = useState(false);
     const [lastFmConnecting, setLastFmConnecting] = useState(false);
-    const [subsonicKeys, setSubsonicKeys] = useState<SubsonicApiKeyRecord[]>([]);
-    const [subsonicKeyLoading, setSubsonicKeyLoading] = useState(false);
-    const [newSubsonicKey, setNewSubsonicKey] = useState<string | null>(null);
     const isMountedRef = useRef(true);
     const lastFmPollRunRef = useRef(0);
 
@@ -61,92 +49,6 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
             lastFmPollRunRef.current += 1;
         };
     }, []);
-
-    const fetchSubsonicKeys = async () => {
-        try {
-            const res = await fetch('/api/auth/subsonic-api-keys', { headers: getAuthHeader() });
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) {
-                showToast(data.error || 'Failed to load Subsonic API keys', 'error');
-                return;
-            }
-            if (isMountedRef.current) setSubsonicKeys(Array.isArray(data.keys) ? data.keys : []);
-        } catch (e: any) {
-            showToast(e?.message || 'Network error', 'error');
-        }
-    };
-
-    useEffect(() => {
-        fetchSubsonicKeys();
-    }, []);
-
-    const createSubsonicKey = () => {
-        setPromptDialog({
-            title: 'Create Subsonic API Key',
-            label: 'Name this client key.',
-            placeholder: 'Symfonium on Pixel',
-            confirmLabel: 'Create Key',
-            onSubmit: async (name) => {
-                setPromptDialog(null);
-                setSubsonicKeyLoading(true);
-                try {
-                    const res = await fetch('/api/auth/subsonic-api-keys', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-                        body: JSON.stringify({ name }),
-                    });
-                    const data = await res.json().catch(() => ({}));
-                    if (!res.ok || !data.key) {
-                        showToast(data.error || 'Failed to create API key', 'error');
-                        return;
-                    }
-                    setNewSubsonicKey(data.key);
-                    await fetchSubsonicKeys();
-                    showToast('Subsonic API key created', 'success');
-                } catch (e: any) {
-                    showToast(e?.message || 'Network error', 'error');
-                } finally {
-                    setSubsonicKeyLoading(false);
-                }
-            },
-        });
-    };
-
-    const revokeSubsonicKey = (key: SubsonicApiKeyRecord) => {
-        setConfirmDialog({
-            title: 'Revoke API Key',
-            message: `Revoke "${key.name}"? Clients using this key will lose access immediately.`,
-            confirmLabel: 'Revoke Key',
-            onConfirm: async () => {
-                setConfirmDialog(null);
-                try {
-                    const res = await fetch(`/api/auth/subsonic-api-keys/${encodeURIComponent(key.id)}`, {
-                        method: 'DELETE',
-                        headers: getAuthHeader(),
-                    });
-                    const data = await res.json().catch(() => ({}));
-                    if (!res.ok) {
-                        showToast(data.error || 'Failed to revoke API key', 'error');
-                        return;
-                    }
-                    await fetchSubsonicKeys();
-                    showToast('API key revoked', 'success');
-                } catch (e: any) {
-                    showToast(e?.message || 'Network error', 'error');
-                }
-            },
-        });
-    };
-
-    const copyNewSubsonicKey = async () => {
-        if (!newSubsonicKey) return;
-        try {
-            await navigator.clipboard.writeText(newSubsonicKey);
-            showToast('API key copied', 'success');
-        } catch {
-            showToast('Could not copy API key', 'error');
-        }
-    };
 
     const pollLastFmCompletion = async () => {
         const runId = lastFmPollRunRef.current + 1;
@@ -407,70 +309,6 @@ export const AccountTab: React.FC<AccountTabProps> = ({ onClose }) => {
                         Update Password
                     </button>
                 </form>
-            </section>
-
-            <section className="account-panel account-panel--subsonic">
-                <div className="account-panel__header">
-                    <div className="account-panel__title">
-                        <KeyRound size={17} aria-hidden="true" />
-                        <h4>OpenSubsonic API Keys</h4>
-                    </div>
-                    <p>Use API keys with compatible Subsonic clients. Password and token auth are disabled.</p>
-                </div>
-
-                {newSubsonicKey && (
-                    <div className="account-api-key-reveal">
-                        <div>
-                            <span>New key</span>
-                            <code>{newSubsonicKey}</code>
-                        </div>
-                        <button type="button" onClick={copyNewSubsonicKey} className="btn btn-ghost btn-sm">
-                            <Copy size={15} aria-hidden="true" />
-                            Copy
-                        </button>
-                    </div>
-                )}
-
-                <div className="account-provider-list">
-                    {subsonicKeys.length === 0 ? (
-                        <div className="account-provider account-provider--empty">
-                            <div className="account-provider__copy">
-                                <h5>No API keys</h5>
-                                <p>Create a key, then paste it into your Subsonic client as the API key.</p>
-                            </div>
-                        </div>
-                    ) : (
-                        subsonicKeys.map(key => (
-                            <div key={key.id} className={`account-provider ${key.revokedAt ? 'account-provider--revoked' : ''}`}>
-                                <div className="account-provider__main">
-                                    <div className="account-provider__copy">
-                                        <div className="account-provider__title-row">
-                                            <h5>{key.name}</h5>
-                                            <span className={key.revokedAt ? 'account-status' : 'account-status account-status--connected'}>
-                                                {key.revokedAt ? 'Revoked' : key.prefix}
-                                            </span>
-                                        </div>
-                                        <p>
-                                            Created {key.createdAt ? new Date(key.createdAt).toLocaleDateString() : 'recently'}
-                                            {key.lastUsedAt ? ` · Last used ${new Date(key.lastUsedAt).toLocaleDateString()}` : ' · Never used'}
-                                        </p>
-                                    </div>
-                                    {!key.revokedAt && (
-                                        <button type="button" onClick={() => revokeSubsonicKey(key)} className="btn btn-danger btn-sm">
-                                            <Trash2 size={15} aria-hidden="true" />
-                                            Revoke
-                                        </button>
-                                    )}
-                                </div>
-                            </div>
-                        ))
-                    )}
-                </div>
-
-                <button type="button" onClick={createSubsonicKey} disabled={subsonicKeyLoading} className="btn btn-primary btn-sm account-api-key-create">
-                    <Plus size={15} aria-hidden="true" />
-                    {subsonicKeyLoading ? 'Creating...' : 'Create API Key'}
-                </button>
             </section>
 
             <section className="account-panel account-panel--connections">

@@ -1807,6 +1807,11 @@ body {
   text-transform: capitalize;
 }
 
+.account-settings__role--disabled {
+  color: var(--color-text-muted);
+  background: color-mix(in srgb, var(--color-surface) 64%, transparent);
+}
+
 .account-profile,
 .account-panel {
   position: relative;
@@ -2069,6 +2074,33 @@ body {
 
 .account-api-key-create {
   justify-self: start;
+}
+
+.account-api-key-disabled {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  padding: var(--spacing-md);
+  border: 1px solid color-mix(in srgb, var(--color-warning) 36%, var(--glass-border));
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-warning) 8%, var(--color-bg-primary));
+  color: var(--color-text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
+.account-api-key-disabled svg {
+  margin-top: 2px;
+  color: var(--color-warning);
+  flex-shrink: 0;
+}
+
+.account-api-key-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
 }
 
 .account-provider__setting {
@@ -3921,7 +3953,8 @@ body {
 
   .account-settings__role,
   .account-password-form__action,
-  .account-danger__action {
+  .account-danger__action,
+  .account-api-key-actions {
     justify-self: start;
   }
 
@@ -3938,6 +3971,10 @@ body {
   .account-provider__main > .btn,
   .account-token-row__action {
     justify-self: start;
+  }
+
+  .account-api-key-actions {
+    justify-content: flex-start;
   }
 
   .library-settings__header,
