@@ -3475,13 +3475,11 @@ export async function getPlaylistsForUserWithTracks(userId: string) {
           pt.playlist_id,
           t.*,
           pt.added_at AS playlist_added_at,
-          EXISTS (
-            SELECT 1 FROM user_loved_tracks ult
-            WHERE ult.user_id = $1 AND ult.track_id = t.id
-          ) AS is_loved
+          (ult.track_id IS NOT NULL) AS is_loved
         FROM playlist_tracks pt
         JOIN tracks t ON t.id = pt.track_id
         JOIN playlists p ON p.id = pt.playlist_id
+        LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $1
         WHERE p.user_id = $1
         ORDER BY pt.playlist_id, pt.sort_order ASC
       `,
@@ -3507,12 +3505,10 @@ export async function getPlaylistTracks(playlistId: string, userId: string | nul
   const db = await initDB();
   const res = userId
     ? await db.query(`
-        SELECT t.*, pt.added_at AS playlist_added_at, EXISTS (
-          SELECT 1 FROM user_loved_tracks ult
-          WHERE ult.user_id = $2 AND ult.track_id = t.id
-        ) AS is_loved
+        SELECT t.*, pt.added_at AS playlist_added_at, (ult.track_id IS NOT NULL) AS is_loved
         FROM tracks t
         JOIN playlist_tracks pt ON t.id = pt.track_id
+        LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $2
         WHERE pt.playlist_id = $1
         ORDER BY pt.sort_order ASC
       `, [playlistId, userId])
