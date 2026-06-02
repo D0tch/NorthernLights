@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { memo, useEffect, useState } from 'react';
 import { usePlayerStore } from '../store/index';
 import { Play, Speaker } from 'lucide-react';
 import { useSwipe } from '../hooks/useSwipe';
@@ -200,4 +200,6 @@ const MobileMiniPlayer = () => {
   );
 };
 
-export default MobileMiniPlayer;
+// Always mounted while a queue exists; navigation passes no props, so memoize
+// to keep tab taps from re-rendering the mini player and its now-playing chrome.
+export default memo(MobileMiniPlayer);

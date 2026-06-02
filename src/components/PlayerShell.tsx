@@ -8,7 +8,7 @@ import { usePlayerPlacement } from '../hooks/usePlayerPlacement';
  * top-edge bend toggle. The placement choice is persisted via the
  * usePlayerPlacement hook.
  */
-export const PlayerShell: React.FC = () => {
+const PlayerShellInner: React.FC = () => {
   const [placement, , togglePlacement] = usePlayerPlacement();
   const [edgeHover, setEdgeHover] = useState(false);
   const closeTimer = useRef<number | null>(null);
@@ -66,5 +66,9 @@ export const PlayerShell: React.FC = () => {
     </div>
   );
 };
+
+// Memoized so it doesn't reconcile (and re-render PlayerControls) on every
+// navigation — App re-renders on each route change but passes no props here.
+export const PlayerShell = React.memo(PlayerShellInner);
 
 export default PlayerShell;

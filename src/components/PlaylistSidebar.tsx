@@ -32,7 +32,7 @@ function getDefaultQueuePlaylistName(): string {
   }).format(new Date())}`;
 }
 
-export const PlaylistSidebar: React.FC = () => {
+const PlaylistSidebarInner: React.FC = () => {
   const playlist = usePlayerStore(state => state.playlist);
   const removeFromPlaylist = usePlayerStore(state => state.removeFromPlaylist);
   const moveInPlaylist = usePlayerStore(state => state.moveInPlaylist);
@@ -307,3 +307,8 @@ export const PlaylistSidebar: React.FC = () => {
     </>
   );
 };
+
+// Always mounted (mobile bottom-sheet / desktop right panel). Navigation never
+// changes its data, so memoize it to stop the whole queue list reconciling on
+// every tab tap — it re-renders only when its own store selectors change.
+export const PlaylistSidebar = React.memo(PlaylistSidebarInner);
