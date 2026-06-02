@@ -338,6 +338,7 @@ class PlaybackManager {
                     this.seek(details.seekTime);
                 }
             },
+            stop: () => usePlayerStore.getState().stop(),
         };
 
         for (const [action, handler] of Object.entries(handlers) as [MediaSessionAction, MediaSessionActionHandler][]) {
