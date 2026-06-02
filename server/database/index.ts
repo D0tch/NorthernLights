@@ -1443,6 +1443,16 @@ export async function purgeOrphanedEntities(): Promise<{ albums: number; artists
         WHERE credited.name = lower(btrim(a.name))
       )
       AND NOT EXISTS (
+        -- Keep artists referenced only via track_artist_credits (producers,
+        -- composers, featured credits whose name isn't in any track.artists JSON).
+        -- Without this guard the ON DELETE CASCADE on track_artist_credits.artist_id
+        -- silently destroys credit-only artists on every rescan. Index-backed via
+        -- track_artist_credits_artist_role_idx.
+        SELECT 1
+        FROM track_artist_credits tac
+        WHERE tac.artist_id = a.id
+      )
+      AND NOT EXISTS (
         SELECT 1
         FROM artists redirect
         WHERE redirect.merged_into = a.id

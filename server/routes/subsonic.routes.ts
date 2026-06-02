@@ -177,9 +177,17 @@ function hashSubsonicApiKey(apiKey: string): string {
   return `sha256:${crypto.createHash('sha256').update(apiKey, 'utf8').digest('hex')}`;
 }
 
+// Constant-time string compare to avoid leaking the stored hash byte-by-byte via
+// the short-circuit timing of `===`. Mirrors the timingSafeEqual guard in admin.routes.ts.
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, 'utf8');
+  const bBuf = Buffer.from(b, 'utf8');
+  return aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
+}
+
 async function verifySubsonicApiKey(apiKey: string, storedHash: string): Promise<{ ok: boolean; upgradedHash?: string }> {
   if (storedHash.startsWith('sha256:')) {
-    return { ok: hashSubsonicApiKey(apiKey) === storedHash };
+    return { ok: timingSafeStringEqual(hashSubsonicApiKey(apiKey), storedHash) };
   }
 
   const ok = await bcrypt.compare(apiKey, storedHash);

@@ -101,6 +101,9 @@ export default defineConfig({
             handler: 'NetworkFirst',
             options: {
               cacheName: 'nl-audio-playlists-v1',
+              // Fall back to the cached playlist quickly when the network is slow
+              // or offline, instead of hanging on a dead request.
+              networkTimeoutSeconds: 5,
               expiration: { maxEntries: 200, maxAgeSeconds: 86400 },
               cacheableResponse: { statuses: [0, 200] }
             }
@@ -179,11 +182,14 @@ export default defineConfig({
       output: {
         manualChunks(id) {
           if (id.includes('node_modules')) {
-            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) {
-              return 'vendor-react';
-            }
+            // lucide-react must be tested BEFORE the generic `react` check —
+            // 'lucide-react'.includes('react') is true, so the react branch would
+            // otherwise swallow it into vendor-react and this chunk would never emit.
             if (id.includes('lucide-react')) {
               return 'vendor-icons';
+            }
+            if (id.includes('react') || id.includes('react-dom') || id.includes('react-router')) {
+              return 'vendor-react';
             }
             if (id.includes('hls.js')) {
               return 'vendor-hls';

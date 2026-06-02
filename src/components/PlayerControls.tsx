@@ -211,7 +211,7 @@ const SignalChain: React.FC<SignalChainProps> = ({
 // Inline waveform with trailing time label
 // ──────────────────────────────────────────────────────────────────────────
 
-const InlineWaveform: React.FC = () => {
+const InlineWaveformImpl: React.FC = () => {
   const currentTime = usePlaybackTimeStore((s) => s.currentTime);
   const duration = usePlaybackTimeStore((s) => s.duration);
   const playlist = usePlayerStore((s) => s.playlist);
@@ -260,6 +260,11 @@ const InlineWaveform: React.FC = () => {
     </div>
   );
 };
+
+// Memoized: takes no props, so parent (PlayerControls) re-renders for unrelated
+// state no longer reconcile the waveform subtree. Its own currentTime
+// subscription still updates the time label per tick.
+const InlineWaveform = React.memo(InlineWaveformImpl);
 
 // ──────────────────────────────────────────────────────────────────────────
 // PlayerControls
@@ -429,7 +434,8 @@ export const PlayerControls: React.FC = () => {
       <div className="player-transport">
         <button
           onClick={toggleShuffle}
-          aria-label="Toggle shuffle"
+          aria-label={shuffle ? 'Shuffle on' : 'Shuffle off'}
+          aria-pressed={shuffle}
           className={transportBtnClass}
           style={{ opacity: shuffle ? 1 : 0.4 }}
         >
@@ -491,7 +497,8 @@ export const PlayerControls: React.FC = () => {
 
         <button
           onClick={cycleRepeatAction}
-          aria-label={`Repeat mode: ${repeat}`}
+          aria-label={repeat === 'one' ? 'Repeat one' : repeat === 'all' ? 'Repeat all' : 'Repeat off'}
+          aria-pressed={repeat !== 'none'}
           className={transportBtnClass}
           style={{ opacity: repeat === 'none' ? 0.4 : 1 }}
         >
@@ -521,7 +528,8 @@ export const PlayerControls: React.FC = () => {
       <div className="player-far">
         <button
           onClick={toggleInfinityMode}
-          aria-label="Toggle Infinity Mode"
+          aria-label={isInfinityMode ? 'Infinity Mode on' : 'Infinity Mode off'}
+          aria-pressed={isInfinityMode}
           className={auxBtnClass}
           style={{
             opacity: isInfinityMode ? 1 : 0.55,

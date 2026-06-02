@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { usePlayerStore } from '../store/index';
 import { usePlaybackTimeStore } from '../store/playbackTime';
+import { formatTime } from '../utils/formatTime';
+
+const KEYBOARD_SEEK_STEP_S = 5;   // Arrow keys
+const KEYBOARD_SEEK_PAGE_S = 10;  // PageUp / PageDown
 
 const INTRO_DURATION_MS = 520; // total intro sweep duration
 function easeOutCubic(t: number): number { return 1 - Math.pow(1 - t, 3); }
@@ -153,6 +157,7 @@ const WaveformProgressBarComponent: React.FC<WaveformProgressBarProps> = ({
         : rawDuration;
     const theme = usePlayerStore(state => state.theme);
     const isDark = theme === 'dark';
+    const reducedMotion = usePlayerStore(state => state.reducedMotion);
     const containerRef = useRef<HTMLDivElement>(null);
     const baseCanvasRef = useRef<HTMLCanvasElement>(null);
     const progressCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -173,6 +178,14 @@ const WaveformProgressBarComponent: React.FC<WaveformProgressBarProps> = ({
 
     const updateProgressLayer = useCallback((time: number) => {
         const progress = durationRef.current > 0 ? clampProgress(time / durationRef.current) : 0;
+        // Update the slider's accessible position imperatively (no React re-render)
+        // so screen readers can report seek position without breaking the
+        // per-tick render-avoidance this component is built around.
+        const container = containerRef.current;
+        if (container && durationRef.current > 0) {
+            container.setAttribute('aria-valuenow', String(Math.round(time)));
+            container.setAttribute('aria-valuetext', `${formatTime(time)} of ${formatTime(durationRef.current)}`);
+        }
         const layer = progressLayerRef.current;
         const progressCanvas = progressCanvasRef.current;
         if (!layer || !progressCanvas) return;
@@ -235,6 +248,14 @@ const WaveformProgressBarComponent: React.FC<WaveformProgressBarProps> = ({
         introStartRef.current = null;
         animProgressRef.current = 0;
 
+        // Respect the user's reduced-motion preference: skip the sweep and draw
+        // the final waveform immediately.
+        if (reducedMotion) {
+            animProgressRef.current = 1;
+            drawStaticLayers(1);
+            return;
+        }
+
         const tick = (now: number) => {
             if (introStartRef.current === null) introStartRef.current = now;
             const elapsed = now - introStartRef.current;
@@ -256,8 +277,9 @@ const WaveformProgressBarComponent: React.FC<WaveformProgressBarProps> = ({
             if (introAnimRef.current !== null) cancelAnimationFrame(introAnimRef.current);
         };
     // drawStaticLayers is intentionally excluded: we only want this to fire when peaks change
+    // (or when the reduced-motion preference flips).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [peaks]);
+    }, [peaks, reducedMotion]);
 
     // Load and decode audio when URL changes. Skip for live transcoded streams.
     useEffect(() => {
@@ -355,11 +377,50 @@ const WaveformProgressBarComponent: React.FC<WaveformProgressBarProps> = ({
         onSeek(fraction * duration);
     }, [duration, onSeek]);
 
+    const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+        if (!duration) return;
+        const current = usePlaybackTimeStore.getState().currentTime;
+        let next: number | null = null;
+        switch (e.key) {
+            case 'ArrowRight':
+            case 'ArrowUp':
+                next = current + KEYBOARD_SEEK_STEP_S;
+                break;
+            case 'ArrowLeft':
+            case 'ArrowDown':
+                next = current - KEYBOARD_SEEK_STEP_S;
+                break;
+            case 'PageUp':
+                next = current + KEYBOARD_SEEK_PAGE_S;
+                break;
+            case 'PageDown':
+                next = current - KEYBOARD_SEEK_PAGE_S;
+                break;
+            case 'Home':
+                next = 0;
+                break;
+            case 'End':
+                next = duration;
+                break;
+            default:
+                return;
+        }
+        e.preventDefault();
+        onSeek(Math.max(0, Math.min(duration, next)));
+    }, [duration, onSeek]);
+
     return (
         <div
             ref={containerRef}
             className="waveform-container"
             onClick={handleClick}
+            onKeyDown={handleKeyDown}
+            role="slider"
+            tabIndex={0}
+            aria-label="Seek"
+            aria-valuemin={0}
+            aria-valuemax={Number.isFinite(duration) ? Math.round(duration) : 0}
+            aria-valuenow={0}
             style={{
                 position: 'relative',
                 width: '100%',

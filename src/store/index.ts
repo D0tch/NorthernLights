@@ -286,8 +286,13 @@ export interface PlayerState {
   library: TrackInfo[];
   libraryFolders: string[];
   isLibraryLoading: boolean;
+  // Non-null when the last library/playlist fetch failed (network error or
+  // non-OK status). Lets the UI distinguish "genuinely empty" from "load failed"
+  // and offer a Retry instead of a blank screen.
+  libraryError: string | null;
   playlists: Playlist[];
   isPlaylistsLoading: boolean;
+  playlistsError: string | null;
 
   // Entity State (for navigation)
   artists: ArtistInfo[];
@@ -540,6 +545,11 @@ export interface PlayerState {
   // PWA update state
   pendingUpdate: boolean;
   setPendingUpdate: (val: boolean) => void;
+
+  // True when the browser blocked playback for lack of a user gesture
+  // (autoplay policy). UI can show a "tap to play" affordance.
+  autoplayBlocked: boolean;
+  setAutoplayBlocked: (val: boolean) => void;
 }
 
 // Remove `PlayerPersist` hack as it was unnecessary and broke inference further
@@ -771,8 +781,10 @@ export const usePlayerStore = create<PlayerState>()(
         library: [] as TrackInfo[],
         libraryFolders: [] as string[],
         isLibraryLoading: false as boolean,
+        libraryError: null as string | null,
         playlists: [] as Playlist[],
         isPlaylistsLoading: false as boolean,
+        playlistsError: null as string | null,
         artists: [] as ArtistInfo[],
         albums: [] as AlbumInfo[],
         genres: [] as EntityInfo[],
@@ -2221,6 +2233,11 @@ export const usePlayerStore = create<PlayerState>()(
         pendingUpdate: false,
         setPendingUpdate: (val: boolean) => {
           set({ pendingUpdate: val } as Partial<PlayerState>);
+        },
+
+        autoplayBlocked: false,
+        setAutoplayBlocked: (val: boolean) => {
+          set({ autoplayBlocked: val } as Partial<PlayerState>);
         },
       };
     },

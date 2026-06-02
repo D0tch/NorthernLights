@@ -114,6 +114,7 @@ function useIsMobile(breakpoint = 768) {
 export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }> = ({ section }) => {
     const library = usePlayerStore(state => state.library);
     const isLibraryLoading = usePlayerStore(state => state.isLibraryLoading);
+    const libraryError = usePlayerStore(state => state.libraryError);
     const artistEntities = usePlayerStore(state => state.artists);
     const albumEntities = usePlayerStore(state => state.albums);
     const genreEntities = usePlayerStore(state => state.genres);
@@ -243,6 +244,27 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                             </div>
                         </section>
                     )}
+                </div>
+            </div>
+        );
+    }
+
+    // A failed load with an empty library must not look identical to a genuinely
+    // empty library (which renders nothing). Show the error + a Retry instead.
+    if (library.length === 0 && libraryError) {
+        return (
+            <div className="library-home page-container">
+                <div className="flex flex-col items-center justify-center py-24 text-center gap-4">
+                    <p className="text-[var(--color-text)] font-medium">{libraryError}</p>
+                    <p className="text-[var(--color-text-muted)] text-sm max-w-sm">
+                        Your library may still be there — this is usually a temporary connection issue.
+                    </p>
+                    <button
+                        onClick={() => { void usePlayerStore.getState().fetchLibraryFromServer(); }}
+                        className="btn btn-primary"
+                    >
+                        Retry
+                    </button>
                 </div>
             </div>
         );
