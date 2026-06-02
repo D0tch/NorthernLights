@@ -6,7 +6,7 @@ The project lives in the `NorthernLights` repository, but the product name in th
 
 ## Status
 
-Current release: `1.0.0-rc.3`
+Current release: `1.0.0-rc.4`
 
 Aurora is ready for early self-hosted production use. Expect fast iteration and occasional migrations before the first stable `1.0.0` release.
 
@@ -38,21 +38,38 @@ Open the URL printed by the installer, create the database from the setup screen
 
 For manual deployment, reverse proxy setup, backups, and update procedures, see [docs/production_guide.md](docs/production_guide.md).
 
-## Core Features
+## Features
 
-- Local-library streaming for MP3, FLAC, OGG/Opus, M4A/AAC, WAV, and FFmpeg-backed WMA.
-- Browser, mobile, PWA, and Chromecast playback through HLS.
-- Multi-user accounts with JWT authentication and invite-based registration.
-- OpenSubsonic-compatible `/rest` API for third-party Subsonic clients, using Aurora-generated API keys.
-- PostgreSQL plus pgvector storage, managed through Podman or Docker.
-- Three-phase scanning: filesystem walk, metadata extraction, and audio analysis.
-- MusiCNN 8D acoustic vectors plus 1280D Discogs-EffNet embeddings for similarity.
-- MusicBrainz genre ontology import and local genre mapping.
-- AI Hub playlists and prompt-generated playlists using local library health, genre paths, acoustic similarity, EffNet embeddings, diversity controls, and banned-genre handling.
-- External metadata integrations for Last.fm, Genius, MusicBrainz, ListenBrainz, and JamBase where configured.
-- Artist detail pages with popular local tracks, upcoming shows, hero artwork, and similar artists.
-- Playlist management with manual playlists, durable prompt-generated playlists, and transient Hub playlists.
-- Light/dark themes, route-based navigation with prefetched detail views and reduced-motion-aware transitions, global search, queue editing, loved tracks, scrobbling, and local audio output selection.
+Aurora is built to feel like a premium music service that happens to run on your own hardware — not just a folder with a play button.
+
+### Playback that respects your files
+- **Bit-perfect when you want it, adaptive when you need it.** Play your original files untouched (lossless passthrough for FLAC, ALAC, Opus, WAV, and more) or transcode on the fly across quality tiers, selected automatically from network and device. Broad format support including MP3, FLAC, OGG/Opus, M4A/AAC/ALAC, WAV, and FFmpeg-backed WMA.
+- **True gapless transitions** — the next track's stream is prepared in parallel and promoted in milliseconds, not stitched together after a stall.
+- **Full transport, everywhere it matters:** lock-screen / notification / media-key controls with live scrubbing, audio-output device routing, a screen wake lock so the phone won't sleep mid-track, a sleep timer that fades out gently, and automatic resume right where you left off.
+
+### A library that understands your music
+- **Three-phase, incremental scanning** that scales to large collections — only changed files are reprocessed, with live progress as it runs.
+- **Metadata that usually gets dropped on the floor:** per-role artist credits (composer, producer, remixer, engineer, and more), edition/remaster folding so versions group cleanly, embedded cover art re-encoded to crisp AVIF at multiple sizes, and a real MusicBrainz genre *ontology* instead of flat tags.
+- **On-demand enrichment** from Last.fm, MusicBrainz, and Genius for biographies, credits, and artwork.
+
+### Discovery computed from *your* collection
+- **Acoustic similarity from real machine-learning embeddings** — MusiCNN acoustic vectors plus 1280-dimension Discogs-EffNet embeddings, indexed with pgvector — so songs are matched by how they actually sound, not by their genre labels.
+- **A Hub of auto-curated surfaces:** a time-of-day daylist, on-repeat, a long-tail "repeat rewind," artist radio, decade and genre mixes, and seasonal time capsules.
+- **AI playlists from a prompt or a mood,** grounded in your own library — with genre-ontology-aware blending, diversity / artist-spread / discovery-bias controls, banned genres, and automatic relaxation when a request is too narrow. Recommendations come from your music's actual audio fingerprint, never a cloud catalog.
+
+### Plays on every screen
+- **Installable PWA** with offline replay of tracks you've already played.
+- **Chromecast** — cast a single track or a whole queue, with an optional custom receiver and automatic session recovery if the connection drops.
+- **OpenSubsonic-compatible API** with per-user, rotatable API keys, so third-party Subsonic clients work out of the box.
+
+### Connected to the wider ecosystem
+- **Scrobbling and now-playing** to Last.fm and ListenBrainz, with clear feedback if a scrobble fails.
+- **In-app lyrics**, **live-concert discovery** tied to the artists already in your library, and MusicBrainz sign-in.
+- **Shareable public playlist links** — send a read-only track list to anyone, no account required.
+
+### Built for a household, polished for daily use
+- **Multi-user** accounts with roles, invite-based registration, and an admin dashboard; loved tracks, play history, and playlists are all per-user.
+- **A modern interface:** a gesture-driven mobile shell, a waveform scrubber, album-art dominant-color theming, light / dark / glass themes with full reduced-motion support, instant global search, and a drag-to-reorder queue.
 
 ## Requirements
 
