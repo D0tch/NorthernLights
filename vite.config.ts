@@ -84,6 +84,13 @@ export default defineConfig({
       },
       workbox: {
         clientsClaim: true,
+        // Drop precaches from previous builds when a new SW activates.
+        cleanupOutdatedCaches: true,
+        // Serve the cached app shell for offline/refresh navigations so client
+        // routes resolve without a network round-trip. API and auth requests are
+        // excluded so they aren't answered with HTML.
+        navigateFallback: 'index.html',
+        navigateFallbackDenylist: [/^\/api\//, /^\/rest\//],
         runtimeCaching: [
           {
             // HLS transport stream segments — immutable chunks used by browser playback.

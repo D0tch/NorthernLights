@@ -2015,6 +2015,21 @@ export const usePlayerStore = create<PlayerState>()(
           const track = playlist[index];
           if (!track) return;
 
+          // Rebuild stream/raw/art URLs from the CURRENT media token rather than
+          // trusting the persisted URL: the token may have rotated since the track
+          // was queued (most visibly across an offline reload), in which case the
+          // baked-in token fails auth — and because `url` is non-empty, the
+          // fileHandle fallback below is skipped, so the track dies silently.
+          // For server tracks (those with a base64 `path`) this also keeps the SW
+          // cache key stable within a session. Local-only tracks (fileHandle, no
+          // path) are left untouched.
+          const { mediaAccessToken, authToken, streamingQuality } = get();
+          const freshToken = mediaAccessToken || authToken || '';
+          const freshQuality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+          const playable: TrackInfo = track.path && freshToken
+            ? { ...track, ...buildTrackUrls(track.id, track.path, freshToken, freshQuality, (track as any).artHash) }
+            : track;
+
           const generation = ++playGeneration;
 
           // Immediately set the DB-known duration so the UI doesn't flash "0:10"
@@ -2042,9 +2057,10 @@ export const usePlayerStore = create<PlayerState>()(
                 index,
                 repeat
               );
-            } else if (track.url) {
-              // Not casting: play locally — pass both HLS and raw URLs
-              await playbackManager.playUrl(track.url, track.rawUrl || '', track.title, track.artist || ((track.artists as string[])?.join(', ')), track.artUrl, track.album, track.format);
+            } else if (playable.url) {
+              // Not casting: play locally — pass both HLS and raw URLs (rebuilt
+              // with the current token above).
+              await playbackManager.playUrl(playable.url, playable.rawUrl || '', playable.title, playable.artist || ((playable.artists as string[])?.join(', ')), playable.artUrl, playable.album, playable.format);
             } else if (track.fileHandle) {
                // Fallback for local file handles
                await playbackManager.playFile(track.fileHandle);

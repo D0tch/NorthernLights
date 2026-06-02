@@ -31,11 +31,28 @@ class PreloadManager {
         this.prewarmTrack(nextTrack, streamingQuality, options);
     }
 
+    // Prewarming is a non-essential optimization, so don't spend bandwidth on it
+    // when we shouldn't: offline (the request just fails), Save-Data enabled, or a
+    // slow cellular link. Reads navigator directly since this is not a React hook.
+    private prewarmSkipReason(): string | null {
+        if (typeof navigator !== 'undefined' && navigator.onLine === false) return 'offline';
+        const conn = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection;
+        if (conn?.saveData) return 'save-data';
+        if (conn?.effectiveType === '2g' || conn?.effectiveType === 'slow-2g') return `slow connection (${conn.effectiveType})`;
+        return null;
+    }
+
     public prewarmTrack(
         track: TrackInfo,
         streamingQuality: StreamingQualityPreset,
         options: PrewarmOptions = {}
     ): void {
+        const skipReason = this.prewarmSkipReason();
+        if (skipReason) {
+            logPlaybackInfo(`[Preload] Skipping prewarm: ${skipReason}`);
+            return;
+        }
+
         const prewarmUrl = this.buildPrewarmUrl(track, streamingQuality, options);
         if (!prewarmUrl) return;
 
