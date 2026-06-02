@@ -692,7 +692,7 @@ function resetScanStatus(libraryChanged = false) {
 // ─── API Endpoints ────────────────────────────────────────────────────
 
 // Add a mapped folder
-router.post('/add', async (req, res) => {
+router.post('/add', requireAdmin, async (req, res) => {
   const { path: dirPath } = req.body;
   if (!dirPath || typeof dirPath !== 'string') {
     return res.status(400).json({ error: 'Missing absolute path parameter' });
@@ -710,7 +710,7 @@ router.post('/add', async (req, res) => {
 });
 
 // Trigger library scan (walk → metadata → analysis, all in one)
-router.post('/scan', async (req, res) => {
+router.post('/scan', requireAdmin, async (req, res) => {
   console.log('Scan Request Received. Body:', JSON.stringify(req.body));
   const { path: dirPath } = req.body;
   if (!dirPath || typeof dirPath !== 'string') {
@@ -1054,7 +1054,7 @@ router.get('/analyze/status', async (req, res) => {
 });
 
 // Remove a mapped folder
-router.post('/remove', async (req, res) => {
+router.post('/remove', requireAdmin, async (req, res) => {
   const { path: dirPath } = req.body;
   if (!dirPath || typeof dirPath !== 'string') {
     return res.status(400).json({ error: 'Missing absolute path parameter' });
