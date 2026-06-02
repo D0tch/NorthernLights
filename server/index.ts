@@ -28,6 +28,7 @@ import playbackRoutes from './routes/playback.routes';
 import settingsRoutes from './routes/settings.routes';
 import hubRoutes from './routes/hub.routes';
 import playlistsRoutes from './routes/playlists.routes';
+import publicRoutes from './routes/public.routes';
 import artistsRoutes from './routes/artists.routes';
 import albumsRoutes from './routes/albums.routes';
 import genresRoutes from './routes/genres.routes';
@@ -241,6 +242,10 @@ app.get('/api/client-config', (_req, res) => {
 // Mount /rest before the global JWT middleware so third-party clients can
 // reach it without Aurora browser session tokens.
 app.use('/rest', subsonicRoutes);
+
+// Public, unauthenticated routes (e.g. shared playlist snapshots). Mounted before
+// the global JWT middleware; the module is self-contained and read-only.
+app.use('/api/public', publicRoutes);
 
 // Apply JWT auth middleware to all API routes
 app.use(jwtAuthMiddleware);

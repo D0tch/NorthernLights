@@ -724,6 +724,16 @@ export async function initDB(): Promise<Pool> {
         EXCEPTION WHEN OTHERS THEN null;
         END $$;
 
+        -- Shareable playlist links: an opaque token + a public flag enabling an
+        -- unauthenticated, read-only snapshot of the playlist.
+        DO $$
+        BEGIN
+          ALTER TABLE playlists ADD COLUMN IF NOT EXISTS share_token TEXT;
+          ALTER TABLE playlists ADD COLUMN IF NOT EXISTS is_public BOOLEAN NOT NULL DEFAULT FALSE;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+        CREATE UNIQUE INDEX IF NOT EXISTS playlists_share_token_idx ON playlists(share_token) WHERE share_token IS NOT NULL;
+
         -- ==========================================
         -- JAMBASE / CONCERTS
         -- ==========================================
@@ -3533,6 +3543,61 @@ export async function getPlaylistOwner(playlistId: string): Promise<string | nul
   const res = await db.query('SELECT user_id FROM playlists WHERE id = $1', [playlistId]);
   if (res.rows.length === 0) return null;
   return (res.rows[0] as any).user_id || null;
+}
+
+// Enable/disable a public share link for a playlist the user owns. The token is
+// minted once and preserved across re-enables so an already-shared link keeps
+// working. `candidateToken` is used only when no token exists yet. Returns the
+// resulting { shareToken, isPublic }, or null if the user doesn't own it.
+export async function setPlaylistShare(
+  playlistId: string,
+  userId: string,
+  enable: boolean,
+  candidateToken: string,
+): Promise<{ shareToken: string | null; isPublic: boolean } | null> {
+  const db = await initDB();
+  const res = await db.query(
+    `UPDATE playlists
+       SET is_public = $3,
+           share_token = CASE WHEN $3 THEN COALESCE(share_token, $4) ELSE share_token END
+     WHERE id = $1 AND user_id = $2
+     RETURNING share_token, is_public`,
+    [playlistId, userId, enable, candidateToken],
+  );
+  if (res.rows.length === 0) return null;
+  const row = res.rows[0] as any;
+  return { shareToken: row.share_token ?? null, isPublic: !!row.is_public };
+}
+
+// Public, read-only snapshot for a share token. Returns ONLY display fields —
+// never the base64 path/id (which encode the filesystem location) or anything
+// that enables streaming. Null when the token is unknown or sharing is disabled.
+export async function getPublicPlaylistByShareToken(token: string): Promise<
+  | { name: string; description: string | null; trackCount: number; tracks: Array<{ title: string; artist: string; album: string; duration: number }> }
+  | null
+> {
+  const db = await initDB();
+  const plRes = await db.query(
+    `SELECT id, title, description FROM playlists WHERE share_token = $1 AND is_public = TRUE`,
+    [token],
+  );
+  if (plRes.rows.length === 0) return null;
+  const pl = plRes.rows[0] as any;
+  const trackRes = await db.query(
+    `SELECT t.title, t.artist, t.album, t.duration
+       FROM tracks t
+       JOIN playlist_tracks pt ON t.id = pt.track_id
+      WHERE pt.playlist_id = $1
+      ORDER BY pt.sort_order ASC`,
+    [pl.id],
+  );
+  const tracks = trackRes.rows.map((r: any) => ({
+    title: r.title || 'Unknown Title',
+    artist: r.artist || 'Unknown Artist',
+    album: r.album || '',
+    duration: typeof r.duration === 'number' ? r.duration : 0,
+  }));
+  return { name: pl.title, description: pl.description ?? null, trackCount: tracks.length, tracks };
 }
 
 export async function getPlaylistMeta(playlistId: string): Promise<{ userId: string | null; isSystem: boolean } | null> {

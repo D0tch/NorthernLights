@@ -20,6 +20,7 @@ import { applyPendingPwaUpdate } from './utils/pwaUpdate';
 
 const SetupWizard = React.lazy(() => import('./components/SetupWizard').then(module => ({ default: module.SetupWizard })));
 const LoginPage = React.lazy(() => import('./components/LoginPage').then(module => ({ default: module.LoginPage })));
+const SharedPlaylistView = React.lazy(() => import('./components/SharedPlaylistView').then(module => ({ default: module.SharedPlaylistView })));
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(module => ({ default: module.SettingsModal })));
 const TrackContextMenu = React.lazy(() => import('./components/library/TrackContextMenu').then(module => ({ default: module.TrackContextMenu })));
 const DatabaseControl = React.lazy(() => import('./components/DatabaseControl').then(module => ({ default: module.DatabaseControl })));
@@ -436,6 +437,17 @@ const App: React.FC = () => {
       }, 2000);
     });
   }, [checkHealth, checkSetupStatus, authToken]);
+
+  // Public shared-playlist view — accessible without auth and before any setup/DB
+  // gate. Like the invite flow, a share link is always a fresh full-page load, so
+  // reading window.location directly is accurate and keeps App location-subscription-free.
+  if (window.location.pathname.startsWith('/share/')) {
+    return (
+      <React.Suspense fallback={<FullPageFallback label="Loading playlist..." />}>
+        <SharedPlaylistView />
+      </React.Suspense>
+    );
+  }
 
   // If database is not connected, show the control panel immediately
   if (dbConnected === false && !isDatabaseStarting) {
