@@ -32,6 +32,33 @@ export interface ToastItem {
 // Re-entrancy guard: incremented on each playAtIndex call to discard stale callbacks
 let playGeneration = 0;
 
+// In-flight dedup + cancellation for the library/playlist fetches. The init
+// sequence and the 10s health poller both fire these unawaited; without dedup a
+// second call (or a reconnect) duplicates the request, and without an
+// AbortController an in-flight fetch can resolve after logout and overwrite
+// state with another session's data. Mirrors the promise-cache in externalImagery.ts.
+let inFlightLibraryFetch: Promise<void> | null = null;
+let inFlightPlaylistsFetch: Promise<void> | null = null;
+let libraryFetchAbort: AbortController | null = null;
+let playlistsFetchAbort: AbortController | null = null;
+
+// Bumped on each optimistic playlist mutation so a slow in-flight mutation's
+// rollback / server-refetch can't clobber a newer optimistic edit applied after it.
+let playlistMutationGeneration = 0;
+
+function abortInFlightLibraryFetches() {
+  libraryFetchAbort?.abort();
+  playlistsFetchAbort?.abort();
+  libraryFetchAbort = null;
+  playlistsFetchAbort = null;
+  inFlightLibraryFetch = null;
+  inFlightPlaylistsFetch = null;
+}
+
+function isAbortError(e: unknown): boolean {
+  return !!e && typeof e === 'object' && (e as { name?: string }).name === 'AbortError';
+}
+
 const buildTrackUrls = (trackId: string, path: string, token: string, quality: string = '128k', artHash?: string) => {
   const base = `${window.location.protocol}//${window.location.host}`;
   const tokenParam = token ? `&token=${token}` : '';
@@ -996,7 +1023,11 @@ export const usePlayerStore = create<PlayerState>()(
           authExpiredUsername: '',
         }),
 
-        expireAuthSession: (message = 'Your session expired. Log in again to continue.') => set((state: PlayerState) => ({
+        expireAuthSession: (message = 'Your session expired. Log in again to continue.') => {
+          // Cancel any in-flight library/playlist fetch so it can't resolve after
+          // logout and repopulate state with the previous session's data.
+          abortInFlightLibraryFetches();
+          return set((state: PlayerState) => ({
           authToken: null,
           mediaAccessToken: null,
           sseAccessToken: null,
@@ -1014,7 +1045,8 @@ export const usePlayerStore = create<PlayerState>()(
           activeWorkers: 0,
           activeFiles: [],
           scanningFile: null,
-        })),
+        }));
+        },
 
         login: async (username: string, password: string) => {
           try {
@@ -1328,10 +1360,16 @@ export const usePlayerStore = create<PlayerState>()(
         },
 
         fetchLibraryFromServer: async () => {
-          set({ isLibraryLoading: true });
+          // Dedup: a second caller (init + health poller) joins the in-flight request.
+          if (inFlightLibraryFetch) return inFlightLibraryFetch;
+          libraryFetchAbort?.abort();
+          const ac = new AbortController();
+          libraryFetchAbort = ac;
+          set({ isLibraryLoading: true, libraryError: null });
+          const run = (async () => {
           try {
             const authHeaders = (get() as any).getAuthHeader();
-            const res = await fetch('/api/library', { headers: authHeaders });
+            const res = await fetch('/api/library', { headers: authHeaders, signal: ac.signal });
             if (res.ok) {
               const data = await res.json();
               
@@ -1389,19 +1427,36 @@ export const usePlayerStore = create<PlayerState>()(
                 };
               });
             } else {
-              set({ isLibraryLoading: false });
+              const msg = `Couldn't load your library (server returned ${res.status}).`;
+              set({ isLibraryLoading: false, libraryError: msg });
+              get().addToast(msg, 'error', { actionLabel: 'Retry', onAction: () => { void get().fetchLibraryFromServer(); } });
             }
           } catch (e) {
+            // Aborted on logout — drop silently; don't surface an error or clear loading.
+            if (isAbortError(e) || ac.signal.aborted) return;
             console.error("Failed to fetch library from server", e);
-            set({ isLibraryLoading: false });
+            const msg = "Couldn't reach the server to load your library.";
+            set({ isLibraryLoading: false, libraryError: msg });
+            get().addToast(msg, 'error', { actionLabel: 'Retry', onAction: () => { void get().fetchLibraryFromServer(); } });
+          } finally {
+            if (libraryFetchAbort === ac) libraryFetchAbort = null;
+            inFlightLibraryFetch = null;
           }
+          })();
+          inFlightLibraryFetch = run;
+          return run;
         },
 
         fetchPlaylistsFromServer: async () => {
-           set({ isPlaylistsLoading: true });
+           if (inFlightPlaylistsFetch) return inFlightPlaylistsFetch;
+           playlistsFetchAbort?.abort();
+           const ac = new AbortController();
+           playlistsFetchAbort = ac;
+           set({ isPlaylistsLoading: true, playlistsError: null });
+           const run = (async () => {
            try {
               const authHeaders = (get() as any).getAuthHeader();
-              const res = await fetch('/api/playlists', { headers: authHeaders });
+              const res = await fetch('/api/playlists', { headers: authHeaders, signal: ac.signal });
               if (res.ok) {
                  const data = await res.json();
 
@@ -1425,12 +1480,21 @@ export const usePlayerStore = create<PlayerState>()(
                  });
 
                  set({ playlists: populatedPlaylists });
+              } else {
+                 set({ playlistsError: `Couldn't load playlists (server returned ${res.status}).` });
               }
            } catch (e) {
+              if (isAbortError(e) || ac.signal.aborted) return; // aborted on logout
               console.error("Failed to fetch playlists from server", e);
+              set({ playlistsError: "Couldn't reach the server to load playlists." });
            } finally {
-              set({ isPlaylistsLoading: false });
+              if (!ac.signal.aborted) set({ isPlaylistsLoading: false });
+              if (playlistsFetchAbort === ac) playlistsFetchAbort = null;
+              inFlightPlaylistsFetch = null;
            }
+           })();
+           inFlightPlaylistsFetch = run;
+           return run;
         },
 
         // Fetch a single playlist with its tracks and upsert it into the
@@ -1540,6 +1604,8 @@ export const usePlayerStore = create<PlayerState>()(
            const targetPlaylist = previousPlaylists.find((playlist) => playlist.id === playlistId);
            if (!targetPlaylist) return;
 
+           const myGen = ++playlistMutationGeneration;
+
            const optimisticTracks = hydratePlaylistTracks(
              nextTrackIds,
              get().library,
@@ -1568,9 +1634,16 @@ export const usePlayerStore = create<PlayerState>()(
                throw new Error(`Playlist update failed with status ${res.status}`);
              }
 
-             await get().fetchPlaylistsFromServer();
+             // Only reconcile with the server if a newer optimistic mutation hasn't
+             // superseded this one — otherwise the refetch would clobber it.
+             if (myGen === playlistMutationGeneration) {
+               await get().fetchPlaylistsFromServer();
+             }
            } catch (e) {
-             set({ playlists: previousPlaylists });
+             // Same guard for rollback: don't revert over a newer edit's state.
+             if (myGen === playlistMutationGeneration) {
+               set({ playlists: previousPlaylists });
+             }
              console.error(`Failed to replace tracks in playlist ${playlistId}`, e);
              throw e;
            }

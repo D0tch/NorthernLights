@@ -6,6 +6,7 @@ import {
   getSimilarArtistsByAudioProfile,
   getArtistRolesInLibrary,
   getArtistAlbumsByRole,
+  getArtistAlbumsAllRoles,
 } from '../database';
 
 const router = Router();
@@ -50,8 +51,11 @@ router.get('/:id/credits', async (req, res) => {
     if (role) {
       albumsByRole[role] = await getArtistAlbumsByRole(artistId, role);
     } else {
-      for (const r of roles) {
-        albumsByRole[r.role] = await getArtistAlbumsByRole(artistId, r.role);
+      // Single query for all roles instead of one round-trip per role.
+      const rows = await getArtistAlbumsAllRoles(artistId);
+      for (const row of rows) {
+        const { role: rowRole, ...album } = row;
+        (albumsByRole[rowRole] ||= []).push(album);
       }
     }
     res.json({ roles, albumsByRole });

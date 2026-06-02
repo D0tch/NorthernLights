@@ -76,6 +76,33 @@ export async function initDB(): Promise<Pool> {
         }
       });
 
+      // Slow-query observability: time every pool.query() and warn when it
+      // exceeds DB_SLOW_QUERY_MS (default 500ms). Callback-style calls are passed
+      // through untouched. This is the only production visibility into queries
+      // that degrade as the library grows toward 100k+ tracks.
+      const slowQueryMs = parseInt(process.env.DB_SLOW_QUERY_MS || '500', 10);
+      const originalQuery = instance.query.bind(instance);
+      (instance as any).query = (...args: any[]) => {
+        if (typeof args[args.length - 1] === 'function') {
+          return (originalQuery as any)(...args);
+        }
+        const start = process.hrtime.bigint();
+        const result = (originalQuery as any)(...args);
+        if (result && typeof result.then === 'function') {
+          result.then(
+            () => {
+              const ms = Number(process.hrtime.bigint() - start) / 1e6;
+              if (ms >= slowQueryMs) {
+                const text = typeof args[0] === 'string' ? args[0] : args[0]?.text;
+                console.warn(`[DB] slow query ${ms.toFixed(0)}ms: ${String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 200)}`);
+              }
+            },
+            () => { /* errors surface to the caller */ },
+          );
+        }
+        return result;
+      };
+
       // Test connection and initialize schema
       client = await instance.connect();
 
@@ -958,13 +985,15 @@ function mapTrackRow(row: any) {
 
 export async function getAllTracks(userId: string | null = null) {
   const db = await initDB();
+  // LEFT JOIN instead of a correlated EXISTS subquery: the EXISTS re-ran once per
+  // track row (full-library hot path), whereas the join resolves loved-state in a
+  // single pass using ult_user_id_idx / ult_track_id_idx. Matters at 100k tracks.
   const res = userId
     ? await db.query(`
-        SELECT t.*, EXISTS (
-          SELECT 1 FROM user_loved_tracks ult
-          WHERE ult.user_id = $1 AND ult.track_id = t.id
-        ) AS is_loved
+        SELECT t.*, (ult.track_id IS NOT NULL) AS is_loved
         FROM tracks t
+        LEFT JOIN user_loved_tracks ult
+          ON ult.track_id = t.id AND ult.user_id = $1
       `, [userId])
     : await db.query('SELECT t.*, FALSE AS is_loved FROM tracks t');
   return res.rows.map(mapTrackRow);
@@ -1014,23 +1043,27 @@ export async function getArtHashForPath(b64Path: string): Promise<string | null>
   return res.rows[0].art_hash ?? null;
 }
 
-// Returns a Buffer array of decoded UTF-8 paths matching a specific directory prefix
+// Returns a Buffer array of decoded UTF-8 paths matching a specific directory prefix.
+//
+// Filters at the BYTE level inside Postgres (decode the base64 path to bytea and
+// compare the directory prefix + a '/' boundary byte) instead of shipping every
+// row to Node and base64-decoding each in a JS loop. Byte-level (not convert_from
+// /UTF8) keeps it resilient: it never throws on a path that isn't valid UTF-8.
+// Returns only matching rows — the seq scan is unindexed but vastly cheaper than
+// transferring the whole tracks table at 100k+.
 export async function getPathsForDirectory(dirPath: string): Promise<Buffer[]> {
   const db = await initDB();
-  const res = await db.query('SELECT path FROM tracks');
   const dirBuf = Buffer.from(dirPath, 'utf8');
-  const fileBufs: Buffer[] = [];
-  
-  for (const row of res.rows) {
-    if (!row.path) continue;
-    const fileBuf = Buffer.from(row.path, 'base64');
-    const prefixMatches = fileBuf.length >= dirBuf.length && fileBuf.slice(0, dirBuf.length).equals(dirBuf);
-    const atBoundary = fileBuf.length === dirBuf.length || fileBuf[dirBuf.length] === 0x2F;
-    if (prefixMatches && atBoundary) {
-      fileBufs.push(fileBuf);
-    }
-  }
-  return fileBufs;
+  const res = await db.query(
+    `SELECT path FROM (
+       SELECT path, decode(path, 'base64') AS p FROM tracks WHERE path IS NOT NULL
+     ) s
+     WHERE substring(s.p FROM 1 FOR octet_length($1::bytea)) = $1::bytea
+       AND (octet_length(s.p) = octet_length($1::bytea)
+            OR get_byte(s.p, octet_length($1::bytea)) = 47)`, // 47 = '/'
+    [dirBuf]
+  );
+  return res.rows.map((r: any) => Buffer.from(r.path, 'base64'));
 }
 
 export async function addTrack(track: any) {
@@ -1312,29 +1345,22 @@ export async function removeDirectory(dirPath: string) {
 export async function removeTracksByDirectory(dirPath: string) {
   const db = await initDB();
 
-  // Since tracks are stored natively as Base64 Buffers to avoid UTF-8 mangling,
-  // we must decode and match the directory recursively at the byte level.
-  const res = await db.query('SELECT id, path FROM tracks');
-
+  // Match the directory at the byte level inside Postgres (paths are stored as
+  // base64 of the raw UTF-8 bytes) and delete in a single statement, instead of
+  // SELECT-ing every track, decoding each in a JS loop, then chunked-deleting.
+  // See getPathsForDirectory for the matching rationale.
   const dirBuf = Buffer.from(dirPath, 'utf8');
-  const idsToDelete: string[] = [];
-
-  for (const row of res.rows) {
-    const fileBuf = Buffer.from(row.path, 'base64');
-    const prefixMatches = fileBuf.length >= dirBuf.length && fileBuf.slice(0, dirBuf.length).equals(dirBuf);
-    const atBoundary = fileBuf.length === dirBuf.length || fileBuf[dirBuf.length] === 0x2F; // '/'
-    if (prefixMatches && atBoundary) {
-      idsToDelete.push(row.id);
-    }
-  }
-
-  if (idsToDelete.length > 0) {
-    for (let i = 0; i < idsToDelete.length; i += 100) {
-      const chunk = idsToDelete.slice(i, i + 100);
-      const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(',');
-      await db.query(`DELETE FROM tracks WHERE id IN (${placeholders})`, chunk);
-    }
-  }
+  await db.query(
+    `DELETE FROM tracks WHERE id IN (
+       SELECT id FROM (
+         SELECT id, decode(path, 'base64') AS p FROM tracks WHERE path IS NOT NULL
+       ) s
+       WHERE substring(s.p FROM 1 FOR octet_length($1::bytea)) = $1::bytea
+         AND (octet_length(s.p) = octet_length($1::bytea)
+              OR get_byte(s.p, octet_length($1::bytea)) = 47)
+     )`, // 47 = '/'
+    [dirBuf]
+  );
 }
 
 // Delete a specific set of tracks by their IDs.
@@ -2187,6 +2213,24 @@ export async function getArtistAlbumsByRole(artistId: string, role: string): Pro
      GROUP BY al.id
      ORDER BY COALESCE(al.release_year, 9999) DESC, al.title ASC`,
     [artistId, role]
+  );
+  return res.rows;
+}
+
+// All albums an artist is credited on, for EVERY role, in one query. Replaces a
+// per-role N+1 (getArtistRolesInLibrary + a getArtistAlbumsByRole call per role).
+// Each row carries its `role`; the caller groups into a role→albums map.
+export async function getArtistAlbumsAllRoles(artistId: string): Promise<any[]> {
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT tac.role, al.*, COUNT(DISTINCT t.id)::int AS credited_track_count
+     FROM track_artist_credits tac
+     JOIN tracks t ON t.id = tac.track_id
+     JOIN albums al ON al.id = t.album_id
+     WHERE tac.artist_id = $1
+     GROUP BY tac.role, al.id
+     ORDER BY tac.role, COALESCE(al.release_year, 9999) DESC, al.title ASC`,
+    [artistId]
   );
   return res.rows;
 }
