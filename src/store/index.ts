@@ -441,7 +441,7 @@ export interface PlayerState {
   fetchLibraryFromServer: () => Promise<void>;
   fetchPlaylistsFromServer: () => Promise<void>;
   fetchPlaylistFromServer: (playlistId: string) => Promise<boolean>;
-  createPlaylist: (title: string, description?: string) => Promise<void>;
+  createPlaylist: (title: string, description?: string) => Promise<Playlist | null>;
   deletePlaylist: (playlistId: string) => Promise<void>;
   togglePin: (playlistId: string, pinned: boolean) => Promise<void>;
   replaceTracksInUserPlaylist: (playlistId: string, trackIds: string[]) => Promise<void>;
@@ -1474,11 +1474,17 @@ export const usePlayerStore = create<PlayerState>()(
                  body: JSON.stringify({ title, description })
               });
               if (res.ok) {
+                 // Server returns the created playlist ({ id, title, description,
+                 // isLlmGenerated, tracks: [] }). Capture it before refetching so
+                 // callers can navigate straight into the new (empty) playlist.
+                 const created = await res.json().catch(() => null);
                  await get().fetchPlaylistsFromServer();
+                 return created as Playlist | null;
               }
            } catch (e) {
                console.error("Failed to create playlist", e);
             }
+            return null;
          },
 
          deletePlaylist: async (playlistId: string) => {

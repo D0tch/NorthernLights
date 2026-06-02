@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store';
 import {
@@ -13,6 +13,18 @@ import {
 } from './PlaylistContextMenu';
 import { prefetchPlaylistDetail } from '../../utils/routePrefetch';
 import type { PlaylistHeroState } from '../../utils/heroState';
+import { VirtualizedCardGrid } from './VirtualizedCardGrid';
+import CreatePlaylistModal from './CreatePlaylistModal';
+
+// Playlist cards are wide (1/2/3 columns) and fixed-height — distinct from the
+// square album/artist thumbnails the grid defaults to.
+const PLAYLIST_BREAKPOINTS = [
+  { minWidth: 1024, columns: 3 }, // lg:grid-cols-3
+  { minWidth: 640, columns: 2 },  // sm:grid-cols-2
+  { minWidth: 0, columns: 1 },    // grid-cols-1
+] as const;
+const PLAYLIST_CARD_HEIGHT = 200; // matches PlaylistCard's h-[200px]
+const playlistGap = (w: number): number => (w >= 1024 ? 24 : w >= 640 ? 20 : 16); // gap-6 / gap-5 / gap-4
 
 // ─── Playlist Card ────────────────────────────────────────────────────────────
 
@@ -27,7 +39,7 @@ const PlaylistCard: React.FC<{
 
   return (
     <div
-      className="relative p-4 sm:p-5 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
+      className="relative h-[200px] overflow-hidden p-4 sm:p-5 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
       onClick={onOpen}
       onPointerEnter={prefetchPlaylistDetail}
       onPointerDown={prefetchPlaylistDetail}
@@ -49,15 +61,28 @@ const PlaylistCard: React.FC<{
       <div className="relative flex items-start justify-between mb-4">
         <div className="flex items-center">
           {hasCovers ? (
-            artUrls.slice(0, 4).map((url, i) => (
-              <img
-                key={i}
-                src={url}
-                alt=""
-                className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg shadow-sm object-cover"
-                style={{ marginLeft: i > 0 ? '-10px' : 0, zIndex: 10 - i }}
-              />
-            ))
+            artUrls.slice(0, 4).map((url, i) => {
+              // These collage thumbnails render at ~48-56px, so request the
+              // smallest pre-encoded bucket (256) instead of the server default
+              // (640). `loading="lazy"` keeps a long, non-virtualized playlist
+              // list from firing every card's 4 art requests at once on mount —
+              // off-screen covers only load as they scroll into view, which is
+              // what stops the request backlog when flicking between tabs.
+              const sized = url.includes('/api/art') && !/[?&]size=/.test(url)
+                ? `${url}&size=256`
+                : url;
+              return (
+                <img
+                  key={i}
+                  src={sized}
+                  alt=""
+                  loading="lazy"
+                  decoding="async"
+                  className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg shadow-sm object-cover"
+                  style={{ marginLeft: i > 0 ? '-10px' : 0, zIndex: 10 - i }}
+                />
+              );
+            })
           ) : (
             <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg bg-[var(--color-surface-variant)] flex items-center justify-center">
               <Disc3 className="w-6 h-6 text-[var(--color-text-muted)] opacity-40" />
@@ -115,7 +140,7 @@ const PlaylistCard: React.FC<{
 // ─── Card skeleton ────────────────────────────────────────────────────────────
 
 const PlaylistCardSkeleton: React.FC = () => (
-  <div className="p-4 sm:p-5 bg-[var(--glass-bg)] border border-[var(--glass-border)] rounded-[var(--radius)] animate-pulse">
+  <div className="h-[200px] p-4 sm:p-5 bg-[var(--glass-bg)] border border-[var(--glass-border)] rounded-[var(--radius)] animate-pulse">
     <div className="flex items-center mb-4">
       <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg bg-[var(--color-surface-variant)]" />
       <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg bg-[var(--color-surface-variant)] -ml-2.5" />
@@ -247,52 +272,12 @@ const GeneratePlaylistModal: React.FC<{ onClose: () => void; onGenerated: () => 
   );
 };
 
-// ─── Inline create form ───────────────────────────────────────────────────────
-
-const CreatePlaylistForm: React.FC<{ onSubmit: (title: string) => void; onCancel: () => void }> = ({
-  onSubmit,
-  onCancel,
-}) => {
-  const [title, setTitle] = useState('');
-  return (
-    <form
-      onSubmit={(e) => { e.preventDefault(); if (title.trim()) onSubmit(title.trim()); }}
-      className="bg-[var(--glass-bg)] border border-[var(--glass-border)] rounded-[var(--radius)] p-5 flex flex-col gap-4"
-    >
-      <h3 className="text-base font-semibold text-[var(--color-text-primary)]">New Playlist</h3>
-      <input
-        type="text"
-        autoFocus
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        placeholder="Playlist name…"
-        className="w-full px-4 py-2.5 rounded-xl bg-[var(--color-surface)] border border-[var(--glass-border)] text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)] text-sm transition-colors"
-      />
-      <div className="flex justify-end gap-2">
-        <button
-          type="button"
-          onClick={onCancel}
-          className="px-4 py-2 rounded-lg text-sm text-[var(--color-text-secondary)] hover:bg-[var(--color-surface)] transition-colors"
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          disabled={!title.trim()}
-          className="px-4 py-2 rounded-lg text-sm bg-[var(--color-primary)] text-white font-medium disabled:opacity-50 transition-opacity"
-        >
-          Create
-        </button>
-      </div>
-    </form>
-  );
-};
-
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export const Playlists: React.FC = () => {
-  const { playlists, setPlaylist, createPlaylist, deletePlaylist, togglePin, fetchPlaylistsFromServer, isPlaylistsLoading } = usePlayerStore();
+  const { playlists, setPlaylist, deletePlaylist, togglePin, fetchPlaylistsFromServer, isPlaylistsLoading } = usePlayerStore();
   const navigate = useNavigate();
+  const pageRef = useRef<HTMLDivElement>(null);
 
   const [isCreating,   setIsCreating]   = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -302,9 +287,23 @@ export const Playlists: React.FC = () => {
     void fetchPlaylistsFromServer();
   }, [fetchPlaylistsFromServer]);
 
-  const handleCreate = async (title: string) => {
-    await createPlaylist(title, '');
+  // Created via the modal; open the new (empty) playlist so the user can start
+  // adding tracks right away.
+  const handleCreated = (pl: Playlist) => {
     setIsCreating(false);
+    if (!pl.id) return;
+    const hero: PlaylistHeroState = {
+      kind: 'playlist',
+      title: pl.title,
+      description: pl.description || undefined,
+      trackCount: 0,
+      artUrls: [],
+      isLlmGenerated: false,
+      isSystem: false,
+      pinned: false,
+      backLabel: 'Back to Playlists',
+    };
+    navigate(`/playlists/${pl.id}`, { state: hero });
   };
 
   const openMenu = useCallback((playlist: Playlist, x: number, y: number) => {
@@ -326,12 +325,20 @@ export const Playlists: React.FC = () => {
   });
 
   return (
-    <div className="page-container space-y-8">
+    <div ref={pageRef} className="page-container space-y-8">
       {/* Generate modal */}
       {isGenerating && (
         <GeneratePlaylistModal
           onClose={() => setIsGenerating(false)}
           onGenerated={() => setIsGenerating(false)}
+        />
+      )}
+
+      {/* Create modal — name + description, opens the new playlist on success */}
+      {isCreating && (
+        <CreatePlaylistModal
+          onClose={() => setIsCreating(false)}
+          onCreated={handleCreated}
         />
       )}
 
@@ -384,7 +391,7 @@ export const Playlists: React.FC = () => {
             <PlaylistCardSkeleton key={i} />
           ))}
         </div>
-      ) : playlists.length === 0 && !isCreating ? (
+      ) : playlists.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <div className="w-16 h-16 rounded-full bg-[var(--color-surface-variant)] flex items-center justify-center mb-4">
             <Sparkles className="w-8 h-8 text-[var(--color-primary)]" />
@@ -407,15 +414,15 @@ export const Playlists: React.FC = () => {
           </div>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 lg:gap-6">
-          {isCreating && (
-            <CreatePlaylistForm
-              onSubmit={handleCreate}
-              onCancel={() => setIsCreating(false)}
-            />
-          )}
-
-          {sorted.map((pl) => {
+        <VirtualizedCardGrid
+          items={sorted}
+          getKey={(pl) => pl.id ?? pl.title}
+          estimatedRowHeight={() => PLAYLIST_CARD_HEIGHT}
+          scrollParentRef={pageRef}
+          columnBreakpoints={PLAYLIST_BREAKPOINTS}
+          rowGapForWidth={playlistGap}
+          columnGapForWidth={playlistGap}
+          renderItem={(pl) => {
             const hero: PlaylistHeroState = {
               kind: 'playlist',
               title: pl.title,
@@ -429,15 +436,14 @@ export const Playlists: React.FC = () => {
             };
             return (
               <PlaylistCard
-                key={pl.id}
                 playlist={pl}
                 onOpen={() => navigate(`/playlists/${pl.id}`, { state: hero })}
                 onPlay={() => { if (pl.tracks.length > 0) setPlaylist(pl.tracks, 0); }}
                 onMenuOpen={(x, y) => openMenu(pl, x, y)}
               />
             );
-          })}
-        </div>
+          }}
+        />
       )}
     </div>
   );

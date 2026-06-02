@@ -20,11 +20,13 @@ const ROW_GAP_BY_WIDTH = (width: number): number => {
 
 const COLUMN_GAP_BY_WIDTH = ROW_GAP_BY_WIDTH;
 
-const columnsForWidth = (width: number): number => {
-    for (const bp of COLUMN_BREAKPOINTS) {
+type ColumnBreakpoint = { minWidth: number; columns: number };
+
+const columnsForWidth = (width: number, breakpoints: readonly ColumnBreakpoint[]): number => {
+    for (const bp of breakpoints) {
         if (width >= bp.minWidth) return bp.columns;
     }
-    return 3;
+    return breakpoints[breakpoints.length - 1]?.columns ?? 3;
 };
 
 interface VirtualizedCardGridProps<T> {
@@ -37,6 +39,12 @@ interface VirtualizedCardGridProps<T> {
     estimatedRowHeight: (columnWidth: number) => number;
     scrollParentRef: React.RefObject<HTMLElement>;
     overscan?: number;
+    // Layout overrides. Default to the square-thumbnail album/artist grid;
+    // callers with a different shape (e.g. the wide playlist cards) pass their
+    // own breakpoints/gaps. Must be sorted descending by minWidth.
+    columnBreakpoints?: readonly ColumnBreakpoint[];
+    rowGapForWidth?: (width: number) => number;
+    columnGapForWidth?: (width: number) => number;
 }
 
 // Windowed grid that mirrors the static CSS-grid layout but only mounts the
@@ -59,6 +67,9 @@ export function VirtualizedCardGrid<T>({
     estimatedRowHeight,
     scrollParentRef,
     overscan = 4,
+    columnBreakpoints = COLUMN_BREAKPOINTS,
+    rowGapForWidth = ROW_GAP_BY_WIDTH,
+    columnGapForWidth = COLUMN_GAP_BY_WIDTH,
 }: VirtualizedCardGridProps<T>) {
     const measureRef = useRef<HTMLDivElement>(null);
     const [containerWidth, setContainerWidth] = useState(0);
@@ -80,11 +91,11 @@ export function VirtualizedCardGrid<T>({
     }, []);
 
     const columns = useMemo(
-        () => columnsForWidth(containerWidth || (typeof window !== 'undefined' ? window.innerWidth : 1024)),
-        [containerWidth]
+        () => columnsForWidth(containerWidth || (typeof window !== 'undefined' ? window.innerWidth : 1024), columnBreakpoints),
+        [containerWidth, columnBreakpoints]
     );
-    const columnGap = COLUMN_GAP_BY_WIDTH(containerWidth);
-    const rowGap = ROW_GAP_BY_WIDTH(containerWidth);
+    const columnGap = columnGapForWidth(containerWidth);
+    const rowGap = rowGapForWidth(containerWidth);
 
     const columnWidth = useMemo(() => {
         if (!containerWidth || columns <= 0) return 0;
