@@ -37,7 +37,10 @@ export function useSSE(url: string | null, { onMessage, onError, throttleMs = 0 
     connectedAtRef.current = Date.now();
 
     es.onmessage = (e) => {
-      retryDelayRef.current = BASE_DELAY;
+      // Note: backoff is intentionally NOT reset here. Resetting on every message
+      // let a server that flaps (connect → deliver one message → drop, repeatedly)
+      // escape exponential backoff entirely. Backoff is reset in onerror only once
+      // a connection proves stable (survives past FLAP_THRESHOLD_MS).
       const now = Date.now();
       if (throttleMs > 0 && now - lastCallRef.current < throttleMs) return;
       lastCallRef.current = now;
@@ -53,7 +56,12 @@ export function useSSE(url: string | null, { onMessage, onError, throttleMs = 0 
       onErrorRef.current?.(err);
       const duration = connectedAtRef.current ? Date.now() - connectedAtRef.current : FLAP_THRESHOLD_MS;
       if (duration < FLAP_THRESHOLD_MS) {
+        // Short-lived connection (flapping) — grow the backoff.
         retryDelayRef.current = Math.min(retryDelayRef.current * 2, MAX_DELAY);
+      } else {
+        // The connection was stable before dropping — treat the next attempt as
+        // fresh and reset to the base delay.
+        retryDelayRef.current = BASE_DELAY;
       }
       es.close();
       esRef.current = null;

@@ -61,6 +61,10 @@ class PlaybackManager {
     private readonly maxHlsRebuildRetries = 2;
     private readonly mediaSessionPositionIntervalMs = 5000;
     private lastMediaSessionPositionUpdate = 0;
+    private lastMediaErrorToastAt = 0;
+    // Screen Wake Lock — keeps the phone screen from sleeping mid-track. Typed
+    // structurally to avoid depending on lib.dom's WakeLockSentinel being present.
+    private wakeLock: { release: () => Promise<void>; addEventListener: (t: 'release', cb: () => void) => void } | null = null;
 
     // Store callbacks for Zustand to update its state
     private onTimeUpdateCallback?: (time: number) => void;
@@ -139,6 +143,52 @@ class PlaybackManager {
         return 'unknown playback error';
     }
 
+    /**
+     * Surface an otherwise-silent playback failure to the user with a manual
+     * "Skip" recovery action. Throttled so a burst of media errors can't stack
+     * toasts. We deliberately do NOT auto-advance — that risks an infinite skip
+     * loop if every track in the queue fails.
+     */
+    private notifyPlaybackError(message: string): void {
+        const now = performance.now();
+        if (now - this.lastMediaErrorToastAt < 4000) return;
+        this.lastMediaErrorToastAt = now;
+        this.onBufferingChangeCallback?.(false);
+        try {
+            usePlayerStore.getState().addToast(message, 'error', {
+                actionLabel: 'Skip',
+                onAction: () => { void usePlayerStore.getState().nextTrack(); },
+                duration: 6000,
+            });
+        } catch {
+            // Store not ready (e.g. during teardown) — swallow.
+        }
+    }
+
+    // Acquire a screen wake lock so the device doesn't sleep during playback.
+    // No-ops when unsupported, when the tab isn't visible (the API requires
+    // visibility), or when one is already held. Failures are swallowed — a wake
+    // lock is a best-effort nicety, never required for playback.
+    private async acquireWakeLock(): Promise<void> {
+        try {
+            const wl = (navigator as any).wakeLock;
+            if (!wl || this.wakeLock) return;
+            if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+            const sentinel = await wl.request('screen');
+            this.wakeLock = sentinel;
+            // The OS auto-releases on tab hide; clear our handle so reconcile() can re-acquire.
+            sentinel.addEventListener('release', () => { this.wakeLock = null; });
+        } catch {
+            this.wakeLock = null;
+        }
+    }
+
+    private releaseWakeLock(): void {
+        const wl = this.wakeLock;
+        this.wakeLock = null;
+        if (wl) { void wl.release().catch(() => {}); }
+    }
+
     private attachAudioEvents(audio: HTMLAudioElement): void {
         // Set up standard event listeners
         audio.addEventListener('timeupdate', () => {
@@ -166,6 +216,7 @@ class PlaybackManager {
         audio.addEventListener('ended', () => {
             if (!castManager.isConnected() && audio === this.audio) {
                 this.transitionStartedAt = performance.now();
+                this.releaseWakeLock();
                 this.onPlayStateChangeCallback?.('stopped');
                 this.updateMediaSessionPlaybackState('none');
                 this.onEndedCallback?.();
@@ -203,16 +254,33 @@ class PlaybackManager {
 
         audio.addEventListener('play', () => {
              if (!castManager.isConnected() && audio === this.audio) {
+                void this.acquireWakeLock();
                 this.onPlayStateChangeCallback?.('playing');
                 this.updateMediaSessionPlaybackState('playing');
              }
         });
         audio.addEventListener('pause', () => {
              if (!castManager.isConnected() && audio === this.audio) {
+                this.releaseWakeLock();
                 this.onPlayStateChangeCallback?.('paused');
                 this.updateMediaSessionPlaybackState('paused');
                 this.updateMediaSessionPosition(true);
              }
+        });
+
+        // Fatal media-element errors (decode failure, unsupported codec, network
+        // abort, native-iOS-HLS failure). When hls.js owns the pipeline it runs its
+        // own ERROR recovery (attachActiveHlsRecovery), so we only surface here for
+        // the non-hls paths (native HLS, blob/file, direct media) to avoid double
+        // toasts during recoverable hls.js hiccups.
+        audio.addEventListener('error', () => {
+            if (castManager.isConnected() || audio !== this.audio) return;
+            if (this.hls) return; // hls.js error handler is responsible
+            const mediaError = audio.error;
+            logPlaybackInfo(`[Playback] Media element error: code ${mediaError?.code ?? 'unknown'} — ${mediaError?.message || ''}`);
+            this.onPlayStateChangeCallback?.('paused');
+            this.updateMediaSessionPlaybackState('paused');
+            this.notifyPlaybackError('Playback failed for this track.');
         });
     }
 
@@ -270,6 +338,7 @@ class PlaybackManager {
                     this.seek(details.seekTime);
                 }
             },
+            stop: () => usePlayerStore.getState().stop(),
         };
 
         for (const [action, handler] of Object.entries(handlers) as [MediaSessionAction, MediaSessionActionHandler][]) {
@@ -391,6 +460,11 @@ class PlaybackManager {
                 storeState === 'playing' ? 'playing' : storeState === 'paused' ? 'paused' : 'none'
             );
             this.updateMediaSessionPosition(true);
+            // The wake lock auto-releases when the tab is hidden; re-acquire it on
+            // return if we're still playing locally.
+            if (storeState === 'playing' && !castManager.isConnected()) {
+                void this.acquireWakeLock();
+            }
         };
 
         document.addEventListener('visibilitychange', () => {
@@ -736,8 +810,22 @@ class PlaybackManager {
         // Fallback for iOS Safari (native HLS support)
         else if (this.audio.canPlayType('application/vnd.apple.mpegurl')) {
             this.audio.src = playlistUrl;
-            await new Promise<void>((resolve) => {
-                this.audio.addEventListener('loadedmetadata', () => resolve(), { once: true });
+            // Resolve on metadata, but also reject on a media 'error' — otherwise a
+            // failed native-HLS load leaves this promise (and the whole playAtIndex
+            // chain) hung forever with no error surfaced to the user.
+            await new Promise<void>((resolve, reject) => {
+                const cleanup = () => {
+                    this.audio.removeEventListener('loadedmetadata', onLoaded);
+                    this.audio.removeEventListener('error', onError);
+                };
+                const onLoaded = () => { cleanup(); resolve(); };
+                const onError = () => {
+                    cleanup();
+                    const mediaError = this.audio.error;
+                    reject(new Error(`Native HLS load failed: ${mediaError ? `code ${mediaError.code}` : 'unknown'}`));
+                };
+                this.audio.addEventListener('loadedmetadata', onLoaded, { once: true });
+                this.audio.addEventListener('error', onError, { once: true });
             });
             await this.safePlay();
         }
@@ -837,8 +925,11 @@ class PlaybackManager {
         if (!playlistUrl || this.hlsRebuildRetryCount >= this.maxHlsRebuildRetries) {
             console.error('[HLS] Unrecoverable fatal error:', data);
             this.destroyHls();
-            this.onBufferingChangeCallback?.(false);
             this.onPlayStateChangeCallback?.('paused');
+            // hls.js has exhausted network/media/rebuild retries — tell the user
+            // instead of leaving a silently-paused player. (destroyHls() cleared
+            // this.hls, so notifyPlaybackError's hls guard no longer applies.)
+            this.notifyPlaybackError('Could not stream this track after several retries.');
             return;
         }
 
@@ -933,12 +1024,22 @@ class PlaybackManager {
         try {
             await this.audio.play();
             this.ensureAudioContext();
+            // Playback started — clear any prior autoplay-blocked state.
+            try { usePlayerStore.getState().setAutoplayBlocked(false); } catch { /* store not ready */ }
         } catch (error) {
             if (error instanceof DOMException && error.name === 'NotAllowedError') {
                 console.warn('Autoplay blocked. User interaction required.');
                 this.onBufferingChangeCallback?.(false);
                 this.onPlayStateChangeCallback?.('paused');
                 this.updateMediaSessionPlaybackState('paused');
+                // Previously this resolved to a bare 'paused' state indistinguishable
+                // from an intentional pause — leaving iOS/Safari users staring at a
+                // dead play button. Flag it and tell them what to do.
+                try {
+                    const store = usePlayerStore.getState();
+                    store.setAutoplayBlocked(true);
+                    store.addToast('Tap play to start playback.', 'info', { duration: 5000 });
+                } catch { /* store not ready */ }
             } else if (error instanceof DOMException && error.name === 'AbortError') {
                 // Play was interrupted by a new load — not an error
                 return;
@@ -1030,7 +1131,9 @@ class PlaybackManager {
             castManager.resume();
         } else {
             if (this.audio.src) {
-                await this.audio.play();
+                // Route through safePlay so a blocked autoplay surfaces a toast
+                // instead of throwing an uncaught NotAllowedError.
+                await this.safePlay();
                 if (this.audioContext?.state === 'suspended') {
                     await this.audioContext.resume();
                 }
@@ -1053,18 +1156,23 @@ class PlaybackManager {
             return;
         }
 
-        await this.audio.play();
+        await this.safePlay();
         if (this.audioContext?.state === 'suspended') {
             await this.audioContext.resume();
         }
-        this.onPlayStateChangeCallback?.('playing');
-        this.updateMediaSessionPlaybackState('playing');
+        // safePlay may have been blocked by autoplay policy and left us paused —
+        // don't falsely report 'playing' in that case.
+        if (!this.audio.paused) {
+            this.onPlayStateChangeCallback?.('playing');
+            this.updateMediaSessionPlaybackState('playing');
+        }
     }
 
     public stop(): void {
         if (castManager.isConnected()) {
             castManager.stop();
         } else {
+            this.releaseWakeLock();
             this.audio.pause();
             this.audio.currentTime = 0;
             this.destroyPreparedAudio();

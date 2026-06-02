@@ -76,6 +76,33 @@ export async function initDB(): Promise<Pool> {
         }
       });
 
+      // Slow-query observability: time every pool.query() and warn when it
+      // exceeds DB_SLOW_QUERY_MS (default 500ms). Callback-style calls are passed
+      // through untouched. This is the only production visibility into queries
+      // that degrade as the library grows toward 100k+ tracks.
+      const slowQueryMs = parseInt(process.env.DB_SLOW_QUERY_MS || '500', 10);
+      const originalQuery = instance.query.bind(instance);
+      (instance as any).query = (...args: any[]) => {
+        if (typeof args[args.length - 1] === 'function') {
+          return (originalQuery as any)(...args);
+        }
+        const start = process.hrtime.bigint();
+        const result = (originalQuery as any)(...args);
+        if (result && typeof result.then === 'function') {
+          result.then(
+            () => {
+              const ms = Number(process.hrtime.bigint() - start) / 1e6;
+              if (ms >= slowQueryMs) {
+                const text = typeof args[0] === 'string' ? args[0] : args[0]?.text;
+                console.warn(`[DB] slow query ${ms.toFixed(0)}ms: ${String(text ?? '').replace(/\s+/g, ' ').trim().slice(0, 200)}`);
+              }
+            },
+            () => { /* errors surface to the caller */ },
+          );
+        }
+        return result;
+      };
+
       // Test connection and initialize schema
       client = await instance.connect();
 
@@ -697,6 +724,16 @@ export async function initDB(): Promise<Pool> {
         EXCEPTION WHEN OTHERS THEN null;
         END $$;
 
+        -- Shareable playlist links: an opaque token + a public flag enabling an
+        -- unauthenticated, read-only snapshot of the playlist.
+        DO $$
+        BEGIN
+          ALTER TABLE playlists ADD COLUMN IF NOT EXISTS share_token TEXT;
+          ALTER TABLE playlists ADD COLUMN IF NOT EXISTS is_public BOOLEAN NOT NULL DEFAULT FALSE;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+        CREATE UNIQUE INDEX IF NOT EXISTS playlists_share_token_idx ON playlists(share_token) WHERE share_token IS NOT NULL;
+
         -- ==========================================
         -- JAMBASE / CONCERTS
         -- ==========================================
@@ -958,13 +995,15 @@ function mapTrackRow(row: any) {
 
 export async function getAllTracks(userId: string | null = null) {
   const db = await initDB();
+  // LEFT JOIN instead of a correlated EXISTS subquery: the EXISTS re-ran once per
+  // track row (full-library hot path), whereas the join resolves loved-state in a
+  // single pass using ult_user_id_idx / ult_track_id_idx. Matters at 100k tracks.
   const res = userId
     ? await db.query(`
-        SELECT t.*, EXISTS (
-          SELECT 1 FROM user_loved_tracks ult
-          WHERE ult.user_id = $1 AND ult.track_id = t.id
-        ) AS is_loved
+        SELECT t.*, (ult.track_id IS NOT NULL) AS is_loved
         FROM tracks t
+        LEFT JOIN user_loved_tracks ult
+          ON ult.track_id = t.id AND ult.user_id = $1
       `, [userId])
     : await db.query('SELECT t.*, FALSE AS is_loved FROM tracks t');
   return res.rows.map(mapTrackRow);
@@ -1014,23 +1053,27 @@ export async function getArtHashForPath(b64Path: string): Promise<string | null>
   return res.rows[0].art_hash ?? null;
 }
 
-// Returns a Buffer array of decoded UTF-8 paths matching a specific directory prefix
+// Returns a Buffer array of decoded UTF-8 paths matching a specific directory prefix.
+//
+// Filters at the BYTE level inside Postgres (decode the base64 path to bytea and
+// compare the directory prefix + a '/' boundary byte) instead of shipping every
+// row to Node and base64-decoding each in a JS loop. Byte-level (not convert_from
+// /UTF8) keeps it resilient: it never throws on a path that isn't valid UTF-8.
+// Returns only matching rows — the seq scan is unindexed but vastly cheaper than
+// transferring the whole tracks table at 100k+.
 export async function getPathsForDirectory(dirPath: string): Promise<Buffer[]> {
   const db = await initDB();
-  const res = await db.query('SELECT path FROM tracks');
   const dirBuf = Buffer.from(dirPath, 'utf8');
-  const fileBufs: Buffer[] = [];
-  
-  for (const row of res.rows) {
-    if (!row.path) continue;
-    const fileBuf = Buffer.from(row.path, 'base64');
-    const prefixMatches = fileBuf.length >= dirBuf.length && fileBuf.slice(0, dirBuf.length).equals(dirBuf);
-    const atBoundary = fileBuf.length === dirBuf.length || fileBuf[dirBuf.length] === 0x2F;
-    if (prefixMatches && atBoundary) {
-      fileBufs.push(fileBuf);
-    }
-  }
-  return fileBufs;
+  const res = await db.query(
+    `SELECT path FROM (
+       SELECT path, decode(path, 'base64') AS p FROM tracks WHERE path IS NOT NULL
+     ) s
+     WHERE substring(s.p FROM 1 FOR octet_length($1::bytea)) = $1::bytea
+       AND (octet_length(s.p) = octet_length($1::bytea)
+            OR get_byte(s.p, octet_length($1::bytea)) = 47)`, // 47 = '/'
+    [dirBuf]
+  );
+  return res.rows.map((r: any) => Buffer.from(r.path, 'base64'));
 }
 
 export async function addTrack(track: any) {
@@ -1312,29 +1355,22 @@ export async function removeDirectory(dirPath: string) {
 export async function removeTracksByDirectory(dirPath: string) {
   const db = await initDB();
 
-  // Since tracks are stored natively as Base64 Buffers to avoid UTF-8 mangling,
-  // we must decode and match the directory recursively at the byte level.
-  const res = await db.query('SELECT id, path FROM tracks');
-
+  // Match the directory at the byte level inside Postgres (paths are stored as
+  // base64 of the raw UTF-8 bytes) and delete in a single statement, instead of
+  // SELECT-ing every track, decoding each in a JS loop, then chunked-deleting.
+  // See getPathsForDirectory for the matching rationale.
   const dirBuf = Buffer.from(dirPath, 'utf8');
-  const idsToDelete: string[] = [];
-
-  for (const row of res.rows) {
-    const fileBuf = Buffer.from(row.path, 'base64');
-    const prefixMatches = fileBuf.length >= dirBuf.length && fileBuf.slice(0, dirBuf.length).equals(dirBuf);
-    const atBoundary = fileBuf.length === dirBuf.length || fileBuf[dirBuf.length] === 0x2F; // '/'
-    if (prefixMatches && atBoundary) {
-      idsToDelete.push(row.id);
-    }
-  }
-
-  if (idsToDelete.length > 0) {
-    for (let i = 0; i < idsToDelete.length; i += 100) {
-      const chunk = idsToDelete.slice(i, i + 100);
-      const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(',');
-      await db.query(`DELETE FROM tracks WHERE id IN (${placeholders})`, chunk);
-    }
-  }
+  await db.query(
+    `DELETE FROM tracks WHERE id IN (
+       SELECT id FROM (
+         SELECT id, decode(path, 'base64') AS p FROM tracks WHERE path IS NOT NULL
+       ) s
+       WHERE substring(s.p FROM 1 FOR octet_length($1::bytea)) = $1::bytea
+         AND (octet_length(s.p) = octet_length($1::bytea)
+              OR get_byte(s.p, octet_length($1::bytea)) = 47)
+     )`, // 47 = '/'
+    [dirBuf]
+  );
 }
 
 // Delete a specific set of tracks by their IDs.
@@ -1441,6 +1477,16 @@ export async function purgeOrphanedEntities(): Promise<{ albums: number; artists
         SELECT 1
         FROM credited_artist_names credited
         WHERE credited.name = lower(btrim(a.name))
+      )
+      AND NOT EXISTS (
+        -- Keep artists referenced only via track_artist_credits (producers,
+        -- composers, featured credits whose name isn't in any track.artists JSON).
+        -- Without this guard the ON DELETE CASCADE on track_artist_credits.artist_id
+        -- silently destroys credit-only artists on every rescan. Index-backed via
+        -- track_artist_credits_artist_role_idx.
+        SELECT 1
+        FROM track_artist_credits tac
+        WHERE tac.artist_id = a.id
       )
       AND NOT EXISTS (
         SELECT 1
@@ -2177,6 +2223,24 @@ export async function getArtistAlbumsByRole(artistId: string, role: string): Pro
      GROUP BY al.id
      ORDER BY COALESCE(al.release_year, 9999) DESC, al.title ASC`,
     [artistId, role]
+  );
+  return res.rows;
+}
+
+// All albums an artist is credited on, for EVERY role, in one query. Replaces a
+// per-role N+1 (getArtistRolesInLibrary + a getArtistAlbumsByRole call per role).
+// Each row carries its `role`; the caller groups into a role→albums map.
+export async function getArtistAlbumsAllRoles(artistId: string): Promise<any[]> {
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT tac.role, al.*, COUNT(DISTINCT t.id)::int AS credited_track_count
+     FROM track_artist_credits tac
+     JOIN tracks t ON t.id = tac.track_id
+     JOIN albums al ON al.id = t.album_id
+     WHERE tac.artist_id = $1
+     GROUP BY tac.role, al.id
+     ORDER BY tac.role, COALESCE(al.release_year, 9999) DESC, al.title ASC`,
+    [artistId]
   );
   return res.rows;
 }
@@ -3479,6 +3543,61 @@ export async function getPlaylistOwner(playlistId: string): Promise<string | nul
   const res = await db.query('SELECT user_id FROM playlists WHERE id = $1', [playlistId]);
   if (res.rows.length === 0) return null;
   return (res.rows[0] as any).user_id || null;
+}
+
+// Enable/disable a public share link for a playlist the user owns. The token is
+// minted once and preserved across re-enables so an already-shared link keeps
+// working. `candidateToken` is used only when no token exists yet. Returns the
+// resulting { shareToken, isPublic }, or null if the user doesn't own it.
+export async function setPlaylistShare(
+  playlistId: string,
+  userId: string,
+  enable: boolean,
+  candidateToken: string,
+): Promise<{ shareToken: string | null; isPublic: boolean } | null> {
+  const db = await initDB();
+  const res = await db.query(
+    `UPDATE playlists
+       SET is_public = $3,
+           share_token = CASE WHEN $3 THEN COALESCE(share_token, $4) ELSE share_token END
+     WHERE id = $1 AND user_id = $2
+     RETURNING share_token, is_public`,
+    [playlistId, userId, enable, candidateToken],
+  );
+  if (res.rows.length === 0) return null;
+  const row = res.rows[0] as any;
+  return { shareToken: row.share_token ?? null, isPublic: !!row.is_public };
+}
+
+// Public, read-only snapshot for a share token. Returns ONLY display fields —
+// never the base64 path/id (which encode the filesystem location) or anything
+// that enables streaming. Null when the token is unknown or sharing is disabled.
+export async function getPublicPlaylistByShareToken(token: string): Promise<
+  | { name: string; description: string | null; trackCount: number; tracks: Array<{ title: string; artist: string; album: string; duration: number }> }
+  | null
+> {
+  const db = await initDB();
+  const plRes = await db.query(
+    `SELECT id, title, description FROM playlists WHERE share_token = $1 AND is_public = TRUE`,
+    [token],
+  );
+  if (plRes.rows.length === 0) return null;
+  const pl = plRes.rows[0] as any;
+  const trackRes = await db.query(
+    `SELECT t.title, t.artist, t.album, t.duration
+       FROM tracks t
+       JOIN playlist_tracks pt ON t.id = pt.track_id
+      WHERE pt.playlist_id = $1
+      ORDER BY pt.sort_order ASC`,
+    [pl.id],
+  );
+  const tracks = trackRes.rows.map((r: any) => ({
+    title: r.title || 'Unknown Title',
+    artist: r.artist || 'Unknown Artist',
+    album: r.album || '',
+    duration: typeof r.duration === 'number' ? r.duration : 0,
+  }));
+  return { name: pl.title, description: pl.description ?? null, trackCount: tracks.length, tracks };
 }
 
 export async function getPlaylistMeta(playlistId: string): Promise<{ userId: string | null; isSystem: boolean } | null> {

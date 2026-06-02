@@ -5,7 +5,7 @@ import { WaveformProgressBar } from './WaveformProgressBar';
 import { formatTime } from '../utils/formatTime';
 import React from 'react';
 
-const ProgressBar = () => {
+const ProgressBarImpl = () => {
   const currentTime = usePlaybackTimeStore((state) => state.currentTime);
   const duration = usePlaybackTimeStore((state) => state.duration);
   const playlist = usePlayerStore((state) => state.playlist);
@@ -57,5 +57,11 @@ const ProgressBar = () => {
     </div>
   );
 };
+
+// Memoized: ProgressBar takes no props, so this prevents the parent
+// (MobileNowPlaying / PlayerControls) re-rendering for unrelated reasons from
+// reconciling this subtree. Its own currentTime subscription still updates it
+// per tick, which is required to show elapsed time.
+const ProgressBar = React.memo(ProgressBarImpl);
 
 export default ProgressBar;

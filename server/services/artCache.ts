@@ -74,8 +74,12 @@ export function findImageStart(buf: Uint8Array): number {
 // repeat scans). Idempotent.
 export async function encodeArt(bytes: Uint8Array, hash: string): Promise<void> {
   const input = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  await Promise.all(ART_SIZES.map(async (size) => {
-    if (artExists(hash, size)) return;
+  // Encode sizes sequentially rather than Promise.all: three simultaneous AVIF
+  // encodes per worker (× one worker per CPU) saturated all cores and the I/O
+  // path during fresh-library ingestion. Serializing keeps peak memory to one
+  // decoded image and bounds per-worker CPU to a single encode.
+  for (const size of ART_SIZES) {
+    if (artExists(hash, size)) continue;
     const outPath = artCachePath(hash, size);
     await fs.promises.mkdir(path.dirname(outPath), { recursive: true });
     // Write to a temp file then rename so a concurrent reader never sees a
@@ -91,7 +95,7 @@ export async function encodeArt(bytes: Uint8Array, hash: string): Promise<void> 
       await fs.promises.rm(tmpPath, { force: true }).catch(() => {});
       throw err;
     }
-  }));
+  }
 }
 
 // Remove every size variant for hashes that are no longer referenced. The

@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import crypto from 'crypto';
 import {
   getPlaylistTracks,
   createPlaylist,
@@ -8,6 +9,7 @@ import {
   togglePlaylistPin,
   getPlaylistByIdForUser,
   getPlaylistsForUserWithTracks,
+  setPlaylistShare,
 } from '../database';
 
 const router = Router();
@@ -134,6 +136,34 @@ router.patch('/:id/pin', async (req, res) => {
   } catch (error) {
     console.error('Playlist pin error:', error);
     res.status(500).json({ error: 'Failed to update pin status' });
+  }
+});
+
+// Enable/disable a public share link for an owned playlist. Returns the share
+// token (minted once, stable across re-enables) and the public URL when enabled.
+router.post('/:id/share', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+
+    const { enable } = req.body;
+    if (typeof enable !== 'boolean') {
+      return res.status(400).json({ error: 'enable must be a boolean' });
+    }
+
+    const candidateToken = crypto.randomBytes(18).toString('base64url'); // 24-char URL-safe
+    const result = await setPlaylistShare(id as string, userId, enable, candidateToken);
+    if (!result) return res.status(404).json({ error: 'Playlist not found' });
+
+    res.json({
+      isPublic: result.isPublic,
+      shareToken: result.isPublic ? result.shareToken : null,
+      sharePath: result.isPublic && result.shareToken ? `/share/${result.shareToken}` : null,
+    });
+  } catch (error) {
+    console.error('Playlist share error:', error);
+    res.status(500).json({ error: 'Failed to update share status' });
   }
 });
 

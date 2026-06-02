@@ -28,6 +28,7 @@ import {
   Pin,
   Play,
   Plus,
+  Share2,
   Sparkles,
 } from 'lucide-react';
 import { AlbumArt } from '../AlbumArt';
@@ -586,6 +587,39 @@ export const PlaylistDetail: React.FC = () => {
     }
   }, [addToast, addTracksToUserPlaylist, playlist, setSavingState]);
 
+  const handleShare = useCallback(async () => {
+    if (!playlist?.id) return;
+    const share = (enable: boolean) =>
+      fetch(`/api/playlists/${playlist.id}/share`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+        body: JSON.stringify({ enable }),
+      });
+    try {
+      const res = await share(true);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (!data.sharePath) throw new Error('No share path');
+      const url = `${window.location.origin}${data.sharePath}`;
+      try { await navigator.clipboard.writeText(url); } catch { /* clipboard blocked — toast still shows the action */ }
+      addToast('Public link copied to clipboard.', 'success', {
+        actionLabel: 'Stop sharing',
+        duration: 8000,
+        onAction: async () => {
+          try {
+            const off = await share(false);
+            if (!off.ok) throw new Error(`HTTP ${off.status}`);
+            addToast('Sharing disabled.', 'info');
+          } catch {
+            addToast('Failed to disable sharing.', 'error');
+          }
+        },
+      });
+    } catch {
+      addToast('Failed to create share link.', 'error');
+    }
+  }, [playlist, getAuthHeader, addToast]);
+
   const renderPlaylistTrackRow = useCallback((track: TrackInfo, index: number, readOnly = isSystemPlaylist) => {
     const itemId = sortableItems[index];
     if (!playlist || !itemId) return null;
@@ -745,6 +779,18 @@ export const PlaylistDetail: React.FC = () => {
                   Play Playlist
                 </span>
               </button>
+              {!isSystemPlaylist && playlist.id && (
+                <button
+                  onClick={handleShare}
+                  className="btn btn-ghost btn-lg"
+                  aria-label="Create a public share link"
+                >
+                  <span className="inline-flex items-center gap-2">
+                    <Share2 size={18} />
+                    Share
+                  </span>
+                </button>
+              )}
               {saveLabel && (
                 <div className="inline-flex items-center gap-2 text-sm text-[var(--color-text-secondary)]">
                   {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4 text-[var(--color-primary)]" />}

@@ -1,5 +1,12 @@
 import * as mm from 'music-metadata';
+import sharp from 'sharp';
 import { hashArt, findImageStart, encodeArt, artExists, ART_SIZES } from '../services/artCache';
+
+// Pin libvips to a single thread per worker. By default sharp uses one thread
+// per CPU *per operation*; with one worker process per CPU (processPool), that
+// is cores×cores threads contending during a fresh-library scan. One thread per
+// worker keeps total art-encode parallelism at ~#cores.
+sharp.concurrency(1);
 
 // Protocol: Each line on stdin: { id, filePathBase64, nameStr, processArt?, knownArtHash? }
 // Each line on stdout: { id, metadata: { ..., artHash } } or { id, error }

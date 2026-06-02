@@ -274,7 +274,14 @@ export const ArtistDetail: React.FC = () => {
     const navigate = useNavigate();
     const location = useLocation();
     const heroState = useMemo(() => readArtistHeroState(location.state), [location.state]);
-    const { library, artists, albums, setPlaylist, getAuthHeader, isLibraryLoading } = usePlayerStore();
+    // Per-field selectors instead of a whole-store subscription, which re-rendered
+    // this detail view on every unrelated store mutation (e.g. playback ticks).
+    const library = usePlayerStore((s) => s.library);
+    const artists = usePlayerStore((s) => s.artists);
+    const albums = usePlayerStore((s) => s.albums);
+    const setPlaylist = usePlayerStore((s) => s.setPlaylist);
+    const getAuthHeader = usePlayerStore((s) => s.getAuthHeader);
+    const isLibraryLoading = usePlayerStore((s) => s.isLibraryLoading);
 
     // Map albumId → edition_label so each AlbumCard can render the "remaster",
     // "deluxe", etc. badge alongside the canonical edition (which has no label).

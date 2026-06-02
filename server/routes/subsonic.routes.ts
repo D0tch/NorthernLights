@@ -173,13 +173,29 @@ function authParamShape(req: Request): string {
   return `apiKey=${present('apiKey', 'api_key', 'apikey', 'key')} u=${present('u', 'username')} p=${present('p', 'password')} t=${present('t', 'token')} s=${present('s', 'salt')}`;
 }
 
+// CodeQL false positive (js/insufficient-password-hash): a Subsonic API key is a
+// 256-bit CSPRNG token (`aurora_sub_` + randomBytes(32), see
+// generateSubsonicApiKeySecret in auth.routes.ts), NOT a user-chosen password.
+// SHA-256 is the correct, standard storage for high-entropy secrets (cf. GitHub
+// PATs / session tokens): the 2^256 keyspace is infeasible to brute-force
+// regardless of hash speed, so a slow KDF (bcrypt/argon2) would only add
+// per-request latency with no security gain — which is why this replaced the
+// legacy bcrypt path. The input merely *looks* like a password to taint tracking.
 function hashSubsonicApiKey(apiKey: string): string {
-  return `sha256:${crypto.createHash('sha256').update(apiKey, 'utf8').digest('hex')}`;
+  return `sha256:${crypto.createHash('sha256').update(apiKey, 'utf8').digest('hex')}`; // codeql[js/insufficient-password-hash]
+}
+
+// Constant-time string compare to avoid leaking the stored hash byte-by-byte via
+// the short-circuit timing of `===`. Mirrors the timingSafeEqual guard in admin.routes.ts.
+function timingSafeStringEqual(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a, 'utf8');
+  const bBuf = Buffer.from(b, 'utf8');
+  return aBuf.length === bBuf.length && crypto.timingSafeEqual(aBuf, bBuf);
 }
 
 async function verifySubsonicApiKey(apiKey: string, storedHash: string): Promise<{ ok: boolean; upgradedHash?: string }> {
   if (storedHash.startsWith('sha256:')) {
-    return { ok: hashSubsonicApiKey(apiKey) === storedHash };
+    return { ok: timingSafeStringEqual(hashSubsonicApiKey(apiKey), storedHash) };
   }
 
   const ok = await bcrypt.compare(apiKey, storedHash);

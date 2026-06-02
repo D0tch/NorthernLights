@@ -1006,7 +1006,16 @@ function getSystemUniqueCardKind(collection: HubCollection): UniqueCardKind {
 }
 
 export const Hub: React.FC = () => {
-  const { library, setPlaylist, getAuthHeader, togglePin, currentUser, fetchPlaylistsFromServer, playlists } = usePlayerStore();
+  // Per-field selectors instead of `usePlayerStore()` (whole-store subscription),
+  // which re-rendered this 1600-LOC component on every store mutation —
+  // including currentIndex/isBuffering/playbackState changes during playback.
+  const library = usePlayerStore((s) => s.library);
+  const setPlaylist = usePlayerStore((s) => s.setPlaylist);
+  const getAuthHeader = usePlayerStore((s) => s.getAuthHeader);
+  const togglePin = usePlayerStore((s) => s.togglePin);
+  const currentUser = usePlayerStore((s) => s.currentUser);
+  const fetchPlaylistsFromServer = usePlayerStore((s) => s.fetchPlaylistsFromServer);
+  const playlists = usePlayerStore((s) => s.playlists);
   const playAtIndex = usePlayerStore((s) => s.playAtIndex);
   const llmBaseUrl = usePlayerStore((s) => s.llmBaseUrl);
   const llmModelName = usePlayerStore((s) => s.llmModelName);

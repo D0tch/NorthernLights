@@ -32,6 +32,48 @@ export interface ToastItem {
 // Re-entrancy guard: incremented on each playAtIndex call to discard stale callbacks
 let playGeneration = 0;
 
+// In-flight dedup + cancellation for the library/playlist fetches. The init
+// sequence and the 10s health poller both fire these unawaited; without dedup a
+// second call (or a reconnect) duplicates the request, and without an
+// AbortController an in-flight fetch can resolve after logout and overwrite
+// state with another session's data. Mirrors the promise-cache in externalImagery.ts.
+let inFlightLibraryFetch: Promise<void> | null = null;
+let inFlightPlaylistsFetch: Promise<void> | null = null;
+let libraryFetchAbort: AbortController | null = null;
+let playlistsFetchAbort: AbortController | null = null;
+
+// Bumped on each optimistic playlist mutation so a slow in-flight mutation's
+// rollback / server-refetch can't clobber a newer optimistic edit applied after it.
+let playlistMutationGeneration = 0;
+
+// Sleep timer: fade the audible volume to zero over the final SLEEP_FADE_MS, then
+// pause and restore the volume for the next manual play. Timers live at module
+// scope (not in the store) since they're imperative side-effects.
+let sleepTimerTimeout: ReturnType<typeof setTimeout> | null = null;
+let sleepFadeInterval: ReturnType<typeof setInterval> | null = null;
+const SLEEP_FADE_MS = 20000;
+function clearSleepTimers() {
+  if (sleepTimerTimeout) { clearTimeout(sleepTimerTimeout); sleepTimerTimeout = null; }
+  if (sleepFadeInterval) { clearInterval(sleepFadeInterval); sleepFadeInterval = null; }
+}
+
+// Throttle scrobble-failure toasts (per provider) so a backend outage during a
+// long session doesn't spam one toast per finished track.
+const lastScrobbleErrorAt: Record<string, number> = {};
+
+function abortInFlightLibraryFetches() {
+  libraryFetchAbort?.abort();
+  playlistsFetchAbort?.abort();
+  libraryFetchAbort = null;
+  playlistsFetchAbort = null;
+  inFlightLibraryFetch = null;
+  inFlightPlaylistsFetch = null;
+}
+
+function isAbortError(e: unknown): boolean {
+  return !!e && typeof e === 'object' && (e as { name?: string }).name === 'AbortError';
+}
+
 const buildTrackUrls = (trackId: string, path: string, token: string, quality: string = '128k', artHash?: string) => {
   const base = `${window.location.protocol}//${window.location.host}`;
   const tokenParam = token ? `&token=${token}` : '';
@@ -286,8 +328,13 @@ export interface PlayerState {
   library: TrackInfo[];
   libraryFolders: string[];
   isLibraryLoading: boolean;
+  // Non-null when the last library/playlist fetch failed (network error or
+  // non-OK status). Lets the UI distinguish "genuinely empty" from "load failed"
+  // and offer a Retry instead of a blank screen.
+  libraryError: string | null;
   playlists: Playlist[];
   isPlaylistsLoading: boolean;
+  playlistsError: string | null;
 
   // Entity State (for navigation)
   artists: ArtistInfo[];
@@ -492,6 +539,11 @@ export interface PlayerState {
   nextTrack: (options?: NextTrackOptions) => Promise<void>;
   prevTrack: () => Promise<void>;
   setVolume: (v: number) => void;
+  // Sleep timer. sleepTimerEndsAt is the epoch-ms fire time (null = inactive);
+  // it's transient (not persisted). startSleepTimer(0) cancels.
+  sleepTimerEndsAt: number | null;
+  startSleepTimer: (minutes: number) => void;
+  cancelSleepTimer: () => void;
   selectAudioOutput: () => Promise<void>;
   setAudioOutputDevice: (deviceId: string) => Promise<void>;
   refreshAudioOutputs: () => Promise<void>;
@@ -540,6 +592,11 @@ export interface PlayerState {
   // PWA update state
   pendingUpdate: boolean;
   setPendingUpdate: (val: boolean) => void;
+
+  // True when the browser blocked playback for lack of a user gesture
+  // (autoplay policy). UI can show a "tap to play" affordance.
+  autoplayBlocked: boolean;
+  setAutoplayBlocked: (val: boolean) => void;
 }
 
 // Remove `PlayerPersist` hack as it was unnecessary and broke inference further
@@ -604,20 +661,26 @@ export const usePlayerStore = create<PlayerState>()(
                 mbid: currentTrack.mbTrackId || '',
               }],
             };
-            if (lastFmConnected && lastFmScrobbleEnabled) {
-              fetch('/api/providers/lastfm/scrobble', {
+            // Surface scrobble failures (throttled per provider) so users notice
+            // when this otherwise-invisible feature silently breaks. Success stays
+            // quiet to avoid a toast on every finished track.
+            const scrobbleTo = (provider: string, url: string) => {
+              fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...authHeaders },
                 body: JSON.stringify(payload),
-              }).catch(() => {});
-            }
-            if (listenBrainzConnected && listenBrainzScrobbleEnabled) {
-              fetch('/api/providers/listenbrainz/scrobble', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...authHeaders },
-                body: JSON.stringify(payload),
-              }).catch(() => {});
-            }
+              })
+                .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); })
+                .catch(() => {
+                  const now = Date.now();
+                  if (now - (lastScrobbleErrorAt[provider] || 0) > 60000) {
+                    lastScrobbleErrorAt[provider] = now;
+                    get().addToast(`Couldn't scrobble to ${provider}.`, 'error', { duration: 4000 });
+                  }
+                });
+            };
+            if (lastFmConnected && lastFmScrobbleEnabled) scrobbleTo('Last.fm', '/api/providers/lastfm/scrobble');
+            if (listenBrainzConnected && listenBrainzScrobbleEnabled) scrobbleTo('ListenBrainz', '/api/providers/listenbrainz/scrobble');
           }
           set({ _scrobbleStartAt: null, _scrobbleEligible: false });
 
@@ -771,8 +834,10 @@ export const usePlayerStore = create<PlayerState>()(
         library: [] as TrackInfo[],
         libraryFolders: [] as string[],
         isLibraryLoading: false as boolean,
+        libraryError: null as string | null,
         playlists: [] as Playlist[],
         isPlaylistsLoading: false as boolean,
+        playlistsError: null as string | null,
         artists: [] as ArtistInfo[],
         albums: [] as AlbumInfo[],
         genres: [] as EntityInfo[],
@@ -984,7 +1049,11 @@ export const usePlayerStore = create<PlayerState>()(
           authExpiredUsername: '',
         }),
 
-        expireAuthSession: (message = 'Your session expired. Log in again to continue.') => set((state: PlayerState) => ({
+        expireAuthSession: (message = 'Your session expired. Log in again to continue.') => {
+          // Cancel any in-flight library/playlist fetch so it can't resolve after
+          // logout and repopulate state with the previous session's data.
+          abortInFlightLibraryFetches();
+          return set((state: PlayerState) => ({
           authToken: null,
           mediaAccessToken: null,
           sseAccessToken: null,
@@ -1002,7 +1071,8 @@ export const usePlayerStore = create<PlayerState>()(
           activeWorkers: 0,
           activeFiles: [],
           scanningFile: null,
-        })),
+        }));
+        },
 
         login: async (username: string, password: string) => {
           try {
@@ -1316,10 +1386,16 @@ export const usePlayerStore = create<PlayerState>()(
         },
 
         fetchLibraryFromServer: async () => {
-          set({ isLibraryLoading: true });
+          // Dedup: a second caller (init + health poller) joins the in-flight request.
+          if (inFlightLibraryFetch) return inFlightLibraryFetch;
+          libraryFetchAbort?.abort();
+          const ac = new AbortController();
+          libraryFetchAbort = ac;
+          set({ isLibraryLoading: true, libraryError: null });
+          const run = (async () => {
           try {
             const authHeaders = (get() as any).getAuthHeader();
-            const res = await fetch('/api/library', { headers: authHeaders });
+            const res = await fetch('/api/library', { headers: authHeaders, signal: ac.signal });
             if (res.ok) {
               const data = await res.json();
               
@@ -1377,19 +1453,36 @@ export const usePlayerStore = create<PlayerState>()(
                 };
               });
             } else {
-              set({ isLibraryLoading: false });
+              const msg = `Couldn't load your library (server returned ${res.status}).`;
+              set({ isLibraryLoading: false, libraryError: msg });
+              get().addToast(msg, 'error', { actionLabel: 'Retry', onAction: () => { void get().fetchLibraryFromServer(); } });
             }
           } catch (e) {
+            // Aborted on logout — drop silently; don't surface an error or clear loading.
+            if (isAbortError(e) || ac.signal.aborted) return;
             console.error("Failed to fetch library from server", e);
-            set({ isLibraryLoading: false });
+            const msg = "Couldn't reach the server to load your library.";
+            set({ isLibraryLoading: false, libraryError: msg });
+            get().addToast(msg, 'error', { actionLabel: 'Retry', onAction: () => { void get().fetchLibraryFromServer(); } });
+          } finally {
+            if (libraryFetchAbort === ac) libraryFetchAbort = null;
+            inFlightLibraryFetch = null;
           }
+          })();
+          inFlightLibraryFetch = run;
+          return run;
         },
 
         fetchPlaylistsFromServer: async () => {
-           set({ isPlaylistsLoading: true });
+           if (inFlightPlaylistsFetch) return inFlightPlaylistsFetch;
+           playlistsFetchAbort?.abort();
+           const ac = new AbortController();
+           playlistsFetchAbort = ac;
+           set({ isPlaylistsLoading: true, playlistsError: null });
+           const run = (async () => {
            try {
               const authHeaders = (get() as any).getAuthHeader();
-              const res = await fetch('/api/playlists', { headers: authHeaders });
+              const res = await fetch('/api/playlists', { headers: authHeaders, signal: ac.signal });
               if (res.ok) {
                  const data = await res.json();
 
@@ -1413,12 +1506,21 @@ export const usePlayerStore = create<PlayerState>()(
                  });
 
                  set({ playlists: populatedPlaylists });
+              } else {
+                 set({ playlistsError: `Couldn't load playlists (server returned ${res.status}).` });
               }
            } catch (e) {
+              if (isAbortError(e) || ac.signal.aborted) return; // aborted on logout
               console.error("Failed to fetch playlists from server", e);
+              set({ playlistsError: "Couldn't reach the server to load playlists." });
            } finally {
-              set({ isPlaylistsLoading: false });
+              if (!ac.signal.aborted) set({ isPlaylistsLoading: false });
+              if (playlistsFetchAbort === ac) playlistsFetchAbort = null;
+              inFlightPlaylistsFetch = null;
            }
+           })();
+           inFlightPlaylistsFetch = run;
+           return run;
         },
 
         // Fetch a single playlist with its tracks and upsert it into the
@@ -1528,6 +1630,8 @@ export const usePlayerStore = create<PlayerState>()(
            const targetPlaylist = previousPlaylists.find((playlist) => playlist.id === playlistId);
            if (!targetPlaylist) return;
 
+           const myGen = ++playlistMutationGeneration;
+
            const optimisticTracks = hydratePlaylistTracks(
              nextTrackIds,
              get().library,
@@ -1556,9 +1660,16 @@ export const usePlayerStore = create<PlayerState>()(
                throw new Error(`Playlist update failed with status ${res.status}`);
              }
 
-             await get().fetchPlaylistsFromServer();
+             // Only reconcile with the server if a newer optimistic mutation hasn't
+             // superseded this one — otherwise the refetch would clobber it.
+             if (myGen === playlistMutationGeneration) {
+               await get().fetchPlaylistsFromServer();
+             }
            } catch (e) {
-             set({ playlists: previousPlaylists });
+             // Same guard for rollback: don't revert over a newer edit's state.
+             if (myGen === playlistMutationGeneration) {
+               set({ playlists: previousPlaylists });
+             }
              console.error(`Failed to replace tracks in playlist ${playlistId}`, e);
              throw e;
            }
@@ -1930,6 +2041,21 @@ export const usePlayerStore = create<PlayerState>()(
           const track = playlist[index];
           if (!track) return;
 
+          // Rebuild stream/raw/art URLs from the CURRENT media token rather than
+          // trusting the persisted URL: the token may have rotated since the track
+          // was queued (most visibly across an offline reload), in which case the
+          // baked-in token fails auth — and because `url` is non-empty, the
+          // fileHandle fallback below is skipped, so the track dies silently.
+          // For server tracks (those with a base64 `path`) this also keeps the SW
+          // cache key stable within a session. Local-only tracks (fileHandle, no
+          // path) are left untouched.
+          const { mediaAccessToken, authToken, streamingQuality } = get();
+          const freshToken = mediaAccessToken || authToken || '';
+          const freshQuality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+          const playable: TrackInfo = track.path && freshToken
+            ? { ...track, ...buildTrackUrls(track.id, track.path, freshToken, freshQuality, (track as any).artHash) }
+            : track;
+
           const generation = ++playGeneration;
 
           // Immediately set the DB-known duration so the UI doesn't flash "0:10"
@@ -1957,9 +2083,10 @@ export const usePlayerStore = create<PlayerState>()(
                 index,
                 repeat
               );
-            } else if (track.url) {
-              // Not casting: play locally — pass both HLS and raw URLs
-              await playbackManager.playUrl(track.url, track.rawUrl || '', track.title, track.artist || ((track.artists as string[])?.join(', ')), track.artUrl, track.album, track.format);
+            } else if (playable.url) {
+              // Not casting: play locally — pass both HLS and raw URLs (rebuilt
+              // with the current token above).
+              await playbackManager.playUrl(playable.url, playable.rawUrl || '', playable.title, playable.artist || ((playable.artists as string[])?.join(', ')), playable.artUrl, playable.album, playable.format);
             } else if (track.fileHandle) {
                // Fallback for local file handles
                await playbackManager.playFile(track.fileHandle);
@@ -2080,6 +2207,39 @@ export const usePlayerStore = create<PlayerState>()(
         setVolume: (v: number) => {
           playbackManager.setVolume(v);
           set({ volume: v });
+        },
+
+        sleepTimerEndsAt: null,
+        startSleepTimer: (minutes: number) => {
+          clearSleepTimers();
+          if (!minutes || minutes <= 0) {
+            playbackManager.setVolume(get().volume); // undo any in-progress fade
+            set({ sleepTimerEndsAt: null });
+            return;
+          }
+          const totalMs = minutes * 60000;
+          set({ sleepTimerEndsAt: Date.now() + totalMs });
+          const fadeStartDelay = Math.max(0, totalMs - SLEEP_FADE_MS);
+          sleepTimerTimeout = setTimeout(() => {
+            const startVol = get().volume;
+            const fadeStart = Date.now();
+            sleepFadeInterval = setInterval(() => {
+              const frac = Math.min(1, (Date.now() - fadeStart) / SLEEP_FADE_MS);
+              playbackManager.setVolume(startVol * (1 - frac));
+              if (frac >= 1) {
+                clearSleepTimers();
+                get().pause();
+                playbackManager.setVolume(startVol); // restore for the next manual play
+                set({ sleepTimerEndsAt: null });
+                get().addToast('Sleep timer ended playback.', 'info');
+              }
+            }, 250);
+          }, fadeStartDelay);
+        },
+        cancelSleepTimer: () => {
+          clearSleepTimers();
+          playbackManager.setVolume(get().volume); // restore if cancelled mid-fade
+          set({ sleepTimerEndsAt: null });
         },
 
         selectAudioOutput: async () => {
@@ -2221,6 +2381,11 @@ export const usePlayerStore = create<PlayerState>()(
         pendingUpdate: false,
         setPendingUpdate: (val: boolean) => {
           set({ pendingUpdate: val } as Partial<PlayerState>);
+        },
+
+        autoplayBlocked: false,
+        setAutoplayBlocked: (val: boolean) => {
+          set({ autoplayBlocked: val } as Partial<PlayerState>);
         },
       };
     },
