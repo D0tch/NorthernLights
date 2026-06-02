@@ -106,12 +106,15 @@ export default defineConfig({
             }
           },
           {
-            // Album art cache (kept from legacy media-cache)
+            // Album art cache (kept from legacy media-cache). maxEntries must
+            // comfortably exceed a real library's distinct cover count — at 500
+            // a large library LRU-evicts covers mid-browse and re-downloads them
+            // on the next visit, defeating the cache.
             urlPattern: /\/api\/art(\?.*)?$/i,
             handler: 'CacheFirst',
             options: {
               cacheName: 'media-cache',
-              expiration: { maxEntries: 500, maxAgeSeconds: 2592000 }, // 30 days
+              expiration: { maxEntries: 4000, maxAgeSeconds: 2592000 }, // 30 days
               cacheableResponse: { statuses: [0, 200] }
             }
           },
