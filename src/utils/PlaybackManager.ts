@@ -62,6 +62,9 @@ class PlaybackManager {
     private readonly mediaSessionPositionIntervalMs = 5000;
     private lastMediaSessionPositionUpdate = 0;
     private lastMediaErrorToastAt = 0;
+    // Screen Wake Lock — keeps the phone screen from sleeping mid-track. Typed
+    // structurally to avoid depending on lib.dom's WakeLockSentinel being present.
+    private wakeLock: { release: () => Promise<void>; addEventListener: (t: 'release', cb: () => void) => void } | null = null;
 
     // Store callbacks for Zustand to update its state
     private onTimeUpdateCallback?: (time: number) => void;
@@ -162,6 +165,30 @@ class PlaybackManager {
         }
     }
 
+    // Acquire a screen wake lock so the device doesn't sleep during playback.
+    // No-ops when unsupported, when the tab isn't visible (the API requires
+    // visibility), or when one is already held. Failures are swallowed — a wake
+    // lock is a best-effort nicety, never required for playback.
+    private async acquireWakeLock(): Promise<void> {
+        try {
+            const wl = (navigator as any).wakeLock;
+            if (!wl || this.wakeLock) return;
+            if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+            const sentinel = await wl.request('screen');
+            this.wakeLock = sentinel;
+            // The OS auto-releases on tab hide; clear our handle so reconcile() can re-acquire.
+            sentinel.addEventListener('release', () => { this.wakeLock = null; });
+        } catch {
+            this.wakeLock = null;
+        }
+    }
+
+    private releaseWakeLock(): void {
+        const wl = this.wakeLock;
+        this.wakeLock = null;
+        if (wl) { void wl.release().catch(() => {}); }
+    }
+
     private attachAudioEvents(audio: HTMLAudioElement): void {
         // Set up standard event listeners
         audio.addEventListener('timeupdate', () => {
@@ -189,6 +216,7 @@ class PlaybackManager {
         audio.addEventListener('ended', () => {
             if (!castManager.isConnected() && audio === this.audio) {
                 this.transitionStartedAt = performance.now();
+                this.releaseWakeLock();
                 this.onPlayStateChangeCallback?.('stopped');
                 this.updateMediaSessionPlaybackState('none');
                 this.onEndedCallback?.();
@@ -226,12 +254,14 @@ class PlaybackManager {
 
         audio.addEventListener('play', () => {
              if (!castManager.isConnected() && audio === this.audio) {
+                void this.acquireWakeLock();
                 this.onPlayStateChangeCallback?.('playing');
                 this.updateMediaSessionPlaybackState('playing');
              }
         });
         audio.addEventListener('pause', () => {
              if (!castManager.isConnected() && audio === this.audio) {
+                this.releaseWakeLock();
                 this.onPlayStateChangeCallback?.('paused');
                 this.updateMediaSessionPlaybackState('paused');
                 this.updateMediaSessionPosition(true);
@@ -429,6 +459,11 @@ class PlaybackManager {
                 storeState === 'playing' ? 'playing' : storeState === 'paused' ? 'paused' : 'none'
             );
             this.updateMediaSessionPosition(true);
+            // The wake lock auto-releases when the tab is hidden; re-acquire it on
+            // return if we're still playing locally.
+            if (storeState === 'playing' && !castManager.isConnected()) {
+                void this.acquireWakeLock();
+            }
         };
 
         document.addEventListener('visibilitychange', () => {
@@ -1136,6 +1171,7 @@ class PlaybackManager {
         if (castManager.isConnected()) {
             castManager.stop();
         } else {
+            this.releaseWakeLock();
             this.audio.pause();
             this.audio.currentTime = 0;
             this.destroyPreparedAudio();

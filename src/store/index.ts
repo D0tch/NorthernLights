@@ -46,6 +46,21 @@ let playlistsFetchAbort: AbortController | null = null;
 // rollback / server-refetch can't clobber a newer optimistic edit applied after it.
 let playlistMutationGeneration = 0;
 
+// Sleep timer: fade the audible volume to zero over the final SLEEP_FADE_MS, then
+// pause and restore the volume for the next manual play. Timers live at module
+// scope (not in the store) since they're imperative side-effects.
+let sleepTimerTimeout: ReturnType<typeof setTimeout> | null = null;
+let sleepFadeInterval: ReturnType<typeof setInterval> | null = null;
+const SLEEP_FADE_MS = 20000;
+function clearSleepTimers() {
+  if (sleepTimerTimeout) { clearTimeout(sleepTimerTimeout); sleepTimerTimeout = null; }
+  if (sleepFadeInterval) { clearInterval(sleepFadeInterval); sleepFadeInterval = null; }
+}
+
+// Throttle scrobble-failure toasts (per provider) so a backend outage during a
+// long session doesn't spam one toast per finished track.
+const lastScrobbleErrorAt: Record<string, number> = {};
+
 function abortInFlightLibraryFetches() {
   libraryFetchAbort?.abort();
   playlistsFetchAbort?.abort();
@@ -524,6 +539,11 @@ export interface PlayerState {
   nextTrack: (options?: NextTrackOptions) => Promise<void>;
   prevTrack: () => Promise<void>;
   setVolume: (v: number) => void;
+  // Sleep timer. sleepTimerEndsAt is the epoch-ms fire time (null = inactive);
+  // it's transient (not persisted). startSleepTimer(0) cancels.
+  sleepTimerEndsAt: number | null;
+  startSleepTimer: (minutes: number) => void;
+  cancelSleepTimer: () => void;
   selectAudioOutput: () => Promise<void>;
   setAudioOutputDevice: (deviceId: string) => Promise<void>;
   refreshAudioOutputs: () => Promise<void>;
@@ -641,20 +661,26 @@ export const usePlayerStore = create<PlayerState>()(
                 mbid: currentTrack.mbTrackId || '',
               }],
             };
-            if (lastFmConnected && lastFmScrobbleEnabled) {
-              fetch('/api/providers/lastfm/scrobble', {
+            // Surface scrobble failures (throttled per provider) so users notice
+            // when this otherwise-invisible feature silently breaks. Success stays
+            // quiet to avoid a toast on every finished track.
+            const scrobbleTo = (provider: string, url: string) => {
+              fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json', ...authHeaders },
                 body: JSON.stringify(payload),
-              }).catch(() => {});
-            }
-            if (listenBrainzConnected && listenBrainzScrobbleEnabled) {
-              fetch('/api/providers/listenbrainz/scrobble', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...authHeaders },
-                body: JSON.stringify(payload),
-              }).catch(() => {});
-            }
+              })
+                .then((res) => { if (!res.ok) throw new Error(`HTTP ${res.status}`); })
+                .catch(() => {
+                  const now = Date.now();
+                  if (now - (lastScrobbleErrorAt[provider] || 0) > 60000) {
+                    lastScrobbleErrorAt[provider] = now;
+                    get().addToast(`Couldn't scrobble to ${provider}.`, 'error', { duration: 4000 });
+                  }
+                });
+            };
+            if (lastFmConnected && lastFmScrobbleEnabled) scrobbleTo('Last.fm', '/api/providers/lastfm/scrobble');
+            if (listenBrainzConnected && listenBrainzScrobbleEnabled) scrobbleTo('ListenBrainz', '/api/providers/listenbrainz/scrobble');
           }
           set({ _scrobbleStartAt: null, _scrobbleEligible: false });
 
@@ -2181,6 +2207,39 @@ export const usePlayerStore = create<PlayerState>()(
         setVolume: (v: number) => {
           playbackManager.setVolume(v);
           set({ volume: v });
+        },
+
+        sleepTimerEndsAt: null,
+        startSleepTimer: (minutes: number) => {
+          clearSleepTimers();
+          if (!minutes || minutes <= 0) {
+            playbackManager.setVolume(get().volume); // undo any in-progress fade
+            set({ sleepTimerEndsAt: null });
+            return;
+          }
+          const totalMs = minutes * 60000;
+          set({ sleepTimerEndsAt: Date.now() + totalMs });
+          const fadeStartDelay = Math.max(0, totalMs - SLEEP_FADE_MS);
+          sleepTimerTimeout = setTimeout(() => {
+            const startVol = get().volume;
+            const fadeStart = Date.now();
+            sleepFadeInterval = setInterval(() => {
+              const frac = Math.min(1, (Date.now() - fadeStart) / SLEEP_FADE_MS);
+              playbackManager.setVolume(startVol * (1 - frac));
+              if (frac >= 1) {
+                clearSleepTimers();
+                get().pause();
+                playbackManager.setVolume(startVol); // restore for the next manual play
+                set({ sleepTimerEndsAt: null });
+                get().addToast('Sleep timer ended playback.', 'info');
+              }
+            }, 250);
+          }, fadeStartDelay);
+        },
+        cancelSleepTimer: () => {
+          clearSleepTimers();
+          playbackManager.setVolume(get().volume); // restore if cancelled mid-fade
+          set({ sleepTimerEndsAt: null });
         },
 
         selectAudioOutput: async () => {
