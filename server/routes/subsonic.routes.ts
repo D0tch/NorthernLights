@@ -173,8 +173,16 @@ function authParamShape(req: Request): string {
   return `apiKey=${present('apiKey', 'api_key', 'apikey', 'key')} u=${present('u', 'username')} p=${present('p', 'password')} t=${present('t', 'token')} s=${present('s', 'salt')}`;
 }
 
+// CodeQL false positive (js/insufficient-password-hash): a Subsonic API key is a
+// 256-bit CSPRNG token (`aurora_sub_` + randomBytes(32), see
+// generateSubsonicApiKeySecret in auth.routes.ts), NOT a user-chosen password.
+// SHA-256 is the correct, standard storage for high-entropy secrets (cf. GitHub
+// PATs / session tokens): the 2^256 keyspace is infeasible to brute-force
+// regardless of hash speed, so a slow KDF (bcrypt/argon2) would only add
+// per-request latency with no security gain — which is why this replaced the
+// legacy bcrypt path. The input merely *looks* like a password to taint tracking.
 function hashSubsonicApiKey(apiKey: string): string {
-  return `sha256:${crypto.createHash('sha256').update(apiKey, 'utf8').digest('hex')}`;
+  return `sha256:${crypto.createHash('sha256').update(apiKey, 'utf8').digest('hex')}`; // codeql[js/insufficient-password-hash]
 }
 
 // Constant-time string compare to avoid leaking the stored hash byte-by-byte via
