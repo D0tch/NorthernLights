@@ -11,11 +11,6 @@ import { FilterBar } from './FilterBar';
 import { QueryBuilderModal } from './QueryBuilderModal';
 import { MobileFilterOverlay } from './MobileFilterOverlay';
 import {
-  ARTIST_FACETS,
-  ALBUM_FACETS,
-  applyFacetFilters,
-  applySort,
-  applyQueryResultFilter,
   hasActiveFilters,
   QueryGroup,
 } from '../../utils/filterState';
@@ -28,6 +23,8 @@ import {
   getEnrichedAlbums,
   getArtistFacetValues,
   getAlbumFacetValues,
+  getFilteredArtists,
+  getFilteredAlbums,
 } from '../../utils/libraryDerivations';
 
 const ArtistCardSkeleton: React.FC = () => (
@@ -157,23 +154,17 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
         [enrichedAlbums]
     );
 
-    const filteredArtists = useMemo(() => {
-        let result = applyFacetFilters(artistEntities, artistFilters.facets, ARTIST_FACETS);
-        if (artistFilters.queryResultIds) {
-            result = applyQueryResultFilter(result, artistFilters.queryResultIds);
-        }
-        result = applySort(result, artistFilters.sort, artistFilters.sortDirection, 'name');
-        return result;
-    }, [artistEntities, artistFilters]);
+    // Module-scope memos (see libraryDerivations) so the filter+sort pass
+    // survives route unmount/remount instead of re-running on every navigation.
+    const filteredArtists = useMemo(
+        () => getFilteredArtists(artistEntities, artistFilters),
+        [artistEntities, artistFilters]
+    );
 
-    const filteredAlbums = useMemo(() => {
-        let result = applyFacetFilters(enrichedAlbums, albumFilters.facets, ALBUM_FACETS);
-        if (albumFilters.queryResultIds) {
-            result = applyQueryResultFilter(result, albumFilters.queryResultIds);
-        }
-        result = applySort(result, albumFilters.sort, albumFilters.sortDirection, 'title');
-        return result;
-    }, [enrichedAlbums, albumFilters]);
+    const filteredAlbums = useMemo(
+        () => getFilteredAlbums(enrichedAlbums, albumFilters),
+        [enrichedAlbums, albumFilters]
+    );
 
     const handleOpenQueryBuilder = useCallback((view: 'artists' | 'albums') => {
         setQueryBuilderView(view);

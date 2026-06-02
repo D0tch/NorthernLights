@@ -3,8 +3,12 @@ import type { ArtistInfo, AlbumInfo } from '../store/index';
 import {
   ARTIST_FACETS,
   ALBUM_FACETS,
+  applyFacetFilters,
+  applyQueryResultFilter,
+  applySort,
   deriveAlbumMetadata,
   type EnrichedAlbum,
+  type FilterState,
 } from './filterState';
 
 // Library-wide derivations (whole-library passes: grouping tracks by album,
@@ -100,4 +104,26 @@ export const getArtistFacetValues = singleSlotMemo(
 
 export const getAlbumFacetValues = singleSlotMemo(
   (albums: EnrichedAlbum[]) => ALBUM_FACETS.map((f) => f.extractValues(albums))
+);
+
+// Facet-filter + query-filter + sort pipelines. These lived as in-component
+// `useMemo`s, which are discarded on unmount, so navigating into the artists or
+// albums tab re-ran the full filter+sort pass every time even when neither the
+// entities nor the filters had changed. Module-scope single-slot memos (keyed
+// by entity-array + filter-object identity — both stable until a scan/edit or a
+// filter change) make a repeat navigation an O(1) reference check.
+export const getFilteredArtists = singleSlotMemo(
+  (artists: ArtistInfo[], filters: FilterState): ArtistInfo[] => {
+    let result = applyFacetFilters(artists, filters.facets, ARTIST_FACETS);
+    if (filters.queryResultIds) result = applyQueryResultFilter(result, filters.queryResultIds);
+    return applySort(result, filters.sort, filters.sortDirection, 'name');
+  }
+);
+
+export const getFilteredAlbums = singleSlotMemo(
+  (albums: EnrichedAlbum[], filters: FilterState): EnrichedAlbum[] => {
+    let result = applyFacetFilters(albums, filters.facets, ALBUM_FACETS);
+    if (filters.queryResultIds) result = applyQueryResultFilter(result, filters.queryResultIds);
+    return applySort(result, filters.sort, filters.sortDirection, 'title');
+  }
 );
