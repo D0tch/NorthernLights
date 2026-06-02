@@ -15,8 +15,19 @@ import {
 } from '../services/hlsStream.service';
 import { writeCastReceiverLog, writeHlsServerLog, writeHlsSessionLog } from '../services/debugLogger.service';
 import { logHls, logFfmpeg } from '../services/loggingConfig';
+import { createRateLimiter } from '../middleware/rateLimit';
 
 const router = Router();
+
+// Media routes serve streaming/HLS segments and album art — hot paths hit many
+// times per playback — so the ceiling is generous, sized to stop abuse without
+// throttling normal listening.
+router.use(createRateLimiter({
+  keyPrefix: 'media',
+  windowMs: 60 * 1000,
+  max: 1800,
+  message: 'Too many media requests. Try again later.',
+}));
 const HLS_SEGMENT_LINE = /^(segment\d+\.ts)$/gm;
 const HLS_MEDIA_PLAYLIST_NAME = 'media.m3u8';
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

@@ -12,8 +12,18 @@ import { scanStatus, scanClients, broadcastScanStatus } from '../state';
 import { requireAdmin } from '../middleware/auth';
 import { enrichCreditsFromMusicBrainz, enrichCreditsFromGenius } from '../services/creditsEnrichment.service';
 import { getCreditsStatus } from '../database';
+import { createRateLimiter } from '../middleware/rateLimit';
 
 const router = Router();
+
+// Library scan/add/enrich routes drive filesystem walks and DB writes. Apply a
+// per-user/IP rate limit across every route on this router.
+router.use(createRateLimiter({
+  keyPrefix: 'library',
+  windowMs: 60 * 1000,
+  max: 120,
+  message: 'Too many library requests. Try again later.',
+}));
 
 // Mime type map
 const MIME_TYPES: Record<string, string> = {

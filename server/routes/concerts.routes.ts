@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { createRateLimiter } from '../middleware/rateLimit';
 import { requireAuth, requireAdmin } from '../middleware/auth';
 import {
   getSystemSetting,
@@ -30,6 +31,15 @@ import {
 } from '../services/jambase.service';
 
 const router = Router();
+
+// Concert lookups fan out to external services (JamBase) and the DB. Apply a
+// per-user/IP rate limit across every route on this router.
+router.use(createRateLimiter({
+  keyPrefix: 'concerts',
+  windowMs: 60 * 1000,
+  max: 120,
+  message: 'Too many concert requests. Try again later.',
+}));
 
 // Fill the user's empty subscription slots with their top-played artists.
 // No-op if auto-add is disabled, or if all slots are already filled.

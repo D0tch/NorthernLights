@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { createRateLimiter } from '../middleware/rateLimit';
 import { randomBytes } from 'crypto';
 import { getSystemSetting, setSystemSetting, getUserSetting, setUserSetting } from '../database';
 import { lfmFetch, scrobbleTracks, updateNowPlaying, loveTrack, unloveTrack } from '../services/lastfm.service';
@@ -25,6 +26,15 @@ import {
 } from '../services/metadata';
 
 const router = Router();
+
+// Provider routes proxy external services (Last.fm, Genius, MusicBrainz,
+// image proxy). Apply a per-user/IP rate limit across every route here.
+router.use(createRateLimiter({
+  keyPrefix: 'providers',
+  windowMs: 60 * 1000,
+  max: 240,
+  message: 'Too many provider requests. Try again later.',
+}));
 
 // Derive the public-facing origin of the backend.
 //

@@ -16,6 +16,7 @@ import { spawn } from 'child_process';
 // Force IPv4 locally to prevent Last.fm IPv6 blackholing hangs
 dns.setDefaultResultOrder('ipv4first');
 import { requireAuth as jwtAuthMiddleware } from './middleware/auth';
+import { createRateLimiter } from './middleware/rateLimit';
 import { initDatabaseConnection, getSessionHistory } from './state';
 import { calculateNextInfinityTrack } from './services/recommendation.service';
 
@@ -155,8 +156,16 @@ if (fs.existsSync(distPath)) {
   // ── Invite page: inject OG / Twitter card meta tags for social previews ──
   // Social crawlers don't execute JS, so we inject the meta tags server-side
   // for /invite/:token before the generic SPA catch-all handles it.
-  app.get('/invite/:token', async (req, res) => {
-    const token = req.params.token;
+  // Public, pre-auth endpoint that performs DB lookups to build a social
+  // preview — rate-limit by IP to prevent invite-token probing / abuse.
+  const invitepreviewRateLimit = createRateLimiter({
+    keyPrefix: 'invite-preview',
+    windowMs: 60 * 1000,
+    max: 60,
+    message: 'Too many requests. Try again later.',
+  });
+  app.get('/invite/:token', invitepreviewRateLimit, async (req, res) => {
+    const token = String(req.params.token);
     const origin = `${req.protocol}://${req.get('host')}`;
 
     // Try to resolve inviter name for a personalised preview
