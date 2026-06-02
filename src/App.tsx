@@ -1,15 +1,15 @@
 import React from 'react';
-import { Routes, Route, Navigate, NavLink, useLocation } from 'react-router-dom';
 import { PlaylistSidebar } from './components/PlaylistSidebar';
 import PlayerShell from './components/PlayerShell';
 import MobileMiniPlayer from './components/MobileMiniPlayer';
-import { usePlayerPlacement } from './hooks/usePlayerPlacement';
 import MobileBottomTabs from './components/MobileBottomTabs';
+import MobileHeader from './components/MobileHeader';
+import DesktopTabBar from './components/DesktopTabBar';
+import MainContent, { InviteRegister } from './components/MainContent';
 import CastHealthToasts from './components/cast/CastHealthToasts';
 import KeyboardHint from './components/KeyboardHint';
 import { usePlayerStore } from './store/index';
-import { UserMenu } from './components/UserMenu';
-import { Settings as SettingsIcon, AudioWaveform, RefreshCw } from 'lucide-react';
+import { RefreshCw } from 'lucide-react';
 import { ToastContainer } from './components/ToastContainer';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSSE } from './hooks/useSSE';
@@ -18,58 +18,17 @@ import { playbackManager } from './utils/PlaybackManager';
 import { GlobalScanningIndicator } from './components/GlobalScanningIndicator';
 import { applyPendingPwaUpdate } from './utils/pwaUpdate';
 
-import { AlbumDetail, ArtistDetail, PlaylistDetail, LibraryHome, Hub, Playlists, prefetchForTabPath } from './utils/routePrefetch';
-
-const GenreDetail = React.lazy(() => import('./components/library/GenreDetail').then(module => ({ default: module.GenreDetail })));
 const SetupWizard = React.lazy(() => import('./components/SetupWizard').then(module => ({ default: module.SetupWizard })));
 const LoginPage = React.lazy(() => import('./components/LoginPage').then(module => ({ default: module.LoginPage })));
-const GlobalSearch = React.lazy(() => import('./components/GlobalSearch').then(module => ({ default: module.GlobalSearch })));
 const SettingsModal = React.lazy(() => import('./components/SettingsModal').then(module => ({ default: module.SettingsModal })));
-const InviteRegister = React.lazy(() => import('./components/InviteRegister').then(module => ({ default: module.InviteRegister })));
 const TrackContextMenu = React.lazy(() => import('./components/library/TrackContextMenu').then(module => ({ default: module.TrackContextMenu })));
 const DatabaseControl = React.lazy(() => import('./components/DatabaseControl').then(module => ({ default: module.DatabaseControl })));
-
-const TAB_CONFIG = [
-  { path: '/library', label: 'Hub', end: true },
-  { path: '/playlists', label: 'Playlists' },
-  { path: '/library/artists', label: 'Artists' },
-  { path: '/library/albums', label: 'Albums' },
-  { path: '/library/genres', label: 'Genres' },
-];
 
 const FullPageFallback: React.FC<{ label?: string }> = ({ label = 'Loading...' }) => (
   <div className="h-screen w-full flex flex-col items-center justify-center bg-[var(--color-bg-primary)] text-[var(--color-text-primary)]">
     <div className="w-12 h-12 border-4 border-[var(--color-primary)]/20 border-t-[var(--color-primary)] rounded-full animate-spin" />
     <p className="mt-4 text-sm text-[var(--color-text-secondary)]">{label}</p>
   </div>
-);
-
-const RouteFallback: React.FC = () => (
-  <div className="page-container">
-    <div className="h-8 w-32 rounded bg-[var(--color-surface-variant)] animate-pulse mb-2" />
-    <div className="h-4 w-48 rounded bg-[var(--color-surface-variant)] animate-pulse mb-8" />
-    <div className="album-grid">
-      {Array.from({ length: 8 }).map((_, i) => (
-        <div key={i} className="flex flex-col animate-pulse">
-          <div className="aspect-square w-full mb-3 rounded-2xl bg-[var(--color-surface-variant)]" />
-          <div className="px-1 space-y-1.5">
-            <div className="h-4 w-3/4 rounded bg-[var(--color-surface-variant)]" />
-            <div className="h-3 w-1/2 rounded bg-[var(--color-surface-variant)]" />
-          </div>
-        </div>
-      ))}
-    </div>
-  </div>
-);
-
-const SearchFallback: React.FC = () => (
-  <div className="h-9 w-[104px] flex-shrink-0 rounded-full border border-black/10 dark:border-white/15 bg-black/10 dark:bg-white/10" />
-);
-
-const GlobalSearchSlot: React.FC = () => (
-  <React.Suspense fallback={<SearchFallback />}>
-    <GlobalSearch />
-  </React.Suspense>
 );
 
 let authExpirationFetchInterceptorInstalled = false;
@@ -148,8 +107,6 @@ const App: React.FC = () => {
     _setDbConnected(val);
   }, []);
   const [isDatabaseStarting, setIsDatabaseStarting] = React.useState(false);
-  const library = usePlayerStore(state => state.library);
-  const isLibraryLoading = usePlayerStore(state => state.isLibraryLoading);
   const needsSetup = usePlayerStore(state => state.needsSetup);
   const checkSetupStatus = usePlayerStore(state => state.checkSetupStatus);
   const authToken = usePlayerStore(state => state.authToken);
@@ -165,7 +122,11 @@ const App: React.FC = () => {
   const playlist = usePlayerStore(state => state.playlist);
   const currentUser = usePlayerStore(state => state.currentUser);
   const isAdmin = currentUser?.role === 'admin';
-  const [playerPlacement] = usePlayerPlacement();
+
+  // Stable callbacks so the memoized headers don't re-render when App re-renders
+  // for unrelated reasons (scan state, playlist changes, etc.).
+  const openSettings = React.useCallback(() => setIsSettingsOpen(true), []);
+  const toggleScanner = React.useCallback(() => setIsScannerVisibleLocally(v => !v), []);
 
   // Auto-show scanner toast when a scan starts
   React.useEffect(() => {
@@ -194,8 +155,6 @@ const App: React.FC = () => {
     }, 500);
   }, [authToken, dbConnected, needsSetup]);
 
-  const location = useLocation();
-
   // Health check function accessible from render
   const checkHealth = React.useCallback(async () => {
     try {
@@ -208,17 +167,6 @@ const App: React.FC = () => {
       return false;
     }
   }, []);
-
-  // Determine which tab should be active based on current route
-  const getActiveTab = (path: string): string => {
-    if (path === '/library' || path === '/') return '/library';
-    if (path.startsWith('/library/artist')) return '/library/artists';
-    if (path.startsWith('/library/album')) return '/library/albums';
-    if (path.startsWith('/library/genre')) return '/library/genres';
-    if (path.startsWith('/playlists')) return '/playlists';
-    return '/library';
-  };
-  const activeTab = getActiveTab(location.pathname);
 
   // Trigger an initial library fetch, apply theme, and subscribe to scan events
   React.useEffect(() => {
@@ -399,8 +347,6 @@ const App: React.FC = () => {
     void applyPendingPwaUpdate();
   }, [addToast, playbackState]);
 
-  const [folderPathInput, setFolderPathInput] = React.useState('');
-
   const isSidebarOpen = usePlayerStore((s) => s.isSidebarOpen);
   const setIsSidebarOpen = usePlayerStore((s) => s.setIsSidebarOpen);
 
@@ -546,8 +492,10 @@ const App: React.FC = () => {
   }
 
   if (!authToken) {
-      // Invite registration doesn't require auth
-      if (location.pathname.startsWith('/invite/')) {
+      // Invite registration doesn't require auth. Read window.location directly
+      // (rather than useLocation) so App stays free of a location subscription —
+      // an invite link is always a fresh full-page load, so this is accurate.
+      if (window.location.pathname.startsWith('/invite/')) {
           return (
             <React.Suspense fallback={<FullPageFallback label="Loading invite..." />}>
               <InviteRegister />
@@ -592,157 +540,19 @@ const App: React.FC = () => {
 
         <main className="flex-1 flex flex-col min-w-0 relative">
           
-          {/* Mobile Header (Hidden on Desktop) */}
-          <div className="md:hidden px-4 pt-[max(0.75rem,var(--safe-area-top))] pb-3 flex items-center justify-between border-b border-[var(--glass-border)] bg-[var(--glass-bg)] backdrop-blur-md">
-            <AudioWaveform size={22} className="text-[var(--color-primary)]" />
-            <div className="flex items-center gap-1">
-              {isAdmin && isScanningGlobal && (
-                <button
-                  onClick={() => setIsScannerVisibleLocally(v => !v)}
-                  className="scan-indicator-btn scan-indicator-btn--dot-only"
-                  title={isScannerVisibleLocally ? 'Hide scan progress' : 'Show scan progress'}
-                >
-                  <div className="scan-indicator-dot" />
-                </button>
-              )}
-              <GlobalSearchSlot />
-              <UserMenu onOpenSettings={() => setIsSettingsOpen(true)} />
-            </div>
-          </div>
+          <MobileHeader
+            onOpenSettings={openSettings}
+            isScannerVisible={isScannerVisibleLocally}
+            onToggleScanner={toggleScanner}
+          />
 
-          <div className="hidden md:flex items-center flex-none gap-3 overflow-x-auto hide-scrollbar z-20 w-full py-3 px-4 md:px-8 lg:px-12">
-            {TAB_CONFIG.map(tab => {
-                const isActive = activeTab === tab.path;
-                return (
-                    <NavLink
-                        key={tab.path}
-                        to={tab.path}
-                        end={tab.end}
-                        onPointerEnter={() => prefetchForTabPath(tab.path)}
-                        onPointerDown={() => prefetchForTabPath(tab.path)}
-                        onFocus={() => prefetchForTabPath(tab.path)}
-                        className={({ isActive }) => `
-                            capitalize font-semibold text-sm px-5 py-2 rounded-full
-                            border backdrop-blur-md whitespace-nowrap
-                            transition-ui duration-200 cursor-pointer
-                            active:scale-95 no-underline
-                            ${isActive
-                                ? 'btn-aurora shadow-aurora'
-                                : 'text-[var(--color-text-secondary)] border-[var(--color-border)] bg-black/5 dark:bg-white/[0.06] hover:bg-black/10 dark:hover:bg-white/[0.12] hover:text-[var(--color-text-primary)] hover:border-[var(--glass-border-hover)]'
-                            }
-                        `}
-                    >
-                        {tab.label}
-                    </NavLink>
-                );
-            })}
-            <div className="flex items-center gap-2 ml-auto">
-              <GlobalSearchSlot />
-              <UserMenu onOpenSettings={() => setIsSettingsOpen(true)} />
-              {isAdmin && isScanningGlobal && (
-                <button
-                  onClick={() => setIsScannerVisibleLocally(v => !v)}
-                  className="scan-indicator-btn"
-                  title={isScannerVisibleLocally ? 'Hide scan progress' : 'Show scan progress'}
-                >
-                  <div className="scan-indicator-dot" />
-                  <span>Scanning</span>
-                </button>
-              )}
-              <button
-                onClick={() => setIsSettingsOpen(true)}
-                className="p-2 rounded-full text-[var(--color-text-secondary)] bg-black/5 dark:bg-white/[0.06] hover:text-[var(--color-text-primary)] hover:bg-black/10 dark:hover:bg-white/[0.12] transition-ui duration-300 border border-[var(--color-border)] hover:border-[var(--glass-border-hover)] flex-shrink-0"
-                title="Settings"
-              >
-                <SettingsIcon className="w-5 h-5" />
-              </button>
-            </div>
-          </div>
+          <DesktopTabBar
+            onOpenSettings={openSettings}
+            isScannerVisible={isScannerVisibleLocally}
+            onToggleScanner={toggleScanner}
+          />
 
-          {/* Main Content Area (Routing) */}
-          <div className="flex-1 flex overflow-hidden">
-            <div className={`flex-1 overflow-y-auto ${
-              playlist.length > 0
-                ? playerPlacement === 'dock'
-                  ? 'pb-32 md:pb-24'
-                  : 'pb-32 md:pb-44'
-                : 'pb-16 md:pb-4'
-            }`}>
-              {library.length === 0 ? (
-                isLibraryLoading && location.pathname !== '/library' ? (
-                  <div className="page-container">
-                    <div className="h-8 w-32 rounded bg-[var(--color-surface-variant)] animate-pulse mb-2" />
-                    <div className="h-4 w-48 rounded bg-[var(--color-surface-variant)] animate-pulse mb-8" />
-                    <div className="album-grid">
-                      {Array.from({ length: 12 }).map((_, i) => (
-                        <div key={i} className="flex flex-col animate-pulse">
-                          <div className="aspect-square w-full mb-3 rounded-2xl bg-[var(--color-surface-variant)]" />
-                          <div className="px-1 space-y-1.5">
-                            <div className="h-4 w-3/4 rounded bg-[var(--color-surface-variant)]" />
-                            <div className="h-3 w-1/2 rounded bg-[var(--color-surface-variant)]" />
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                <React.Suspense fallback={<RouteFallback />}>
-                  <Routes>
-                    <Route path="/invite/:token" element={<InviteRegister />} />
-                    <Route path="*" element={
-                      <div className="empty-state font-body flex flex-col items-center justify-center p-8 flex-1">
-                        <h1 className="text-4xl md:text-5xl font-bold tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-[var(--aurora-green)] to-[var(--color-primary)] mb-4">
-                          NorthernLights
-                        </h1>
-                        <p className="text-lg text-[var(--color-text-secondary)] mb-8 max-w-md text-center">
-                          Provide the absolute path to your local music directory to let the host scan and stream it.
-                        </p>
-                        <div className="flex flex-col md:flex-row gap-4 w-full max-w-lg">
-                          <input
-                            type="text"
-                            placeholder="/home/andreas/Music"
-                            value={folderPathInput}
-                            onChange={(e) => setFolderPathInput(e.target.value)}
-                            className="flex-1 px-4 py-3 rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] backdrop-blur-md text-[var(--color-text-primary)] shadow-sm focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)] focus:border-transparent transition-ui duration-300"
-                            disabled={isScanningGlobal}
-                          />
-                          <button
-                            onClick={async () => {
-                              if (!folderPathInput.trim()) return;
-                              await usePlayerStore.getState().addLibraryFolder(folderPathInput.trim());
-                              setFolderPathInput('');
-                            }}
-                            className="btn btn-lg whitespace-nowrap"
-                            disabled={isScanningGlobal || !folderPathInput.trim()}
-                          >
-                            {isScanningGlobal ? '✦ Scanning...' : '✦ Map Folder'}
-                          </button>
-                        </div>
-                      </div>
-                    } />
-                  </Routes>
-                </React.Suspense>
-                )
-              ) : (
-                <React.Suspense fallback={<RouteFallback />}>
-                  <Routes>
-                    <Route path="/" element={<Navigate to="/library" replace />} />
-                    <Route path="/invite/:token" element={<InviteRegister />} />
-                    <Route path="/library" element={<Hub />} />
-                    <Route path="/library/artists" element={<LibraryHome section="artists" />} />
-                    <Route path="/library/artist/:artistId" element={<ArtistDetail />} />
-                    <Route path="/library/albums" element={<LibraryHome section="albums" />} />
-                    <Route path="/library/album/:albumId" element={<AlbumDetail />} />
-                    <Route path="/library/genres" element={<LibraryHome section="genres" />} />
-                    <Route path="/library/genre/:genreId" element={<GenreDetail />} />
-                    <Route path="/playlists" element={<Playlists />} />
-                    <Route path="/playlists/:playlistId" element={<PlaylistDetail />} />
-                    <Route path="*" element={<Navigate to="/library" replace />} />
-                  </Routes>
-                </React.Suspense>
-              )}
-            </div>
-          </div>
+          <MainContent />
 
           <CastHealthToasts />
 

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
 import { Home, ListMusic, Mic2, Disc3, Palette } from 'lucide-react';
 import { prefetchForTabPath } from '../utils/routePrefetch';
+import { getActiveTab } from '../utils/tabRouting';
 
 const TAB_CONFIG = [
   { path: '/library', label: 'Hub', icon: Home, end: true },
@@ -10,15 +11,6 @@ const TAB_CONFIG = [
   { path: '/library/albums', label: 'Albums', icon: Disc3 },
   { path: '/library/genres', label: 'Genres', icon: Palette },
 ];
-
-const getActiveTab = (path: string): string => {
-  if (path === '/library' || path === '/') return '/library';
-  if (path.startsWith('/library/artist')) return '/library/artists';
-  if (path.startsWith('/library/album')) return '/library/albums';
-  if (path.startsWith('/library/genre')) return '/library/genres';
-  if (path.startsWith('/playlists')) return '/playlists';
-  return '/library';
-};
 
 const MobileBottomTabs: React.FC = () => {
   const location = useLocation();
