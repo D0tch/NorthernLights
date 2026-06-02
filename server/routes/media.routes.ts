@@ -435,8 +435,10 @@ router.all('/stream/:trackId/:segment', async (req, res) => {
   logHls(`[HLS DEBUG] Segment request: trackId=${trackId} segment=${segment} quality=${quality} codec=${codec}`);
   writeHlsSessionLog(trackId, quality, codec, `Segment request for ${segment}`);
 
-  // Only serve .ts segment files
-  if (!segment.endsWith('.ts')) {
+  // Only serve .ts segment files. Restrict to a bare filename (no path
+  // separators or "..") so a crafted segment can't traverse out of the
+  // session's output directory and read arbitrary .ts files on disk.
+  if (!/^[\w.-]+\.ts$/.test(segment) || segment.includes('..')) {
     return res.status(400).send('Invalid segment request');
   }
 
