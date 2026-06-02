@@ -3261,9 +3261,18 @@ export async function createPlaylist(
   `, [id, title, description, isLlmGenerated, userId, isSystem, source]);
 }
 
+// Upper bound on tracks written in a single playlist insert. Bounds the size
+// of the generated bulk-INSERT (and the loop that builds it) so a caller-
+// supplied list can't drive unbounded query construction.
+const MAX_PLAYLIST_TRACKS = 10000;
+
 export async function addTracksToPlaylist(playlistId: string, trackIds: string[]) {
   const db = await initDB();
-  const uniqueTrackIds = Array.from(new Set(trackIds.filter(Boolean)));
+  let uniqueTrackIds = Array.from(new Set(trackIds.filter(Boolean)));
+  if (uniqueTrackIds.length > MAX_PLAYLIST_TRACKS) {
+    console.warn(`[Playlist] Track list for ${playlistId} exceeds cap (${uniqueTrackIds.length} > ${MAX_PLAYLIST_TRACKS}); truncating.`);
+    uniqueTrackIds = uniqueTrackIds.slice(0, MAX_PLAYLIST_TRACKS);
+  }
   const existingRes = await db.query(
     `SELECT track_id, added_at FROM playlist_tracks WHERE playlist_id = $1`,
     [playlistId]
