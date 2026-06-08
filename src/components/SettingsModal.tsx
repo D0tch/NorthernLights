@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { usePlayerStore } from '../store/index';
-import { Globe, User, Palette, Folder, Play, Cpu, LogOut, Search, X, Users, Database, Brain, Ticket, GitMerge, KeyRound } from 'lucide-react';
+import { Globe, User, Palette, Folder, Play, Cpu, LogOut, Search, X, Users, Database, Brain, Ticket, GitMerge, KeyRound, Radio } from 'lucide-react';
 
 interface SettingsModalProps {
     onClose: () => void;
@@ -16,6 +16,7 @@ interface SettingsTab {
 const COMPACT_LAYOUT_QUERY = '(max-width: 1023px)';
 
 const AccountTab = React.lazy(() => import('./settings/AccountTab').then(module => ({ default: module.AccountTab })));
+const ScrobblingTab = React.lazy(() => import('./settings/ScrobblingTab').then(module => ({ default: module.ScrobblingTab })));
 const ApiKeysTab = React.lazy(() => import('./settings/ApiKeysTab').then(module => ({ default: module.ApiKeysTab })));
 const AppearanceTab = React.lazy(() => import('./settings/AppearanceTab').then(module => ({ default: module.AppearanceTab })));
 const LibraryTab = React.lazy(() => import('./settings/LibraryTab').then(module => ({ default: module.LibraryTab })));
@@ -102,6 +103,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
 
     const tabs: SettingsTab[] = useMemo(() => [
         { id: 'My Account', label: 'My Account', category: 'User Settings' },
+        { id: 'Scrobbling', label: 'Scrobbling', category: 'User Settings' },
         { id: 'API Keys', label: 'API Keys', category: 'User Settings' },
         { id: 'Live Music', label: 'Live Music', category: 'User Settings' },
         { id: 'Appearance', label: 'Appearance', category: 'App Settings' },
@@ -126,13 +128,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         if (tab.label.toLowerCase().includes(query)) return true;
         
         // Also search within common setting labels for this tab
+        if (tab.id === 'Scrobbling') return 'scrobble scrobbling lastfm last.fm listenbrainz listen brainz connect account now playing love listening services'.includes(query);
         if (tab.id === 'API Keys') return 'api key keys subsonic opensubsonic rest client rotate revoke delete'.includes(query);
         if (tab.id === 'Appearance') return 'light dark theme'.includes(query);
         if (tab.id === 'Library') return 'folder path scan library stats analysis'.includes(query);
         if (tab.id === 'Artist Entities') return 'artist duplicate merge canonical compound credit identity'.includes(query);
         if (tab.id === 'Metadata') return 'genius musicbrainz lastfm jambase provider album bio image api mapping keys concerts tour live'.includes(query);
         if (tab.id === 'Live Music') return 'concerts tour live tickets jambase events location subscribe artists'.includes(query);
-        if (tab.id === 'Playback') return 'infinity discovery genre artist amnesia matrix llm playlist diversity blend tracks wander'.includes(query);
+        if (tab.id === 'Playback') return 'infinity discovery genre artist amnesia matrix llm playlist diversity blend tracks wander played threshold scrobble count percent listened sleep timer quality streaming'.includes(query);
         if (tab.id === 'System') return 'cpu audio analysis hub schedule auto-start opensubsonic subsonic api rest'.includes(query);
         if (tab.id === 'GenAI') return 'llm api host model key'.includes(query);
         if (tab.id === 'Genre Matrix') return 'genre matrix transition hop cost mapping'.includes(query);
@@ -154,6 +157,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
 
     const getTabIcon = (tabId: string) => {
         if (tabId === 'My Account') return User;
+        if (tabId === 'Scrobbling') return Radio;
         if (tabId === 'API Keys') return KeyRound;
         if (tabId === 'Live Music') return Ticket;
         if (tabId === 'Appearance') return Palette;
@@ -334,6 +338,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                             ) : (
                                 <React.Suspense fallback={<SettingsTabFallback />}>
                                     {activeTab === 'My Account' && <AccountTab onClose={handleClose} />}
+                                    {activeTab === 'Scrobbling' && <ScrobblingTab />}
                                     {activeTab === 'API Keys' && <ApiKeysTab />}
                                     {activeTab === 'Live Music' && <LiveMusicTab />}
                                     {activeTab === 'Appearance' && <AppearanceTab />}
