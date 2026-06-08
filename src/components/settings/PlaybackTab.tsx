@@ -30,6 +30,7 @@ export const PlaybackTab: React.FC = () => {
     const discoveryLevel = usePlayerStore(state => state.discoveryLevel);
     const genreStrictness = usePlayerStore(state => state.genreStrictness);
     const artistAmnesiaLimit = usePlayerStore(state => state.artistAmnesiaLimit);
+    const playedThresholdPercent = usePlayerStore(state => state.playedThresholdPercent);
     const llmPlaylistDiversity = usePlayerStore(state => state.llmPlaylistDiversity);
     const llmVetoMode = usePlayerStore(state => state.llmVetoMode);
     const llmGenreCohesion = usePlayerStore(state => state.llmGenreCohesion);
@@ -180,6 +181,26 @@ export const PlaybackTab: React.FC = () => {
                                 ? 'Currently prepares the immediate next track like Conservative, reserved for deeper prebuffering once proven safe.'
                                 : 'Keeps the current stable behavior: server prewarm plus local prepared audio for the immediate next queued track.'
                             }
+                        </p>
+                    </div>
+
+                    <div className="mb-6 p-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)]">
+                        <label className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                            <span>Count as played after</span>
+                            <span>{playedThresholdPercent}%</span>
+                        </label>
+                        <input
+                            type="range"
+                            min={25}
+                            max={95}
+                            step={5}
+                            value={playedThresholdPercent}
+                            onChange={e => setSettings({ playedThresholdPercent: Number(e.target.value) })}
+                            className="w-full accent-[var(--color-primary)]"
+                            aria-label="Percent of a track to listen to before it is marked as played"
+                        />
+                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5">
+                            How much of a track you must listen to before it counts as played — this drives both your play counts/stats on the server and what gets scrobbled to Last.fm &amp; ListenBrainz. A 4-minute cap and a 30-second minimum track length always apply, matching standard scrobbling rules.
                         </p>
                     </div>
 

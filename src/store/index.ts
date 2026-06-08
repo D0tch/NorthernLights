@@ -427,6 +427,9 @@ export interface PlayerState {
   discoveryLevel: number;
   genreStrictness: number;
   artistAmnesiaLimit: number;
+  // Fraction of a track (percent, 1-100) that must be listened to before it is
+  // marked as played — gates both the server play-count and scrobbling.
+  playedThresholdPercent: number;
   llmPlaylistDiversity: number;
   llmVetoMode: LlmVetoMode;
   llmGenreCohesion: number;
@@ -609,14 +612,21 @@ export const usePlayerStore = create<PlayerState>()(
         onTimeUpdate: (time) => {
           setPlaybackCurrentTime(time);
           persistContinuitySnapshot(false);
-          // Check scrobble eligibility (>50% duration or 4 minutes, whichever is earlier, and track >30s)
+          // Mark the track as "played" once the user has listened to the
+          // configured fraction of it (capped at 4 minutes, min track length
+          // 30s). This single threshold gates BOTH the server play-count and
+          // scrobble eligibility, so they stay in lockstep.
           const state = get();
           const { duration } = getPlaybackTimeSnapshot();
           if (!state._scrobbleEligible && state._scrobbleStartAt && duration > 30) {
-            const halfDuration = duration / 2;
-            const threshold = Math.min(halfDuration, 240); // 4 minutes = 240s
+            const pct = Math.min(Math.max(state.playedThresholdPercent || 95, 1), 100) / 100;
+            const threshold = Math.min(duration * pct, 240); // 4 minutes = 240s cap
             if (time >= threshold) {
               set({ _scrobbleEligible: true });
+              // Record the play (server telemetry) exactly once, at the moment
+              // the threshold is crossed — not on track start.
+              const playedTrack = state.currentIndex !== null ? state.playlist[state.currentIndex] : null;
+              if (playedTrack) get().recordPlay(playedTrack.id);
             }
           }
         },
@@ -951,6 +961,7 @@ export const usePlayerStore = create<PlayerState>()(
         discoveryLevel: 50,
         genreStrictness: 50,
         artistAmnesiaLimit: 50,
+        playedThresholdPercent: 95,
         llmPlaylistDiversity: 50,
         llmVetoMode: 'hard' as LlmVetoMode,
         llmGenreCohesion: 50,
@@ -1172,6 +1183,7 @@ export const usePlayerStore = create<PlayerState>()(
                 discoveryLevel: data.discoveryLevel !== undefined ? data.discoveryLevel : 50,
                 genreStrictness: data.genreStrictness !== undefined ? data.genreStrictness : 50,
                 artistAmnesiaLimit: data.artistAmnesiaLimit !== undefined ? data.artistAmnesiaLimit : 50,
+                playedThresholdPercent: data.playedThresholdPercent !== undefined ? Number(data.playedThresholdPercent) : 95,
                 llmPlaylistDiversity: data.llmPlaylistDiversity !== undefined ? data.llmPlaylistDiversity : 50,
                 llmVetoMode: data.llmVetoMode === 'adaptive' ? 'adaptive' : 'hard',
                 llmGenreCohesion: data.llmGenreCohesion !== undefined ? data.llmGenreCohesion : (data.genreBlendWeight !== undefined ? data.genreBlendWeight : 50),
@@ -1256,6 +1268,7 @@ export const usePlayerStore = create<PlayerState>()(
                 discoveryLevel: state.discoveryLevel,
                 genreStrictness: state.genreStrictness,
                 artistAmnesiaLimit: state.artistAmnesiaLimit,
+                playedThresholdPercent: state.playedThresholdPercent,
                 llmPlaylistDiversity: state.llmPlaylistDiversity,
                 llmVetoMode: state.llmVetoMode,
                 llmGenreCohesion: state.llmGenreCohesion,
@@ -2096,8 +2109,11 @@ export const usePlayerStore = create<PlayerState>()(
             set({ currentIndex: index, isBuffering: false, _scrobbleStartAt: Date.now(), _scrobbleEligible: false });
             persistContinuitySnapshot(true);
 
-            // Telemetry: record successful playback and push to session history
-            get().recordPlay(track.id);
+            // Push to the rolling session history immediately so Infinity-mode
+            // dedup (sent to /api/recommend) sees the track as soon as it starts.
+            // The actual play-count is recorded later, once the listened
+            // threshold is crossed (see onTimeUpdate → recordPlay).
+            set((s: PlayerState) => ({ sessionHistoryTrackIds: [...s.sessionHistoryTrackIds, track.id].slice(-50) }));
 
             // Send "now playing" to scrobble providers if connected
             const state = get();
@@ -2160,8 +2176,10 @@ export const usePlayerStore = create<PlayerState>()(
           const { playlist, currentIndex, shuffle } = get();
           if (playlist.length === 0) return;
 
-          // Telemetry: record skip for the track we are leaving
-          if (currentIndex !== null && playlist[currentIndex]) {
+          // Telemetry: record a skip for the track we are leaving — but only if
+          // we left before it crossed the "played" threshold. Past that point
+          // the track is already counted as a play, so a skip would contradict it.
+          if (currentIndex !== null && playlist[currentIndex] && !get()._scrobbleEligible) {
             get().recordSkip(playlist[currentIndex].id);
           }
 
@@ -2334,12 +2352,10 @@ export const usePlayerStore = create<PlayerState>()(
         setLlmConnected: (connected: boolean) => set({ llmConnected: connected }),
 
         recordPlay: (trackId: string) => {
-          // Push trackId to the 50-item rolling session history
-          set((state: PlayerState) => {
-            const updated = [...state.sessionHistoryTrackIds, trackId].slice(-50);
-            return { sessionHistoryTrackIds: updated };
-          });
-          // Fire-and-forget telemetry to backend
+          // Backend play-count telemetry. Fired once a track crosses the
+          // configured "played" threshold (see onTimeUpdate). The rolling
+          // session history is pushed separately at playback start so
+          // Infinity-mode dedup doesn't have to wait for the threshold.
           const authHeaders = (get() as any).getAuthHeader();
           fetch('/api/playback/record', {
             method: 'POST',
