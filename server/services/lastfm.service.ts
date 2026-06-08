@@ -31,9 +31,17 @@ async function getUserLfmCreds(userId: string): Promise<{ apiKey: string; shared
  * Excludes 'format' and 'callback' params from signature.
  */
 export function buildSignature(params: Record<string, string>, secret: string): string {
+  // Last.fm verifies the signature by sorting param names in code-point (byte)
+  // order, NOT locale order. localeCompare diverges for prefix pairs once an
+  // array index bracket sits between the shared prefix and the differing char —
+  // e.g. it orders "album[0]" before "albumArtist[0]", but Last.fm expects
+  // "albumArtist[0]" first ('A'=65 < '['=91). A wrong order yields a wrong
+  // api_sig and Last.fm rejects the call with error 13 (invalid signature),
+  // which silently breaks batch scrobbles for any track carrying both an album
+  // and an albumArtist (same for track[]/trackNumber[]).
   const filtered = Object.entries(params)
     .filter(([key]) => key !== 'format' && key !== 'callback')
-    .sort(([a], [b]) => a.localeCompare(b));
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
 
   let sigString = '';
   for (const [key, value] of filtered) {
