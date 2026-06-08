@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getGenreById, getAllGenres, getTracksByGenre } from '../database';
+import { getGenreById, getAllGenres, getTracksByGenre, getGenreTaxonomyPaths } from '../database';
 
 const router = Router();
 
@@ -10,6 +10,18 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('Genres fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch genres' });
+  }
+});
+
+// MBDB-derived genre hierarchy for the library. Registered before '/:id' so the
+// literal path is not captured by the param route. Always resolves: when the
+// taxonomy has not been imported it returns { available: false }.
+router.get('/taxonomy', async (req, res) => {
+  try {
+    res.json(await getGenreTaxonomyPaths());
+  } catch (error) {
+    console.error('Genre taxonomy fetch error:', error);
+    res.json({ available: false, paths: {} });
   }
 });
 

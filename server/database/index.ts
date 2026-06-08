@@ -2303,6 +2303,61 @@ export async function getAllGenres() {
   return res.rows;
 }
 
+/**
+ * Resolve every distinct library genre to its MusicBrainz hierarchy path
+ * (e.g. "alternative rock" → "Rock.Alternative Rock"), so the client can group
+ * subgenres under their parent. The path source is the `genre_tree_paths`
+ * materialized view, which is empty until an MBDB taxonomy import has run —
+ * that emptiness is how we report `available: false` and let the UI fall back
+ * to a flat genre grid.
+ *
+ * Match priority per genre: exact MBDB genre name → MBDB alias → a path the
+ * genre-matrix categorizer previously stored in `subgenre_mappings`.
+ */
+export async function getGenreTaxonomyPaths(): Promise<{ available: boolean; paths: Record<string, string> }> {
+  const db = await initDB();
+
+  // genre_tree_paths exists from init (IF NOT EXISTS) but holds zero rows until
+  // an import populates the MBDB base tables. A missing view (older DBs) throws
+  // and is likewise treated as "no taxonomy available".
+  try {
+    const countRes = await db.query('SELECT COUNT(*)::int AS n FROM genre_tree_paths');
+    if (!countRes.rows[0] || countRes.rows[0].n === 0) {
+      return { available: false, paths: {} };
+    }
+  } catch {
+    return { available: false, paths: {} };
+  }
+
+  const res = await db.query(`
+    WITH lib AS (
+      SELECT DISTINCT lower(trim(genre)) AS g
+      FROM tracks
+      WHERE genre IS NOT NULL AND trim(genre) <> ''
+    )
+    SELECT lib.g AS name,
+           COALESCE(direct.path, alias.path, sm.path) AS path
+    FROM lib
+    LEFT JOIN LATERAL (
+      SELECT path FROM genre_tree_paths WHERE lower(genre_name) = lib.g LIMIT 1
+    ) direct ON true
+    LEFT JOIN LATERAL (
+      SELECT gtp.path FROM genre_tree_paths gtp
+      JOIN genre_alias ga ON gtp.genre_id = ga.genre
+      WHERE lower(ga.name) = lib.g LIMIT 1
+    ) alias ON true
+    LEFT JOIN subgenre_mappings sm
+      ON sm.sub_genre = regexp_replace(lib.g, '[^\\w\\s-]', '', 'g')
+    WHERE COALESCE(direct.path, alias.path, sm.path) IS NOT NULL
+  `);
+
+  const paths: Record<string, string> = {};
+  for (const row of res.rows) {
+    paths[row.name] = row.path;
+  }
+  return { available: true, paths };
+}
+
 export async function getTracksByArtist(artistId: string) {
   const db = await initDB();
   const res = await db.query('SELECT * FROM tracks WHERE artist_id = $1', [artistId]);

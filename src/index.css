@@ -1031,6 +1031,232 @@ body {
   }
 }
 
+/* ── Genre cards ───────────────────────────────────────────────────────────
+   A square aurora cover with the genre name as a label below, matching the
+   Hub's "uniquely yours" cards. Each genre carries a deterministic aurora
+   signature (--g-1/--g-2 hues, --g-angle, --g-ox/--g-oy origin) set per card in
+   LibraryHome; the bloom is calm at rest and follows the pointer (--gx/--gy) on
+   hover, so a wall of genres reads as many small auroras, not one repeated tile. */
+.genre-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.625rem;
+  cursor: pointer;
+  transform: translateZ(0);
+  transition: transform 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (min-width: 640px) {
+  .genre-card { gap: 0.75rem; }
+}
+
+.genre-card__cover {
+  --gx: var(--g-ox);
+  --gy: var(--g-oy);
+  position: relative;
+  aspect-ratio: 1 / 1;
+  border-radius: var(--radius);
+  overflow: hidden;
+  isolation: isolate;
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  box-shadow: var(--shadow-sm);
+  transition:
+    box-shadow 240ms cubic-bezier(0.22, 1, 0.36, 1),
+    border-color 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.genre-card__art {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0.32;
+  transform: scale(1.02);
+  transition:
+    opacity 400ms ease-out,
+    transform 600ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.genre-card__aurora {
+  position: absolute;
+  inset: -25%;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0.7;
+  background:
+    radial-gradient(58% 58% at var(--gx) var(--gy),
+      color-mix(in oklch, var(--g-1) 70%, transparent), transparent 72%),
+    radial-gradient(78% 78% at calc(100% - var(--gx)) calc(100% - var(--gy)),
+      color-mix(in oklch, var(--g-2) 50%, transparent), transparent 74%),
+    linear-gradient(var(--g-angle),
+      color-mix(in oklch, var(--g-1) 22%, transparent), transparent 60%);
+  transition: opacity 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* The luminous arc that sweeps across on hover: the one memorable touch. */
+.genre-card__ribbon {
+  position: absolute;
+  inset: -10% -40%;
+  z-index: 2;
+  pointer-events: none;
+  opacity: 0;
+  transform: translateX(-28%);
+  mix-blend-mode: screen;
+  background: linear-gradient(105deg,
+    transparent 44%,
+    color-mix(in oklch, var(--g-1) 70%, transparent) 50%,
+    transparent 56%);
+  transition: opacity 300ms ease-out, transform 300ms ease-out;
+}
+
+/* Name label below the cover, matching the Hub card title: DM Sans, semibold,
+   text-sm, tight leading, two-line clamp, recolors to the accent on hover. */
+.genre-card__label {
+  padding-inline: 0.125rem;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+  font-size: 0.875rem;
+  line-height: 1.25;
+  color: var(--color-text-primary);
+  transition: color 200ms ease-out;
+}
+
+/* Hover and keyboard focus share one state. Focus lands on the wrapping anchor,
+   so its focus-visible drives the card; cards for genres without a detail route
+   are unwrapped and respond to hover only. */
+.genre-card:hover,
+a:focus-visible > .genre-card {
+  transform: translateY(-2px);
+}
+
+.genre-card:hover .genre-card__cover,
+a:focus-visible > .genre-card .genre-card__cover {
+  border-color: var(--glass-border-hover);
+  box-shadow:
+    var(--shadow-md),
+    0 14px 42px -16px color-mix(in oklch, var(--g-1) 60%, transparent);
+}
+
+.genre-card:hover .genre-card__aurora,
+a:focus-visible > .genre-card .genre-card__aurora {
+  opacity: 0.92;
+}
+
+.genre-card:hover .genre-card__art,
+a:focus-visible > .genre-card .genre-card__art {
+  opacity: 0.45;
+  transform: scale(1.07);
+}
+
+.genre-card:hover .genre-card__label,
+a:focus-visible > .genre-card .genre-card__label {
+  color: var(--color-primary);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .genre-card:hover .genre-card__ribbon,
+  a:focus-visible > .genre-card .genre-card__ribbon {
+    opacity: 0.75;
+    transform: translateX(28%);
+    transition:
+      opacity 300ms ease-out,
+      transform 760ms cubic-bezier(0.22, 1, 0.36, 1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .genre-card,
+  .genre-card__cover,
+  .genre-card__art,
+  .genre-card__aurora,
+  .genre-card__label {
+    transition: none;
+  }
+  .genre-card:hover,
+  a:focus-visible > .genre-card {
+    transform: none;
+  }
+}
+
+/* ── Genre rails ───────────────────────────────────────────────────────────
+   When the MBDB taxonomy is available, genres are grouped under their parent
+   genre as horizontal shelves, borrowing the Hub's rail vocabulary: lowercase
+   bold headings, snap-scroll tracks, and mobile edge-bleed. The cards are the
+   same aurora tiles, sized to a landscape shelf width. */
+.genre-rails {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+/* Matches the Hub's section headings: DM Sans, bold, lowercase, text-xl→2xl. */
+.genre-rail__title {
+  margin-bottom: 0.9rem;
+  padding-inline: 0.1rem;
+  font-weight: 700;
+  font-size: 1.25rem;
+  letter-spacing: -0.01em;
+  text-transform: lowercase;
+  color: var(--color-text-primary);
+}
+
+@media (min-width: 640px) {
+  .genre-rail__title { font-size: 1.5rem; }
+}
+
+.genre-rail__title-link {
+  color: inherit;
+  text-decoration: none;
+  transition: color 200ms ease-out;
+}
+
+.genre-rail__title-link:hover,
+.genre-rail__title-link:focus-visible {
+  color: var(--color-primary);
+}
+
+/* padding-block gives the card's hover lift and glow room: overflow-x:auto
+   computes overflow-y to auto, which would otherwise clip the lift and add a
+   stray vertical scrollbar. */
+.genre-rail__track {
+  display: flex;
+  gap: 0.75rem;
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  padding-block: 0.5rem;
+}
+
+@media (min-width: 640px) {
+  .genre-rail__track { gap: 1.25rem; }
+}
+
+/* Tile width mirrors the Hub's "uniquely yours" cards. */
+.genre-rail__item {
+  flex: 0 0 auto;
+  width: min(52vw, 200px);
+  scroll-snap-align: start;
+}
+
+@media (min-width: 640px) {
+  .genre-rail__item { width: 190px; }
+}
+
+/* Edge-bleed the rail to the viewport on mobile, mirroring .hub-scroll-mobile. */
+@media (max-width: 639px) {
+  .genre-rail__track {
+    scroll-padding-left: 1rem;
+    padding-inline: 1rem;
+    margin-inline: -1rem;
+  }
+}
+
 .repeat-toggle {
   display: flex;
   align-items: center;

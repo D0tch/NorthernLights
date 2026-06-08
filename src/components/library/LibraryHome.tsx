@@ -14,10 +14,12 @@ import {
   hasActiveFilters,
   QueryGroup,
 } from '../../utils/filterState';
-import type { ArtistInfo } from '../../store/index';
+import type { ArtistInfo, EntityInfo } from '../../store/index';
 import { prefetchArtistDetail } from '../../utils/routePrefetch';
 import type { ArtistHeroState } from '../../utils/heroState';
 import { VirtualizedCardGrid } from './VirtualizedCardGrid';
+import { HorizontalScrollRail } from '../HorizontalScrollRail';
+import { useGenreTaxonomy } from '../../hooks/useGenreTaxonomy';
 import {
   getTracksByAlbumAndGenres,
   getEnrichedAlbums,
@@ -35,27 +37,94 @@ const ArtistCardSkeleton: React.FC = () => (
 );
 
 const GenreCardSkeleton: React.FC = () => (
-    <div className="animate-pulse rounded-2xl aspect-video md:aspect-square bg-[var(--color-surface-variant)]" />
+    <div className="flex flex-col gap-2.5 animate-pulse">
+        <div className="aspect-square rounded-[var(--radius)] bg-[var(--color-surface-variant)]" />
+        <div className="h-3.5 w-3/4 rounded bg-[var(--color-surface-variant)]" />
+    </div>
 );
+
+// Mirrors the eventual rail shape (and the Hub's loading style) so the genres
+// view doesn't jump once the taxonomy resolves.
+const GenreRailSkeleton: React.FC = () => (
+    <div className="genre-rails" aria-hidden="true">
+        {Array.from({ length: 3 }).map((_, r) => (
+            <section key={r}>
+                <div className="h-7 w-32 sm:w-40 rounded bg-[var(--color-surface-variant)] animate-pulse mb-4" />
+                <div className="flex gap-3 sm:gap-5 overflow-hidden py-1">
+                    {Array.from({ length: 6 }).map((_, i) => (
+                        <div key={i} className="shrink-0 w-[min(52vw,200px)] sm:w-[190px] flex flex-col gap-2.5 animate-pulse">
+                            <div className="aspect-square rounded-[var(--radius)] bg-[var(--color-surface-variant)]" />
+                            <div className="h-3.5 w-3/4 rounded bg-[var(--color-surface-variant)]" />
+                        </div>
+                    ))}
+                </div>
+            </section>
+        ))}
+    </div>
+);
+
+// A genre owns no cover of its own, so each is given a deterministic aurora
+// signature derived from its name: two hues drawn only from the brand spectrum,
+// a bloom angle, and a bloom origin. Same genre always glows the same way, so it
+// becomes recognizable across visits; no two genres read alike, so the wall of
+// genres stops being an identical card grid. ~1 in 11 earns the rare red-shift.
+const AURORA_HUES = [
+    'var(--aurora-green)',
+    'var(--aurora-teal)',
+    'var(--aurora-blue)',
+    'var(--aurora-extra-glow)',
+];
+
+function genreAurora(name: string): React.CSSProperties {
+    let h = 2166136261;
+    for (let i = 0; i < name.length; i++) {
+        h = Math.imul(h ^ name.charCodeAt(i), 16777619) >>> 0;
+    }
+    return {
+        '--g-1': AURORA_HUES[h % AURORA_HUES.length],
+        '--g-2': h % 11 === 0
+            ? 'var(--aurora-pink)'
+            : AURORA_HUES[(h >> 4) % AURORA_HUES.length],
+        '--g-angle': `${h % 360}deg`,
+        '--g-ox': `${22 + ((h >> 9) % 56)}%`,
+        '--g-oy': `${18 + ((h >> 16) % 50)}%`,
+    } as React.CSSProperties;
+}
 
 const GenreCard: React.FC<{ genre: string }> = ({ genre }) => {
     const [ref, inView] = useInView();
     const { imageUrl } = useExternalImage(() => fetchGenreImage(genre), [genre], { enabled: inView });
+    const aurora = useMemo(() => genreAurora(genre), [genre]);
+
+    // The bloom follows the pointer over the cover. Writing CSS custom properties
+    // (never layout properties) keeps this off the main-thread layout path.
+    // Skipped on touch, where there is no hover and the move only fires mid-scroll.
+    const trackPointer = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        if (e.pointerType === 'touch') return;
+        const el = e.currentTarget;
+        const r = el.getBoundingClientRect();
+        el.style.setProperty('--gx', `${((e.clientX - r.left) / r.width) * 100}%`);
+        el.style.setProperty('--gy', `${((e.clientY - r.top) / r.height) * 100}%`);
+    }, []);
+
+    const resetPointer = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+        e.currentTarget.style.removeProperty('--gx');
+        e.currentTarget.style.removeProperty('--gy');
+    }, []);
 
     return (
-        <div
-            ref={ref}
-            className="genre-card group flex flex-col items-center justify-center cursor-pointer transition-transform duration-300 hover:scale-105 relative overflow-hidden rounded-2xl aspect-video md:aspect-square bg-[var(--glass-bg)] border border-[var(--glass-border)] shadow-[var(--shadow-sm)] hover:shadow-[var(--shadow-md)]"
-        >
-            {imageUrl && (
-                <div className="absolute inset-0 z-0">
-                    <img src={imageUrl} alt={genre} className="w-full h-full object-cover opacity-40 transition-transform duration-500 group-hover:scale-110" />
-                    <div className="absolute inset-0 bg-black/40 mix-blend-multiply" />
-                </div>
-            )}
-            <div className="relative z-10 p-4 w-full flex items-center justify-center h-full">
-                <div className="font-bold text-xl md:text-2xl text-[var(--color-primary)] text-center shadow-black drop-shadow-lg filter group-hover:scale-110 transition-transform">{genre}</div>
+        <div ref={ref} className="genre-card">
+            <div
+                className="genre-card__cover"
+                style={aurora}
+                onPointerMove={trackPointer}
+                onPointerLeave={resetPointer}
+            >
+                {imageUrl && <img src={imageUrl} alt="" aria-hidden="true" className="genre-card__art" />}
+                <span className="genre-card__aurora" aria-hidden="true" />
+                <span className="genre-card__ribbon" aria-hidden="true" />
             </div>
+            <p className="genre-card__label">{genre}</p>
         </div>
     );
 };
@@ -109,6 +178,18 @@ function useIsMobile(breakpoint = 768) {
         return () => mq.removeEventListener('change', handler);
     }, [breakpoint]);
     return isMobile;
+}
+
+interface GenreRailMember {
+    name: string;
+    /** Depth in the MBDB tree (1 = the root genre itself). */
+    depth: number;
+}
+
+interface GenreRail {
+    root: string;
+    rootEntity?: EntityInfo;
+    members: GenreRailMember[];
 }
 
 export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }> = ({ section }) => {
@@ -212,6 +293,73 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
     const showAlbums = !section || section === 'albums';
     const showArtists = section === 'artists';
     const showGenres = section === 'genres';
+
+    // MBDB taxonomy: only fetched while the genres view is open. When it isn't
+    // available (never imported), the view falls back to the flat genre grid.
+    const { available: taxonomyAvailable, paths: genrePaths, loading: taxonomyLoading } =
+        useGenreTaxonomy(showGenres);
+
+    const genreEntityByName = useMemo(() => {
+        const map = new Map<string, EntityInfo>();
+        (genreEntities as EntityInfo[]).forEach((g) => {
+            if (g.name) map.set(g.name.toLowerCase(), g);
+        });
+        return map;
+    }, [genreEntities]);
+
+    // Group library genres under their MBDB root genre (e.g. "Rock" → "Alternative
+    // Rock", "Blues Rock"). A root needs at least two members to earn a rail; lone
+    // genres and anything the taxonomy doesn't recognize fall into "Other genres".
+    const { genreRails, looseGenres } = useMemo(() => {
+        if (!taxonomyAvailable) {
+            return { genreRails: [] as GenreRail[], looseGenres: genres };
+        }
+        const groups = new Map<string, GenreRail>();
+        const loose: string[] = [];
+
+        for (const name of genres) {
+            const path = genrePaths[name.toLowerCase()];
+            if (!path) { loose.push(name); continue; }
+            const segments = path.split('.');
+            const root = segments[0];
+            let rail = groups.get(root);
+            if (!rail) { rail = { root, members: [] }; groups.set(root, rail); }
+            rail.members.push({ name, depth: segments.length });
+        }
+
+        const rails: GenreRail[] = [];
+        for (const rail of groups.values()) {
+            rail.rootEntity = genreEntityByName.get(rail.root.toLowerCase());
+            // Shallower (closer to the root) first, then alphabetical.
+            rail.members.sort((a, b) => (a.depth - b.depth) || a.name.localeCompare(b.name));
+            if (rail.members.length >= 2) rails.push(rail);
+            else loose.push(...rail.members.map((m) => m.name));
+        }
+        // Richest families lead, the way an editorial shelf would order them.
+        rails.sort((a, b) => (b.members.length - a.members.length) || a.root.localeCompare(b.root));
+        loose.sort((a, b) => a.localeCompare(b));
+        return { genreRails: rails, looseGenres: loose };
+    }, [taxonomyAvailable, genres, genrePaths, genreEntityByName]);
+
+    // One genre tile, optionally wrapped in a link to its detail view. Shared by
+    // the rails and the flat fallback grid so both render identical cards.
+    const renderGenreTile = useCallback((genreName: string, wrapperClass = '') => {
+        const entity = genreEntityByName.get(genreName.toLowerCase());
+        const card = <GenreCard genre={genreName} />;
+        if (!entity) {
+            return <div key={genreName} className={wrapperClass || undefined}>{card}</div>;
+        }
+        return (
+            <Link
+                key={genreName}
+                to={`/library/genre/${entity.id}`}
+                state={{ backLabel: 'Back to Library' }}
+                className={`no-underline ${wrapperClass}`.trim()}
+            >
+                {card}
+            </Link>
+        );
+    }, [genreEntityByName]);
 
     if (isLibraryLoading && library.length === 0) {
         return (
@@ -396,19 +544,47 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
 
                 {showGenres && (
                     <section className="library-section">
-                        {genres.length === 0 ? (
+                        {taxonomyLoading ? (
+                            <GenreRailSkeleton />
+                        ) : genres.length === 0 ? (
                            <p style={{ color: 'var(--color-text-muted)' }}>No genres found in your library.</p>
+                        ) : genreRails.length > 0 ? (
+                            <div className="genre-rails">
+                                {genreRails.map((rail) => (
+                                    <section key={rail.root}>
+                                        <h2 className="genre-rail__title">
+                                            {rail.rootEntity ? (
+                                                <Link
+                                                    to={`/library/genre/${rail.rootEntity.id}`}
+                                                    state={{ backLabel: 'Back to Library' }}
+                                                    className="genre-rail__title-link"
+                                                >
+                                                    {rail.root}
+                                                </Link>
+                                            ) : rail.root}
+                                        </h2>
+                                        <HorizontalScrollRail
+                                            ariaLabel={`${rail.root} genres`}
+                                            viewportClassName="genre-rail__track"
+                                        >
+                                            {rail.members.map((member) =>
+                                                renderGenreTile(member.name, 'genre-rail__item')
+                                            )}
+                                        </HorizontalScrollRail>
+                                    </section>
+                                ))}
+                                {looseGenres.length > 0 && (
+                                    <section>
+                                        <h2 className="genre-rail__title">Other genres</h2>
+                                        <div className="genre-grid">
+                                            {looseGenres.map((genreName) => renderGenreTile(genreName))}
+                                        </div>
+                                    </section>
+                                )}
+                            </div>
                         ) : (
                             <div className="genre-grid">
-                                {genres.map(genreName => {
-                                    const entity = genreEntities.find((g: any) => g.name?.toLowerCase() === genreName.toLowerCase());
-                                    if (!entity) return <GenreCard key={genreName} genre={genreName} />;
-                                    return (
-                                        <Link key={genreName} to={`/library/genre/${entity.id}`} state={{ backLabel: 'Back to Library' }} className="no-underline">
-                                            <GenreCard genre={genreName} />
-                                        </Link>
-                                    );
-                                })}
+                                {genres.map((genreName) => renderGenreTile(genreName))}
                             </div>
                         )}
                     </section>
