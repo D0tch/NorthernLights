@@ -9,7 +9,7 @@ import { generateHubConcepts, HubCollection } from './llm.service';
 import { getHubCollections } from './recommendation.service';
 
 type LlmVetoMode = 'hard' | 'adaptive';
-type HubGenerationSource = 'login' | 'manual' | 'hub-view';
+type HubGenerationSource = 'login' | 'manual' | 'hub-view' | 'subsonic';
 
 const HOUR_MS = 60 * 60 * 1000;
 const runningRefreshes = new Set<string>();

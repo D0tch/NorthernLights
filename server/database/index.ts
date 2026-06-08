@@ -3596,12 +3596,12 @@ export async function getPublicPlaylistByShareToken(token: string): Promise<
   return { name: pl.title, description: pl.description ?? null, trackCount: tracks.length, tracks };
 }
 
-export async function getPlaylistMeta(playlistId: string): Promise<{ userId: string | null; isSystem: boolean } | null> {
+export async function getPlaylistMeta(playlistId: string): Promise<{ userId: string | null; isSystem: boolean; isLlmGenerated: boolean } | null> {
   const db = await initDB();
-  const res = await db.query('SELECT user_id, is_system FROM playlists WHERE id = $1', [playlistId]);
+  const res = await db.query('SELECT user_id, is_system, is_llm_generated FROM playlists WHERE id = $1', [playlistId]);
   if (res.rows.length === 0) return null;
   const row = res.rows[0] as any;
-  return { userId: row.user_id || null, isSystem: !!row.is_system };
+  return { userId: row.user_id || null, isSystem: !!row.is_system, isLlmGenerated: !!row.is_llm_generated };
 }
 
 export async function deleteSystemPlaylistsForUser(userId: string) {

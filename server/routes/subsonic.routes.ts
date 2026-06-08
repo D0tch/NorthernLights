@@ -10,6 +10,7 @@ import { isPathAllowed, pathToBuffer } from '../state';
 import { getOrCreateHlsSession, getSessionInfo, touchSession, getSessionOutputDir } from '../services/hlsStream.service';
 import { generateScopedToken, verifyScopedToken } from '../services/scopedToken.service';
 import { writeDebugLog } from '../services/debugLogger.service';
+import { queueLlmHubRefreshForUser } from '../services/hubRefresh.service';
 
 const router = Router();
 const SUBSONIC_VERSION = '1.16.1';
@@ -1208,13 +1209,20 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
 async function handlePlaylists(req: Request, res: Response, method: string, ctx: SubsonicContext) {
   switch (method) {
     case 'getplaylists': {
+      // Subsonic clients never hit the web hub view, so opportunistically kick a
+      // background LLM hub refresh on listing. Non-blocking and self-throttling:
+      // runLlmHubRegeneration skips when hub playlists are still fresh for the
+      // configured schedule (and guards against concurrent runs per user), so
+      // polling clients like Symfonium won't spam the LLM. Freshly generated
+      // playlists show up on the client's next poll.
+      queueLlmHubRefreshForUser(ctx.userId, 'subsonic');
       const playlists = await getPlaylists(ctx.userId);
       const db = await initDB();
       const counts = playlists.length > 0
         ? await db.query('SELECT playlist_id, COUNT(*)::int AS c FROM playlist_tracks WHERE playlist_id = ANY($1) GROUP BY playlist_id', [playlists.map((p: any) => p.id)])
         : { rows: [] as any[] };
       const countMap = new Map<string, number>(counts.rows.map((r: any) => [r.playlist_id, Number(r.c)]));
-      return sendSubsonic(req, res, subsonicSuccess({ playlists: { playlist: playlists.map((playlist: any) => ({ id: playlist.id, name: playlist.title, comment: playlist.description || undefined, songCount: countMap.get(playlist.id) || 0, public: false, owner: ctx.username, created: toIso(playlist.createdAt), changed: toIso(playlist.createdAt), readOnly: !!playlist.isSystem })) } }));
+      return sendSubsonic(req, res, subsonicSuccess({ playlists: { playlist: playlists.map((playlist: any) => ({ id: playlist.id, name: playlist.title, comment: playlist.description || undefined, songCount: countMap.get(playlist.id) || 0, public: false, owner: ctx.username, created: toIso(playlist.createdAt), changed: toIso(playlist.createdAt), readOnly: !!playlist.isSystem || !!playlist.isLlmGenerated })) } }));
     }
     case 'getplaylist': {
       const id = getParam(req, 'id') || '';
@@ -1222,7 +1230,7 @@ async function handlePlaylists(req: Request, res: Response, method: string, ctx:
       const playlist = playlists.find((item: any) => item.id === id);
       if (!playlist) return sendError(req, res, 70, 'Playlist not found');
       const tracks = await getPlaylistTracks(id, ctx.userId);
-      return sendSubsonic(req, res, subsonicSuccess({ playlist: { id, name: playlist.title, comment: playlist.description || undefined, owner: ctx.username, public: false, songCount: tracks.length, duration: tracks.reduce((sum: number, track: any) => sum + Number(track.duration || 0), 0), entry: tracks.map((track: any) => mapTrackToSubsonic(track, ctx.userId)), readOnly: !!playlist.isSystem } }));
+      return sendSubsonic(req, res, subsonicSuccess({ playlist: { id, name: playlist.title, comment: playlist.description || undefined, owner: ctx.username, public: false, songCount: tracks.length, duration: tracks.reduce((sum: number, track: any) => sum + Number(track.duration || 0), 0), entry: tracks.map((track: any) => mapTrackToSubsonic(track, ctx.userId)), readOnly: !!playlist.isSystem || !!playlist.isLlmGenerated } }));
     }
     case 'createplaylist': {
       const name = (getParam(req, 'name') || getParam(req, 'playlistId') || 'Subsonic Playlist').trim().slice(0, 120);
@@ -1236,7 +1244,7 @@ async function handlePlaylists(req: Request, res: Response, method: string, ctx:
       const id = getParam(req, 'playlistId') || getParam(req, 'id') || '';
       const meta = await getPlaylistMeta(id);
       if (!meta) return sendError(req, res, 70, 'Playlist not found');
-      if (meta.isSystem) return sendError(req, res, 50, 'System playlists are read-only');
+      if (meta.isSystem || meta.isLlmGenerated) return sendError(req, res, 50, 'Generated playlists are read-only');
       if (meta.userId !== ctx.userId && ctx.role !== 'admin') return sendError(req, res, 50, 'Playlist belongs to another user');
       const existing = await getPlaylistTracks(id, ctx.userId);
       const removeIndexes = new Set(getParamList(req, 'songIndexToRemove').map((value) => parseInt(value, 10)).filter(Number.isFinite));
@@ -1250,7 +1258,7 @@ async function handlePlaylists(req: Request, res: Response, method: string, ctx:
       const id = getParam(req, 'id') || '';
       const meta = await getPlaylistMeta(id);
       if (!meta) return sendError(req, res, 70, 'Playlist not found');
-      if (meta.isSystem) return sendError(req, res, 50, 'System playlists are read-only');
+      if (meta.isSystem || meta.isLlmGenerated) return sendError(req, res, 50, 'Generated playlists are read-only');
       if (meta.userId !== ctx.userId && ctx.role !== 'admin') return sendError(req, res, 50, 'Playlist belongs to another user');
       await deletePlaylist(id, ctx.role === 'admin' ? null : ctx.userId);
       return sendSubsonic(req, res, subsonicSuccess({}));
