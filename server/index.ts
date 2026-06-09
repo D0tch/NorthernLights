@@ -8,6 +8,7 @@ dotenv.config();
 
 import express from 'express';
 import cors from 'cors';
+import compression from 'compression';
 import fs from 'fs';
 import path from 'path';
 import dns from 'dns';
@@ -105,6 +106,21 @@ app.use(cors({
   },
   allowedHeaders: ['Content-Type', 'Range', 'Accept-Encoding', 'Authorization'],
   exposedHeaders: ['Content-Range', 'Accept-Ranges', 'Content-Length', 'Content-Type']
+}));
+// gzip JSON/text responses. The library/playlist/hub payloads are large,
+// highly compressible JSON; without this they ship raw (e.g. /api/library is
+// ~26MB), holding a connection slot for its whole download and — under the
+// HTTP/1.1 6-connections-per-origin cap — queueing every other request behind
+// it. zlib runs on the libuv threadpool, so this doesn't block the event loop.
+// Range requests (audio streaming) are skipped by compression automatically.
+app.use(compression({
+  filter: (req, res) => {
+    // Never compress Server-Sent Events: compression buffers the stream and
+    // would stall real-time scan/progress updates (text/event-stream otherwise
+    // matches the default text/* compressible rule).
+    if (String(res.getHeader('Content-Type') || '').includes('text/event-stream')) return false;
+    return compression.filter(req, res);
+  },
 }));
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
