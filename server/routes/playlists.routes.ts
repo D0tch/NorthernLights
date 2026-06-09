@@ -10,6 +10,7 @@ import {
   getPlaylistByIdForUser,
   getPlaylistsForUserWithTracks,
   setPlaylistShare,
+  getPlaylistSuggestionPool,
 } from '../database';
 
 const router = Router();
@@ -45,6 +46,23 @@ router.get('/:id', async (req, res) => {
   } catch (error) {
     console.error('Single playlist fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch playlist' });
+  }
+});
+
+// Candidate pool for "suggested tracks" — tracks related to this playlist by
+// artist/genre/album-artist. The client scores/ranks these (same overlap
+// algorithm as before) instead of scanning the whole library.
+router.get('/:id/suggestions', async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+    const meta = await getPlaylistByIdForUser(req.params.id, userId);
+    if (!meta) return res.status(404).json({ error: 'Playlist not found' });
+    const tracks = await getPlaylistSuggestionPool(req.params.id, userId);
+    res.json({ tracks });
+  } catch (error) {
+    console.error('Playlist suggestions fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch suggestions' });
   }
 });
 

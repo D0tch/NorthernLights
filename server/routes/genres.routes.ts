@@ -29,7 +29,7 @@ router.get('/:id', async (req, res) => {
   try {
     const genre = await getGenreById(req.params.id);
     if (!genre) return res.status(404).json({ error: 'Genre not found' });
-    const tracks = await getTracksByGenre(req.params.id);
+    const tracks = await getTracksByGenre(req.params.id, genre.name, req.user?.userId || null);
     res.json({ ...genre, tracks });
   } catch (error) {
     console.error('Genre fetch error:', error);

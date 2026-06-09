@@ -7,6 +7,7 @@ import {
   getArtistRolesInLibrary,
   getArtistAlbumsByRole,
   getArtistAlbumsAllRoles,
+  getArtistAppearsOnTracks,
 } from '../database';
 
 const router = Router();
@@ -70,13 +71,27 @@ router.get('/:id', async (req, res) => {
     const artist = await getArtistById(req.params.id);
     if (!artist) return res.status(404).json({ error: 'Artist not found' });
     const [tracks, roles] = await Promise.all([
-      getTracksByArtist(req.params.id),
+      getTracksByArtist(req.params.id, req.user?.userId || null),
       getArtistRolesInLibrary(req.params.id),
     ]);
     res.json({ ...artist, tracks, rolesInLibrary: roles });
   } catch (error) {
     console.error('Artist fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch artist' });
+  }
+});
+
+// Tracks this artist appears on but doesn't primarily own (collaborations,
+// features). Separate from /:id so the main artist load stays lean.
+router.get('/:id/appears-on', async (req, res) => {
+  try {
+    const artist = await getArtistById(req.params.id);
+    if (!artist) return res.status(404).json({ error: 'Artist not found' });
+    const tracks = await getArtistAppearsOnTracks(req.params.id, artist.name, req.user?.userId || null);
+    res.json({ tracks });
+  } catch (error) {
+    console.error('Artist appears-on fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch appears-on tracks' });
   }
 });
 

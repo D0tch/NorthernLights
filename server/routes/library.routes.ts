@@ -11,7 +11,7 @@ import { submitMbRecordingRating } from '../services/musicbrainz.service';
 import { scanStatus, scanClients, broadcastScanStatus } from '../state';
 import { requireAdmin } from '../middleware/auth';
 import { enrichCreditsFromMusicBrainz, enrichCreditsFromGenius } from '../services/creditsEnrichment.service';
-import { getCreditsStatus, refreshArtistAudioProfiles } from '../database';
+import { getCreditsStatus, refreshArtistAudioProfiles, searchLibrary, getExistingTrackIds } from '../database';
 import { createRateLimiter } from '../middleware/rateLimit';
 
 const router = Router();
@@ -1100,6 +1100,62 @@ router.get('/', async (req, res) => {
   } catch (error) {
     console.error('DB fetch error:', error);
     res.status(500).json({ error: 'Failed to fetch library' });
+  }
+});
+
+// Tracks-only bulk endpoint. Splitting tracks out of GET / lets the client load
+// the lightweight entity lists first (artists/albums/genres) and pull the large
+// track list in the background, so views don't wait on it.
+router.get('/tracks', async (req, res) => {
+  try {
+    const userId = req.user?.userId || null;
+    const tracks = await getAllTracks(userId);
+    res.json({ tracks });
+  } catch (error) {
+    console.error('DB tracks fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch tracks' });
+  }
+});
+
+// Global search across artists/albums/tracks (trigram ILIKE). Replaces the
+// client-side in-memory scan so search scales without the full track list.
+router.get('/search', async (req, res) => {
+  try {
+    const q = typeof req.query.q === 'string' ? req.query.q : '';
+    const userId = req.user?.userId || null;
+    const num = (v: unknown) => (typeof v === 'string' && v.trim() !== '' ? Number(v) : undefined);
+    const result = await searchLibrary(q, userId, {
+      artistLimit: num(req.query.artistLimit),
+      albumLimit: num(req.query.albumLimit),
+      trackLimit: num(req.query.trackLimit),
+    });
+    res.json(result);
+  } catch (error) {
+    console.error('Library search error:', error);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// Which of the supplied track ids still exist. Lets the client prune a
+// restored play queue without fetching the whole library.
+router.post('/tracks/exists', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids.filter((x: unknown) => typeof x === 'string') : [];
+    res.json({ ids: await getExistingTrackIds(ids) });
+  } catch (error) {
+    console.error('tracks/exists error:', error);
+    res.status(500).json({ error: 'Failed to check tracks' });
+  }
+});
+
+// Mapped library folders (paths only) — lightweight companion to the entity
+// lists for the entity-first load path.
+router.get('/directories', async (_req, res) => {
+  try {
+    res.json({ directories: await getDirectories() });
+  } catch (error) {
+    console.error('DB directories fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch directories' });
   }
 });
 

@@ -1065,6 +1065,54 @@ export async function getAllTracks(userId: string | null = null) {
   return res.rows.map(mapTrackRow);
 }
 
+// Server-side global search, replacing the client-side scan over the in-memory
+// library. Reuses the same trigram-indexed ILIKE pattern as the Subsonic
+// search3 route. Returns app-shaped rows; tracks carry per-user is_loved.
+export async function searchLibrary(
+  query: string,
+  userId: string | null,
+  opts: { artistLimit?: number; albumLimit?: number; trackLimit?: number } = {},
+) {
+  const q = (query || '').trim();
+  if (!q) return { artists: [], albums: [], tracks: [] };
+  const bound = (v: number | undefined, d: number) => Math.min(Math.max(Number.isFinite(v as number) ? (v as number) : d, 0), 500);
+  const artistLimit = bound(opts.artistLimit, 20);
+  const albumLimit = bound(opts.albumLimit, 20);
+  const trackLimit = bound(opts.trackLimit, 50);
+  const term = `%${q}%`;
+
+  const db = await initDB();
+  const [artists, albums, tracks] = await Promise.all([
+    db.query('SELECT * FROM artists WHERE merged_into IS NULL AND name ILIKE $1 ORDER BY name ASC LIMIT $2', [term, artistLimit]),
+    db.query('SELECT * FROM albums WHERE title ILIKE $1 OR artist_name ILIKE $1 ORDER BY title ASC LIMIT $2', [term, albumLimit]),
+    userId
+      ? db.query(
+          `SELECT t.*, (ult.track_id IS NOT NULL) AS is_loved
+           FROM tracks t
+           LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $2
+           WHERE t.title ILIKE $1 OR t.artist ILIKE $1 OR t.album ILIKE $1
+           ORDER BY t.title ASC LIMIT $3`,
+          [term, userId, trackLimit],
+        )
+      : db.query(
+          `SELECT t.*, FALSE AS is_loved FROM tracks t
+           WHERE t.title ILIKE $1 OR t.artist ILIKE $1 OR t.album ILIKE $1
+           ORDER BY t.title ASC LIMIT $2`,
+          [term, trackLimit],
+        ),
+  ]);
+  return { artists: artists.rows, albums: albums.rows, tracks: tracks.rows.map(mapTrackRow) };
+}
+
+// Returns which of the given track ids still exist — used to prune a restored
+// play queue without loading the whole library.
+export async function getExistingTrackIds(ids: string[]): Promise<string[]> {
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const db = await initDB();
+  const res = await db.query('SELECT id FROM tracks WHERE id = ANY($1)', [ids]);
+  return res.rows.map((r: any) => r.id as string);
+}
+
 export async function getTrackById(trackId: string) {
   const db = await initDB();
   const res = await db.query('SELECT t.*, FALSE AS is_loved FROM tracks t WHERE t.id = $1', [trackId]);
@@ -2376,7 +2424,39 @@ export async function getAllArtists() {
 
 export async function getAllAlbums() {
   const db = await initDB();
-  const res = await db.query('SELECT * FROM albums ORDER BY title ASC');
+  // Per-album track-derived metadata, computed server-side so the Albums and
+  // Genres views never need the full track list. Mirrors the old client-side
+  // deriveAlbumMetadata (src/utils/filterState.ts): distinct genres, earliest
+  // year, release type (one→that, >1→'Various', none→'Album'), track count.
+  // Grouped by the canonical album_id FK rather than the title::artist string.
+  const res = await db.query(`
+    SELECT a.*,
+      COALESCE(agg.track_count, 0) AS track_count,
+      agg.derived_year,
+      agg.derived_genres,
+      agg.art_hash,
+      COALESCE(agg.derived_release_type, 'Album') AS derived_release_type
+    FROM albums a
+    LEFT JOIN LATERAL (
+      SELECT
+        COUNT(*)::int AS track_count,
+        MIN(NULLIF(t.year, 0)) AS derived_year,
+        -- A representative track's embedded-cover hash so the client can build a
+        -- LOCAL /api/art URL for the card instead of falling back to the
+        -- (rate-limited) external art proxy when the album has no image_url.
+        (array_agg(t.art_hash ORDER BY t.track_number NULLS LAST) FILTER (WHERE COALESCE(t.art_hash, '') <> ''))[1] AS art_hash,
+        string_agg(DISTINCT NULLIF(btrim(t.genre), ''), ',') AS derived_genres,
+        CASE
+          WHEN COUNT(DISTINCT t.release_type) FILTER (WHERE COALESCE(t.release_type, '') <> '') > 1 THEN 'Various'
+          WHEN COUNT(*) FILTER (WHERE COALESCE(t.release_type, '') <> '') > 0
+            THEN MAX(t.release_type) FILTER (WHERE COALESCE(t.release_type, '') <> '')
+          ELSE 'Album'
+        END AS derived_release_type
+      FROM tracks t
+      WHERE t.album_id = a.id
+    ) agg ON TRUE
+    ORDER BY a.title ASC
+  `);
   return res.rows;
 }
 
@@ -2441,9 +2521,44 @@ export async function getGenreTaxonomyPaths(): Promise<{ available: boolean; pat
   return { available: true, paths };
 }
 
-export async function getTracksByArtist(artistId: string) {
+// Tracks where this artist APPEARS but isn't the primary/owner — the
+// "appears on" / collaborations list. Server-side (name ILIKE on the artist /
+// multi-artist fields) so ArtistDetail doesn't need the full in-memory library.
+// Approximate vs the client's canonical-key match, but serviceable; bounded.
+export async function getArtistAppearsOnTracks(artistId: string, artistName: string | null, userId: string | null = null) {
+  const name = (artistName || '').trim();
+  if (!name) return [];
   const db = await initDB();
-  const res = await db.query('SELECT * FROM tracks WHERE artist_id = $1', [artistId]);
+  // `artists` is a JSON array text like ["A","B"]; match the exact quoted
+  // element so short names (e.g. "Sia") don't substring-hit "Anastasia". Also
+  // accept an exact whole-string artist match for single-artist rows.
+  const token = `%"${name}"%`;
+  const lovedSelect = userId ? '(ult.track_id IS NOT NULL)' : 'FALSE';
+  const lovedJoin = userId ? 'LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $4' : '';
+  const sql = `
+    SELECT t.*, ${lovedSelect} AS is_loved
+    FROM tracks t ${lovedJoin}
+    WHERE t.artist_id IS DISTINCT FROM $1
+      AND (t.artists ILIKE $2 OR lower(btrim(t.artist)) = lower($3))
+      AND lower(btrim(COALESCE(t.album_artist, t.artist, ''))) <> lower($3)
+    ORDER BY t.album, t.track_number ASC NULLS LAST
+    LIMIT 300`;
+  const res = userId
+    ? await db.query(sql, [artistId, token, name, userId])
+    : await db.query(sql, [artistId, token, name]);
+  return res.rows.map(mapTrackRow);
+}
+
+export async function getTracksByArtist(artistId: string, userId: string | null = null) {
+  const db = await initDB();
+  const res = userId
+    ? await db.query(
+        `SELECT t.*, (ult.track_id IS NOT NULL) AS is_loved
+         FROM tracks t
+         LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $2
+         WHERE t.artist_id = $1`,
+        [artistId, userId])
+    : await db.query('SELECT t.*, FALSE AS is_loved FROM tracks t WHERE t.artist_id = $1', [artistId]);
   return res.rows.map(mapTrackRow);
 }
 
@@ -2529,15 +2644,45 @@ export async function getSimilarArtistsByAudioProfile(artistId: string, limit: n
   }));
 }
 
-export async function getTracksByAlbum(albumId: string) {
+export async function getTracksByAlbum(albumId: string, userId: string | null = null) {
   const db = await initDB();
-  const res = await db.query('SELECT * FROM tracks WHERE album_id = $1 ORDER BY track_number ASC NULLS LAST', [albumId]);
+  const res = userId
+    ? await db.query(
+        `SELECT t.*, (ult.track_id IS NOT NULL) AS is_loved
+         FROM tracks t
+         LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $2
+         WHERE t.album_id = $1
+         ORDER BY t.track_number ASC NULLS LAST`,
+        [albumId, userId])
+    : await db.query('SELECT t.*, FALSE AS is_loved FROM tracks t WHERE t.album_id = $1 ORDER BY t.track_number ASC NULLS LAST', [albumId]);
   return res.rows.map(mapTrackRow);
 }
 
-export async function getTracksByGenre(genreId: string) {
+export async function getTracksByGenre(genreId: string, genreName?: string | null, userId: string | null = null) {
   const db = await initDB();
-  const res = await db.query('SELECT * FROM tracks WHERE genre_id = $1', [genreId]);
+  // Match the primary genre_id, and (to mirror the old client-side filter) any
+  // track whose genre name or multi-genre list contains this genre. `genres` is
+  // stored as a JSON array string like ["Rock"], so match the quoted token to
+  // avoid substring bleed ("Rock" vs "Rock and Roll"). The per-user loved join
+  // mirrors getAllTracks so detail views keep loved-state across refresh.
+  const name = (genreName || '').trim();
+  const lovedSelect = userId ? '(ult.track_id IS NOT NULL)' : 'FALSE';
+  const lovedJoin = userId ? 'LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $LOVED' : '';
+  if (!name) {
+    const sql = `SELECT t.*, ${lovedSelect} AS is_loved FROM tracks t ${lovedJoin} WHERE t.genre_id = $1`;
+    const res = userId
+      ? await db.query(sql.replace('$LOVED', '$2'), [genreId, userId])
+      : await db.query(sql, [genreId]);
+    return res.rows.map(mapTrackRow);
+  }
+  const sql = `SELECT t.*, ${lovedSelect} AS is_loved
+     FROM tracks t ${lovedJoin}
+     WHERE t.genre_id = $1
+        OR lower(btrim(t.genre)) = lower($2)
+        OR t.genres ILIKE $3`;
+  const res = userId
+    ? await db.query(sql.replace('$LOVED', '$4'), [genreId, name, `%"${name}"%`, userId])
+    : await db.query(sql, [genreId, name, `%"${name}"%`]);
   return res.rows.map(mapTrackRow);
 }
 
@@ -3648,6 +3793,41 @@ export async function getPlaylistsForUserWithTracks(userId: string) {
   }));
 }
 
+// Bounded candidate pool for playlist "suggested tracks" — tracks that share
+// the playlist's artists, genres, or album-artists (excluding tracks already in
+// the playlist). The client then runs the existing overlap scoring over this
+// pool instead of the whole in-memory library, so it scales without it.
+export async function getPlaylistSuggestionPool(playlistId: string, userId: string | null = null) {
+  const db = await initDB();
+  const sql = `
+    WITH pl AS (SELECT track_id FROM playlist_tracks WHERE playlist_id = $1),
+    seeds AS (
+      SELECT DISTINCT t.artist_id, t.genre_id, lower(btrim(t.album_artist)) AS aa
+      FROM tracks t JOIN pl ON pl.track_id = t.id
+    )
+    SELECT t.*, ${userId ? '(ult.track_id IS NOT NULL)' : 'FALSE'} AS is_loved
+    FROM tracks t
+    ${userId ? 'LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $2' : ''}
+    WHERE t.id NOT IN (SELECT track_id FROM pl)
+      AND (
+        t.artist_id IN (SELECT artist_id FROM seeds WHERE artist_id IS NOT NULL)
+        OR t.genre_id IN (SELECT genre_id FROM seeds WHERE genre_id IS NOT NULL)
+        OR lower(btrim(t.album_artist)) IN (SELECT aa FROM seeds WHERE aa <> '')
+      )
+    -- Keep the strongest matches within the cap: shared-artist first, then
+    -- shared album-artist, then genre-only (which can be very broad).
+    ORDER BY (
+      CASE
+        WHEN t.artist_id IN (SELECT artist_id FROM seeds WHERE artist_id IS NOT NULL) THEN 0
+        WHEN lower(btrim(t.album_artist)) IN (SELECT aa FROM seeds WHERE aa <> '') THEN 1
+        ELSE 2
+      END
+    )
+    LIMIT 500`;
+  const res = userId ? await db.query(sql, [playlistId, userId]) : await db.query(sql, [playlistId]);
+  return res.rows.map(mapTrackRow);
+}
+
 export async function getPlaylistTracks(playlistId: string, userId: string | null = null) {
   const db = await initDB();
   const res = userId
@@ -3863,10 +4043,20 @@ export async function updateGenreMatrixCache(matrix: any) {
 const systemSettingCache = new Map<string, { value: any; expires: number }>();
 const SYSTEM_SETTING_TTL_MS = 30_000;
 
+// Keys written out-of-band (raw SQL in genreMatrix.service, etc.) and polled
+// for live progress — caching them would serve stale values to progress UIs.
+const UNCACHED_SYSTEM_SETTINGS = new Set([
+  'genreMatrixProgress',
+  'genreMatrixCheckpoint',
+]);
+
 export async function getSystemSetting(key: string) {
+  const cacheable = !UNCACHED_SYSTEM_SETTINGS.has(key);
   const now = Date.now();
-  const cached = systemSettingCache.get(key);
-  if (cached && cached.expires > now) return cached.value;
+  if (cacheable) {
+    const cached = systemSettingCache.get(key);
+    if (cached && cached.expires > now) return cached.value;
+  }
 
   const db = await initDB();
   const res = await db.query('SELECT value FROM system_settings WHERE key = $1', [key]);
@@ -3874,7 +4064,7 @@ export async function getSystemSetting(key: string) {
   if (res.rows.length > 0 && (res.rows[0] as any).value) {
     try { value = JSON.parse((res.rows[0] as any).value as string); } catch { value = null; }
   }
-  systemSettingCache.set(key, { value, expires: now + SYSTEM_SETTING_TTL_MS });
+  if (cacheable) systemSettingCache.set(key, { value, expires: now + SYSTEM_SETTING_TTL_MS });
   return value;
 }
 export async function upsertSubGenreMapping(subGenre: string, path: string) {

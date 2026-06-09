@@ -28,7 +28,7 @@ router.get('/:id', async (req, res) => {
   try {
     const album = await getAlbumById(req.params.id);
     if (!album) return res.status(404).json({ error: 'Album not found' });
-    const tracks = await getTracksByAlbum(req.params.id);
+    const tracks = await getTracksByAlbum(req.params.id, req.user?.userId || null);
     res.json({ ...album, tracks });
   } catch (error) {
     console.error('Album fetch error:', error);
