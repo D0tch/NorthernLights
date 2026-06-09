@@ -3833,16 +3833,29 @@ export async function updateGenreMatrixCache(matrix: any) {
   `, ['default', matrixStr]);
 }
 
+// system_settings is read on extremely hot paths (87+ call sites: providers,
+// analysis, OAuth, scrobbling) but changes rarely and only ever through
+// setSystemSetting in this process. An in-memory cache turns those reads into
+// map lookups — eliminating the per-call pool round-trips that were queueing
+// behind heavy work and surfacing as "slow query" warnings on this PK lookup.
+// Write-through on set keeps it exact; the short TTL bounds staleness from any
+// out-of-band DB write (migrations, manual edits).
+const systemSettingCache = new Map<string, { value: any; expires: number }>();
+const SYSTEM_SETTING_TTL_MS = 30_000;
+
 export async function getSystemSetting(key: string) {
+  const now = Date.now();
+  const cached = systemSettingCache.get(key);
+  if (cached && cached.expires > now) return cached.value;
+
   const db = await initDB();
   const res = await db.query('SELECT value FROM system_settings WHERE key = $1', [key]);
-  if (res.rows.length === 0 || !(res.rows[0] as any).value) return null;
-  const val = (res.rows[0] as any).value as string;
-  try {
-    return JSON.parse(val);
-  } catch(e) {
-    return null;
+  let value: any = null;
+  if (res.rows.length > 0 && (res.rows[0] as any).value) {
+    try { value = JSON.parse((res.rows[0] as any).value as string); } catch { value = null; }
   }
+  systemSettingCache.set(key, { value, expires: now + SYSTEM_SETTING_TTL_MS });
+  return value;
 }
 export async function upsertSubGenreMapping(subGenre: string, path: string) {
   const db = await initDB();
@@ -3938,6 +3951,9 @@ export async function setSystemSetting(key: string, value: any) {
     VALUES ($1, $2)
     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value
   `, [key, valStr]);
+  // Write-through: keep the read cache consistent (valStr is what a subsequent
+  // read would JSON.parse, so 'null' → null matches the undefined case).
+  systemSettingCache.set(key, { value: value === undefined ? null : value, expires: Date.now() + SYSTEM_SETTING_TTL_MS });
 }
 
 // ==========================================
@@ -4281,15 +4297,25 @@ export async function deleteRevokedSubsonicApiKey(userId: string, keyId: string)
 // USER SETTINGS (per-user preferences)
 // ==========================================
 
+// Same rationale as system_settings: GET /api/settings reads ~25 user keys per
+// load, and these are read on hot paths but written only via setUserSetting in
+// this process. Cache keyed by `${userId}:${key}`; write-through + short TTL.
+const userSettingCache = new Map<string, { value: any; expires: number }>();
+
 export async function getUserSetting(userId: string, key: string) {
+  const cacheKey = `${userId}:${key}`;
+  const now = Date.now();
+  const cached = userSettingCache.get(cacheKey);
+  if (cached && cached.expires > now) return cached.value;
+
   const db = await initDB();
   const res = await db.query('SELECT value FROM user_settings WHERE user_id = $1 AND key = $2', [userId, key]);
-  if (res.rows.length === 0 || !(res.rows[0] as any).value) return null;
-  try {
-    return JSON.parse((res.rows[0] as any).value);
-  } catch {
-    return null;
+  let value: any = null;
+  if (res.rows.length > 0 && (res.rows[0] as any).value) {
+    try { value = JSON.parse((res.rows[0] as any).value); } catch { value = null; }
   }
+  userSettingCache.set(cacheKey, { value, expires: now + SYSTEM_SETTING_TTL_MS });
+  return value;
 }
 
 export async function setUserSetting(userId: string, key: string, value: any) {
@@ -4300,11 +4326,16 @@ export async function setUserSetting(userId: string, key: string, value: any) {
     VALUES ($1, $2, $3)
     ON CONFLICT (user_id, key) DO UPDATE SET value = EXCLUDED.value
   `, [userId, key, valStr]);
+  userSettingCache.set(`${userId}:${key}`, { value: value === undefined ? null : value, expires: Date.now() + SYSTEM_SETTING_TTL_MS });
 }
 
 export async function deleteUserSettings(userId: string) {
   const db = await initDB();
   await db.query('DELETE FROM user_settings WHERE user_id = $1', [userId]);
+  // Drop this user's cached settings so stale values aren't served post-delete.
+  for (const k of userSettingCache.keys()) {
+    if (k.startsWith(`${userId}:`)) userSettingCache.delete(k);
+  }
 }
 
 // ==========================================
