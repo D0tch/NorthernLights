@@ -90,6 +90,7 @@ const MobileMiniPlayer = () => {
       flashSwipe('right');
       prevTrack();
     },
+    onSwipeUp: () => setExpanded(true),
     threshold: 40,
   });
 

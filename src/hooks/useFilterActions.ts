@@ -8,8 +8,8 @@ import {
 import type { SortOption } from '../store/index';
 
 /**
- * Shared filter state mutation logic used by both FilterBar (desktop)
- * and MobileFilterOverlay (mobile). Keeps the two components DRY.
+ * Shared filter state mutation logic used by FilterBar (facet toggles,
+ * sort, chip removal, clear-all). Keeps that logic out of the view layer.
  */
 export function useFilterActions(
   filterState: FilterState,

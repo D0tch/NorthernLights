@@ -9,7 +9,6 @@ import { fetchGenreImage } from '../../utils/externalImagery';
 import { useInView } from '../../hooks/useInView';
 import { FilterBar } from './FilterBar';
 import { QueryBuilderModal } from './QueryBuilderModal';
-import { MobileFilterOverlay } from './MobileFilterOverlay';
 import {
   hasActiveFilters,
   QueryGroup,
@@ -169,17 +168,6 @@ const ArtistCard: React.FC<{ artist: string }> = ({ artist }) => {
 
 const GRID_SKELETON_COUNT = 12;
 
-function useIsMobile(breakpoint = 768) {
-    const [isMobile, setIsMobile] = useState(() => window.innerWidth < breakpoint);
-    useEffect(() => {
-        const mq = window.matchMedia(`(max-width: ${breakpoint - 1}px)`);
-        const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
-        mq.addEventListener('change', handler);
-        return () => mq.removeEventListener('change', handler);
-    }, [breakpoint]);
-    return isMobile;
-}
-
 interface GenreRailMember {
     name: string;
     /** Depth in the MBDB tree (1 = the root genre itself). */
@@ -207,12 +195,9 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
     const setArtistQueryResultIds = usePlayerStore(state => state.setArtistQueryResultIds);
     const setAlbumQueryResultIds = usePlayerStore(state => state.setAlbumQueryResultIds);
 
-    const isMobile = useIsMobile();
     const pageRef = useRef<HTMLDivElement>(null);
     const [queryBuilderOpen, setQueryBuilderOpen] = useState(false);
     const [queryBuilderView, setQueryBuilderView] = useState<'artists' | 'albums'>('artists');
-    const [mobileOverlayOpen, setMobileOverlayOpen] = useState(false);
-    const [mobileOverlayView, setMobileOverlayView] = useState<'artists' | 'albums'>('artists');
 
     // These derivations are memoized at module scope (keyed by the underlying
     // store array references) so navigating away and back to the library
@@ -431,16 +416,8 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                             view="albums"
                             filterState={albumFilters}
                             onFilterChange={setAlbumFilters}
-                            onOpenQueryBuilder={() => {
-                                if (isMobile) {
-                                    setMobileOverlayView('albums');
-                                    setMobileOverlayOpen(true);
-                                } else {
-                                    handleOpenQueryBuilder('albums');
-                                }
-                            }}
+                            onOpenQueryBuilder={() => handleOpenQueryBuilder('albums')}
                             facetValues={albumFacetValues}
-                            isMobile={isMobile}
                         />
                         {filteredAlbums.length === 0 && hasActiveFilters(albumFilters) ? (
                             <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -489,16 +466,8 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                             view="artists"
                             filterState={artistFilters}
                             onFilterChange={setArtistFilters}
-                            onOpenQueryBuilder={() => {
-                                if (isMobile) {
-                                    setMobileOverlayView('artists');
-                                    setMobileOverlayOpen(true);
-                                } else {
-                                    handleOpenQueryBuilder('artists');
-                                }
-                            }}
+                            onOpenQueryBuilder={() => handleOpenQueryBuilder('artists')}
                             facetValues={artistFacetValues}
-                            isMobile={isMobile}
                         />
                         {filteredArtists.length === 0 && hasActiveFilters(artistFilters) ? (
                             <div className="flex flex-col items-center justify-center py-16 text-center">
@@ -597,20 +566,6 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                 onClose={() => setQueryBuilderOpen(false)}
                 onApply={handleApplyQuery}
                 initialGroups={queryBuilderView === 'artists' ? artistFilters.queryGroups : albumFilters.queryGroups}
-            />
-
-            <MobileFilterOverlay
-                view={mobileOverlayView}
-                isOpen={mobileOverlayOpen}
-                onClose={() => setMobileOverlayOpen(false)}
-                filterState={mobileOverlayView === 'artists' ? artistFilters : albumFilters}
-                onFilterChange={mobileOverlayView === 'artists' ? setArtistFilters : setAlbumFilters}
-                onOpenQueryBuilder={() => {
-                    setMobileOverlayOpen(false);
-                    setQueryBuilderView(mobileOverlayView);
-                    setQueryBuilderOpen(true);
-                }}
-                facetValues={mobileOverlayView === 'artists' ? artistFacetValues : albumFacetValues}
             />
         </div>
     );
