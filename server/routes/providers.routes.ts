@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { createRateLimiter } from '../middleware/rateLimit';
 import { randomBytes } from 'crypto';
-import { getSystemSetting, setSystemSetting, getUserSetting, setUserSetting } from '../database';
+import { getSystemSetting, setSystemSetting, getUserSetting, setUserSetting, getRepresentativeReleaseMbid } from '../database';
+import { caaGetReleaseImages, pickMediumImage, pickFrontImage } from '../services/metadata/providers/musicbrainz';
 import { lfmFetch, scrobbleTracks, updateNowPlaying, loveTrack, unloveTrack } from '../services/lastfm.service';
 import {
   validateToken as validateLbToken,
@@ -286,7 +287,12 @@ router.get('/providers/musicbrainz/authorize', async (req, res) => {
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('client_id', clientId);
     url.searchParams.set('redirect_uri', redirectUri);
-    url.searchParams.set('scope', 'tag rating collection');
+    // `profile` is required for the /oauth2/userinfo call that resolves the
+    // username; `access_type=offline` is required for MusicBrainz to return a
+    // refresh_token (it defaults to `online`, which issues an access token that
+    // expires in ~1h with no way to refresh, silently breaking the connection).
+    url.searchParams.set('scope', 'profile tag rating collection');
+    url.searchParams.set('access_type', 'offline');
     // Encode userId in state so the unauthenticated callback can identify the user
     url.searchParams.set('state', userId ? `uid:${userId}` : 'aurora');
 
@@ -344,7 +350,10 @@ router.get('/providers/musicbrainz/callback', async (req, res) => {
     await setSystemSetting('musicBrainzTokenExpiresAt', Math.floor(Date.now() / 1000) + (tokenData.expires_in ?? 3600));
     await setSystemSetting('musicBrainzConnected', true);
 
-    // Fetch username for display
+    // Fetch username for display. Non-fatal: the connection is already
+    // established above, so a userinfo failure must not abort the callback.
+    // We still log it — a 403 here almost always means the `profile` scope
+    // was missing from the authorize request.
     try {
       const meRes = await fetch('https://musicbrainz.org/oauth2/userinfo', {
         headers: { 'Authorization': `Bearer ${tokenData.access_token}` },
@@ -352,8 +361,15 @@ router.get('/providers/musicbrainz/callback', async (req, res) => {
       if (meRes.ok) {
         const meData = await meRes.json();
         await setSystemSetting('musicBrainzUsername', meData.sub || 'Connected');
+      } else {
+        const errText = await meRes.text().catch(() => '');
+        console.warn('[MusicBrainz OAuth] userinfo fetch failed:', meRes.status, sanitizeProviderLogValue(errText));
+        await setSystemSetting('musicBrainzUsername', 'Connected');
       }
-    } catch {}
+    } catch (err: any) {
+      console.warn('[MusicBrainz OAuth] userinfo fetch error:', sanitizeProviderLogValue(err?.message));
+      await setSystemSetting('musicBrainzUsername', 'Connected');
+    }
 
     res.redirect(`${returnBase}/?mb_connected=1`);
   } catch (err: any) {
@@ -973,6 +989,37 @@ router.get('/providers/external/album-art', requireAuth, async (req, res) => {
   } catch (err: any) {
     console.error('[ExternalMeta] album-art error:', err.message);
     res.status(502).json({ error: 'Failed to fetch album art' });
+  }
+});
+
+// Cover Art Archive disc/label art for the album disc view. Resolves the
+// release MBID from the album's tracks (tracks.mb_album_id) — the only
+// reliable release MBID in the library — then returns the typed Medium
+// (disc) and Front images. Both null is normal; the client renders a
+// procedural label from local cover art in that case.
+router.get('/providers/album/media-image', requireAuth, async (req, res) => {
+  try {
+    const albumId = req.query.albumId as string;
+    if (!albumId) return res.status(400).json({ error: 'Missing albumId parameter' });
+    if (!(await checkMbEnabled())) return res.json({ releaseMbid: null, mediumUrl: null, frontUrl: null });
+
+    const discIndex = Number(req.query.discIndex) || 0;
+    const releaseMbid = await getRepresentativeReleaseMbid(albumId);
+    if (!releaseMbid) return res.json({ releaseMbid: null, mediumUrl: null, frontUrl: null });
+
+    const images = await caaGetReleaseImages(releaseMbid);
+    const medium = pickMediumImage(images, discIndex);
+    const front = pickFrontImage(images);
+    res.json({
+      releaseMbid,
+      // 500px is ample for the hero disc (~240px, retina) and far lighter
+      // than the full-res scan; fall back up the ladder when absent.
+      mediumUrl: medium?.thumbnails?.['500'] || medium?.thumbnails?.['1200'] || medium?.image || null,
+      frontUrl: front?.thumbnails?.['500'] || front?.image || null,
+    });
+  } catch (err: any) {
+    console.error('[ExternalMeta] media-image error:', err.message);
+    res.status(502).json({ error: 'Failed to fetch disc art' });
   }
 });
 

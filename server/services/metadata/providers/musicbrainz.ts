@@ -75,6 +75,56 @@ export async function mbGetAlbumCover(mbid: string): Promise<string | null> {
   }
 }
 
+// ─── Cover Art Archive typed images (front, Medium/disc, …) ────────────────
+//
+// CAA is a public, no-auth service (separate origin from the MB API, so it
+// bypasses the mbFetch allowlist — same pattern as mbGetAlbumCover above).
+// Each image carries a `types` array; "Medium" is the physical medium
+// itself (vinyl label / CD face), which powers the album disc view.
+
+const CAA_RELEASE_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export interface CaaImage {
+  types: string[];                      // e.g. ["Front"], ["Medium"]
+  front: boolean;
+  image: string;                        // full-size url
+  thumbnails: Record<string, string>;   // "250" | "500" | "1200" | "small" | "large"
+  comment?: string;                     // sometimes "Disc 1" — unreliable
+  approved?: boolean;
+}
+
+/** Full typed image list for a *release* MBID (not release-group). [] on 404/error. */
+export async function caaGetReleaseImages(releaseMbid: string): Promise<CaaImage[]> {
+  if (!CAA_RELEASE_RE.test(releaseMbid)) return [];
+  try {
+    const res = await fetch(`https://coverartarchive.org/release/${encodeURIComponent(releaseMbid)}`, {
+      headers: { 'Accept': 'application/json' },
+    });
+    if (!res.ok) return [];               // 404 = no art for this release
+    const data = await res.json();
+    return Array.isArray(data?.images) ? data.images : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Pick the disc/label image. "Medium" = the physical medium (vinyl label, CD
+ * face). discIndex selects which platter for multi-disc releases (CAA order,
+ * best-effort). Prefers approved images. Returns null when none exist.
+ */
+export function pickMediumImage(images: CaaImage[], discIndex = 0): CaaImage | null {
+  const media = images.filter(i => Array.isArray(i.types) && i.types.includes('Medium'));
+  if (media.length === 0) return null;
+  return media[Math.min(Math.max(discIndex, 0), media.length - 1)]
+      ?? media.find(i => i.approved) ?? media[0];
+}
+
+/** Best front-cover image (release level). null when none. */
+export function pickFrontImage(images: CaaImage[]): CaaImage | null {
+  return images.find(i => i.front) ?? images.find(i => i.types?.includes('Front')) ?? null;
+}
+
 // ─── Recording-level credits (composer / performer / producer / …) ─────────
 //
 // MusicBrainz's recording entity exposes per-track artist relationships

@@ -7546,3 +7546,137 @@ a:focus-visible > .genre-card .genre-card__label {
 /*  Below md breakpoint: PlayerShell is hidden by wrapper class; nothing   */
 /*  more to do here. MobileMiniPlayer handles small viewports.             */
 /* ─────────────────────────────────────────────────────────────────────── */
+
+/* ─────────────────────────────────────────────────────────────────────── */
+/*  Album hero: disc rolls out from behind the cover.                       */
+/*  .album-disc is a circular platter sized to the cover; it starts hidden  */
+/*  directly behind the sleeve and slides + spins out to the right once     */
+/*  the cover mounts ([data-rolled="true"]). A real CAA "Medium" scan fills */
+/*  the whole platter; otherwise we synthesize a vinyl record with grooves  */
+/*  and the cover art as the center label ([data-synthetic="true"]).        */
+/* ─────────────────────────────────────────────────────────────────────── */
+.album-disc {
+  position: absolute;
+  /* Slightly inset from the cover so the platter reads as if it could tuck
+     back inside the sleeve. */
+  inset: 4%;
+  z-index: 0;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #0d0d0d;
+  /* Faint edge rim only — no drop shadow on the disc itself. */
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  /* Hidden behind the sleeve until the roll-out fires. */
+  transform: translateX(0) rotate(0deg);
+}
+
+/* Real printed-medium scan fills the disc. */
+.album-disc[data-synthetic="false"] {
+  background-image: var(--disc-art);
+  background-size: cover;
+  background-position: center;
+}
+
+/* Synthetic vinyl: concentric grooves over a radial platter. Light mode uses
+   a silver platter so the (dark) hero title stays legible where the disc
+   peeks out behind it; dark mode keeps the classic black vinyl. */
+.album-disc[data-synthetic="true"] {
+  background:
+    repeating-radial-gradient(circle at 50% 50%,
+      rgba(0, 0, 0, 0.06) 0 1px,
+      rgba(0, 0, 0, 0) 1px 3px),
+    radial-gradient(circle at 50% 50%, #ececee 0%, #d6d6db 58%, #bdbdc4 100%);
+}
+
+.dark .album-disc[data-synthetic="true"] {
+  background:
+    repeating-radial-gradient(circle at 50% 50%,
+      rgba(255, 255, 255, 0.045) 0 1px,
+      rgba(0, 0, 0, 0) 1px 3px),
+    radial-gradient(circle at 50% 50%, #2b2b2b 0%, #141414 58%, #070707 100%);
+}
+
+/* Center label = the cover art (synthetic discs only). */
+.album-disc[data-synthetic="true"]::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 42%;
+  height: 42%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background-image: var(--disc-art);
+  background-size: cover;
+  background-position: center;
+  box-shadow:
+    inset 0 0 0 1px rgba(0, 0, 0, 0.45),
+    0 0 10px rgba(0, 0, 0, 0.35);
+}
+
+/* Spindle hole. */
+.album-disc::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 5%;
+  height: 5%;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: var(--color-bg, #000);
+  box-shadow:
+    0 0 0 2px rgba(0, 0, 0, 0.5),
+    inset 0 0 2px rgba(255, 255, 255, 0.35);
+}
+
+/* Motion. Only the transition is gated on motion preference — the rolled-out
+   transforms always apply, so reduced-motion users get the final layout with
+   no slide/spin (rotate(360deg) is visually identical to rotate(0deg) when it
+   snaps instantly). */
+@media (prefers-reduced-motion: no-preference) {
+  .album-disc,
+  .album-cover-disc__cover {
+    transition: transform 900ms cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: transform;
+  }
+}
+
+/* Desktop (≥md): the disc slides out to the right of a stationary cover. */
+@media (min-width: 768px) {
+  .album-cover-disc[data-rolled="true"] .album-disc {
+    transform: translateX(38%) rotate(360deg);
+  }
+}
+
+/* Mobile (<md): the centered pair splits — cover slides left, disc slides
+   right — by half the peek each, parting from center by the same total. */
+@media (max-width: 767px) {
+  .album-cover-disc[data-rolled="true"] .album-disc {
+    transform: translateX(19%) rotate(360deg);
+  }
+  .album-cover-disc[data-rolled="true"] .album-cover-disc__cover {
+    transform: translateX(-19%);
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────── */
+/*  Genre filter drill-down: each level slides in (right = drill deeper,    */
+/*  left = back), mirroring the track context-menu sub-panels.              */
+/* ─────────────────────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: no-preference) {
+  .genre-level[data-dir="forward"] {
+    animation: genre-level-in-right 260ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  .genre-level[data-dir="back"] {
+    animation: genre-level-in-left 260ms cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  @keyframes genre-level-in-right {
+    from { transform: translateX(38%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+  @keyframes genre-level-in-left {
+    from { transform: translateX(-38%); opacity: 0; }
+    to { transform: translateX(0); opacity: 1; }
+  }
+}

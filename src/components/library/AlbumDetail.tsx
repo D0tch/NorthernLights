@@ -3,6 +3,7 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { AlbumArt } from '../AlbumArt';
+import { AlbumCoverDisc } from './AlbumCoverDisc';
 import { parseArtistsForDisplay } from '../../utils/artistUtils';
 import { useKnownArtistKeys } from '../../hooks/useKnownArtistKeys';
 import { formatTime } from '../../utils/formatTime';
@@ -21,6 +22,10 @@ import { readAlbumHeroState, type AlbumHeroState } from '../../utils/heroState';
 
 interface EditionRow extends AlbumInfo {
     track_count?: number;
+    // Modal tracks.mb_album_id for this edition — the real release MBID from
+    // file tags. albums.mbid is never populated, so this is the only usable
+    // release id for Cover Art Archive lookups.
+    representative_release_mbid?: string | null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -847,12 +852,12 @@ export const AlbumDetail: React.FC = () => {
             <div className="shrink-0 mb-6"><BackButton onClick={() => navigate(-1)} /></div>
 
             <div className="shrink-0 flex flex-col md:flex-row gap-6 md:gap-8 mb-8 md:mb-12 items-center md:items-end text-center md:text-left">
-                <div
-                    className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5"
-                >
-                    <AlbumArt artUrl={artUrl} artist={albumArtist} size={640} className="w-full h-full object-cover rounded-2xl" />
-                </div>
-                <div className="flex flex-col justify-end items-center md:items-start max-w-full">
+                <AlbumCoverDisc albumId={albumId} artUrl={artUrl} artist={albumArtist} album={albumTitle} />
+                {/* isolate lifts the title above the disc that rolls out from
+                    behind the cover, without becoming the positioning anchor
+                    for the absolutely-positioned action buttons inside it —
+                    those must still anchor to the panel (top-right) on mobile. */}
+                <div className="isolate flex flex-col justify-end items-center md:items-start max-w-full">
                     {/* Release type label — dynamic */}
                     <div className="font-semibold text-sm tracking-wider uppercase text-[var(--color-primary)]">{releaseType}</div>
 
@@ -1090,7 +1095,7 @@ export const AlbumDetail: React.FC = () => {
                                                     >
                                                         <span className="relative w-8 h-8 shrink-0 overflow-hidden rounded-sm bg-black/10 dark:bg-white/5">
                                                             <EditionArt
-                                                                mbReleaseId={ed.mbid}
+                                                                mbReleaseId={ed.representative_release_mbid ?? ed.mbid}
                                                                 fallbackArtUrl={(ed as any).image_url}
                                                                 artist={ed.artist_name || ''}
                                                                 title={ed.title || ''}

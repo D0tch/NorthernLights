@@ -8,6 +8,7 @@ import {
   unmergeAlbumFromGroup,
   getAlbumCredits,
   getTrackCredits,
+  getRepresentativeReleaseMbid,
 } from '../database';
 import { requireAdmin } from '../middleware/auth';
 
@@ -43,7 +44,11 @@ router.get('/:id/editions', async (req, res) => {
   try {
     const album = await getAlbumById(req.params.id);
     if (!album) return res.status(404).json({ error: 'Album not found' });
-    if (!album.release_group_id) return res.json({ canonical: album, editions: [album] });
+    if (!album.release_group_id) {
+      const representative_release_mbid = await getRepresentativeReleaseMbid(album.id);
+      const solo = { ...album, representative_release_mbid };
+      return res.json({ canonical: solo, editions: [solo] });
+    }
     const editions = await getReleaseGroupEditions(album.release_group_id);
     res.json({
       canonical: editions[0] || album,

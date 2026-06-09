@@ -1984,10 +1984,20 @@ export async function getAlbumById(id: string) {
 
 // All editions in the same release-group, ordered by canonical-first
 // (most tracks → earliest release_year → earliest created_at).
+//
+// representative_release_mbid is the modal tracks.mb_album_id for each
+// edition — the actual release MBID the user's files carry. albums.mbid is
+// not populated by the scanner, so this is the only reliable release MBID
+// for Cover Art Archive lookups (front + Medium/disc images).
 export async function getReleaseGroupEditions(releaseGroupId: string) {
   const db = await initDB();
   const res = await db.query(
-    `SELECT al.*, COUNT(t.id)::int AS track_count
+    `SELECT al.*, COUNT(t.id)::int AS track_count,
+            (SELECT t2.mb_album_id FROM tracks t2
+             WHERE t2.album_id = al.id AND t2.mb_album_id IS NOT NULL
+             GROUP BY t2.mb_album_id
+             ORDER BY COUNT(*) DESC, t2.mb_album_id ASC
+             LIMIT 1) AS representative_release_mbid
      FROM albums al
      LEFT JOIN tracks t ON t.album_id = al.id
      WHERE al.release_group_id = $1
@@ -1998,6 +2008,23 @@ export async function getReleaseGroupEditions(releaseGroupId: string) {
     [releaseGroupId]
   );
   return res.rows;
+}
+
+// The library stores no release MBID on the album row; it lives per track
+// (tracks.mb_album_id, from the MUSICBRAINZ_ALBUMID tag). Pick the modal
+// value across the album's tracks — the pressing the user most owns — which
+// is what Cover Art Archive keys release-level art (front + Medium) on.
+export async function getRepresentativeReleaseMbid(albumId: string): Promise<string | null> {
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT mb_album_id FROM tracks
+     WHERE album_id = $1 AND mb_album_id IS NOT NULL
+     GROUP BY mb_album_id
+     ORDER BY COUNT(*) DESC, mb_album_id ASC
+     LIMIT 1`,
+    [albumId]
+  );
+  return res.rows[0]?.mb_album_id || null;
 }
 
 // Manual merge: move `sourceAlbumId` into the release group of
