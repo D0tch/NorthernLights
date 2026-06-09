@@ -827,6 +827,42 @@ export async function initDB(): Promise<Pool> {
         CREATE INDEX IF NOT EXISTS albums_title_trgm_idx ON albums USING gin (title gin_trgm_ops);
         CREATE INDEX IF NOT EXISTS albums_artist_name_trgm_idx ON albums USING gin (artist_name gin_trgm_ops);
         CREATE INDEX IF NOT EXISTS albums_tags_trgm_idx ON albums USING gin (tags gin_trgm_ops);
+
+        -- ==========================================
+        -- Per-artist averaged audio profile (musicnn + effnet).
+        -- "Similar artists" used to aggregate every artist's vectors across
+        -- the whole library on each page view (O(all tracks)); this MV
+        -- precomputes it so each lookup only profiles the target artist and
+        -- scans these few-thousand rows. Refreshed after audio analysis
+        -- completes (refreshArtistAudioProfiles()).
+        -- ==========================================
+        DO $$
+        BEGIN
+            CREATE MATERIALIZED VIEW IF NOT EXISTS artist_audio_profiles AS
+                SELECT
+                    a.id AS artist_id,
+                    COUNT(DISTINCT t.id)::int AS track_count,
+                    COUNT(DISTINCT t.album_id)::int AS album_count,
+                    COUNT(tf.acoustic_vector_8d)::int AS analyzed_tracks,
+                    AVG(tf.acoustic_vector_8d) AS musicnn_profile,
+                    AVG(tf.embedding_vector) AS effnet_profile
+                FROM artists a
+                JOIN tracks t ON t.artist_id = a.id
+                JOIN track_features tf ON tf.track_id = t.id
+                WHERE tf.acoustic_vector_8d IS NOT NULL
+                    AND COALESCE(a.is_va_pseudo, FALSE) = FALSE
+                    AND LOWER(TRIM(a.name)) NOT IN ('unknown artist', '???')
+                GROUP BY a.id
+                HAVING COUNT(tf.acoustic_vector_8d) >= 2;
+        EXCEPTION WHEN OTHERS THEN
+            RAISE NOTICE 'artist_audio_profiles MV creation failed (tables may be empty): %', SQLERRM;
+        END $$;
+        -- Unique index lets REFRESH ... CONCURRENTLY run without blocking reads.
+        DO $$
+        BEGIN
+            CREATE UNIQUE INDEX IF NOT EXISTS artist_audio_profiles_artist_idx ON artist_audio_profiles (artist_id);
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
       `);
 
       // One-time backfill of user_track_play_buckets from user_playback_stats.
@@ -2391,9 +2427,31 @@ export async function getTracksByArtist(artistId: string) {
   return res.rows.map(mapTrackRow);
 }
 
+// Recomputes the per-artist averaged audio profiles MV. Cheap to call after an
+// analysis batch; no-op-safe if the MV is missing on older DBs. Tries the
+// non-blocking CONCURRENTLY refresh first (needs a prior populate + the unique
+// index), falling back to a plain refresh.
+export async function refreshArtistAudioProfiles(): Promise<void> {
+  const db = await initDB();
+  try {
+    await db.query('REFRESH MATERIALIZED VIEW CONCURRENTLY artist_audio_profiles');
+  } catch {
+    try {
+      await db.query('REFRESH MATERIALIZED VIEW artist_audio_profiles');
+    } catch (err: any) {
+      console.warn('[AudioProfiles] refresh failed:', err?.message);
+    }
+  }
+}
+
 export async function getSimilarArtistsByAudioProfile(artistId: string, limit: number = 8) {
   const db = await initDB();
   const safeLimit = Math.max(1, Math.min(24, Math.floor(limit)));
+  // Target profile is computed live for just this artist (indexed by
+  // artist_id) so it stays correct even between MV refreshes; candidates come
+  // from the precomputed artist_audio_profiles MV instead of re-aggregating
+  // the whole library on every request. image_url is read live from artists
+  // (it updates independently of analysis).
   const res = await db.query(`
     WITH target AS (
       SELECT
@@ -2406,37 +2464,24 @@ export async function getSimilarArtistsByAudioProfile(artistId: string, limit: n
         AND tf.acoustic_vector_8d IS NOT NULL
         AND LOWER(TRIM(COALESCE(t.album_artist, t.artist, ''))) NOT IN ('unknown artist', '???')
     ),
-    candidates AS (
-      SELECT
-        a.id,
-        a.name,
-        a.image_url,
-        COUNT(DISTINCT t.id)::int AS track_count,
-        COUNT(DISTINCT t.album_id)::int AS album_count,
-        COUNT(tf.acoustic_vector_8d)::int AS analyzed_tracks,
-        AVG(tf.acoustic_vector_8d) AS musicnn_profile,
-        AVG(tf.embedding_vector) AS effnet_profile
-      FROM artists a
-      JOIN tracks t ON t.artist_id = a.id
-      JOIN track_features tf ON tf.track_id = t.id
-      WHERE a.id <> $1
-        AND tf.acoustic_vector_8d IS NOT NULL
-        AND COALESCE(a.is_va_pseudo, FALSE) = FALSE
-        AND LOWER(TRIM(a.name)) NOT IN ('unknown artist', '???')
-      GROUP BY a.id, a.name, a.image_url
-      HAVING COUNT(tf.acoustic_vector_8d) >= 2
-    ),
     scored AS (
       SELECT
-        c.*,
+        p.artist_id AS id,
+        a.name,
+        a.image_url,
+        p.track_count,
+        p.album_count,
+        p.analyzed_tracks,
         CASE
-          WHEN target.effnet_profile IS NOT NULL AND c.effnet_profile IS NOT NULL
-            THEN ((c.musicnn_profile <-> target.musicnn_profile) * 0.35) + ((c.effnet_profile <=> target.effnet_profile) * 0.65)
-          ELSE c.musicnn_profile <-> target.musicnn_profile
+          WHEN target.effnet_profile IS NOT NULL AND p.effnet_profile IS NOT NULL
+            THEN ((p.musicnn_profile <-> target.musicnn_profile) * 0.35) + ((p.effnet_profile <=> target.effnet_profile) * 0.65)
+          ELSE p.musicnn_profile <-> target.musicnn_profile
         END AS distance
-      FROM candidates c
+      FROM artist_audio_profiles p
+      JOIN artists a ON a.id = p.artist_id
       CROSS JOIN target
-      WHERE target.analyzed_tracks > 0
+      WHERE p.artist_id <> $1
+        AND target.analyzed_tracks > 0
     )
     SELECT
       id,

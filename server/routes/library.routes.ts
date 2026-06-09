@@ -11,7 +11,7 @@ import { submitMbRecordingRating } from '../services/musicbrainz.service';
 import { scanStatus, scanClients, broadcastScanStatus } from '../state';
 import { requireAdmin } from '../middleware/auth';
 import { enrichCreditsFromMusicBrainz, enrichCreditsFromGenius } from '../services/creditsEnrichment.service';
-import { getCreditsStatus } from '../database';
+import { getCreditsStatus, refreshArtistAudioProfiles } from '../database';
 import { createRateLimiter } from '../middleware/rateLimit';
 
 const router = Router();
@@ -560,6 +560,7 @@ async function getAnalysisConcurrency(): Promise<number> {
 async function processAnalysisBatch(tracks: { id: string; filePath: Buffer; title: string; artist?: string | null }[], concurrency: number): Promise<void> {
   const startTime = Date.now();
   let errorCount = 0;
+  let featuresWritten = 0;
   const { settingsEmitter } = await import('../state');
   const { getVectorStats } = await import('../database');
   let index = 0;
@@ -617,6 +618,7 @@ async function processAnalysisBatch(tracks: { id: string; filePath: Buffer; titl
           if (result.audioFeatures) {
             try {
               await addTrackFeatures(result.id, result.audioFeatures);
+              featuresWritten++;
               if (result.audioFeatures.is_simulated) {
                 const decodedPath = track.filePath.toString('utf8');
                 console.warn(`[Analysis] Stored simulated features trackId=${track.id} title="${track.title}" artist="${track.artist || ''}" filePath="${decodedPath}"`);
@@ -675,6 +677,12 @@ async function processAnalysisBatch(tracks: { id: string; filePath: Buffer; titl
   orchestrationActive = false;
   settingsEmitter.off('concurrencyChanged', onSettingsChanged);
   pool.terminate();
+
+  // Single chokepoint for every analysis path (scan, standalone /analyze,
+  // simulated re-analysis, future workers): refresh the per-artist audio
+  // profiles MV so "similar artists" reflects the new vectors. Fire-and-forget;
+  // errors are logged internally. Skipped when nothing was written.
+  if (featuresWritten > 0) void refreshArtistAudioProfiles();
 }
 
 // ─── Shared scan lifecycle helpers ────────────────────────────────────
