@@ -5,21 +5,63 @@ import { EventEmitter } from 'events';
 
 export const containerEvents = new EventEmitter();
 
-// Detect available container runtime (prefer podman, fallback to docker)
+// Detect available container runtime (prefer podman, fallback to docker).
+// Resolves an ABSOLUTE binary path so we don't depend on the PATH of the
+// process manager (PM2/systemd often run with a minimal PATH that omits
+// /usr/bin), which previously caused spurious "No container runtime found".
 let containerRuntime: 'podman' | 'docker' | null = null;
+let containerRuntimeBin: string | null = null;
+
+// Common install locations, plus anything explicitly configured via env.
+const RUNTIME_CANDIDATES: Array<{ runtime: 'podman' | 'docker'; paths: string[] }> = [
+  {
+    runtime: 'podman',
+    paths: [
+      process.env.PODMAN_PATH,
+      '/usr/bin/podman',
+      '/usr/local/bin/podman',
+      '/bin/podman',
+      '/opt/homebrew/bin/podman',
+    ].filter(Boolean) as string[],
+  },
+  {
+    runtime: 'docker',
+    paths: [
+      process.env.DOCKER_PATH,
+      '/usr/bin/docker',
+      '/usr/local/bin/docker',
+      '/bin/docker',
+      '/opt/homebrew/bin/docker',
+    ].filter(Boolean) as string[],
+  },
+];
 
 function detectRuntime(): 'podman' | 'docker' | null {
-  try {
-    execSync('podman --version', { stdio: 'ignore' });
-    return 'podman';
-  } catch {
-    try {
-      execSync('docker --version', { stdio: 'ignore' });
-      return 'docker';
-    } catch {
-      return null;
+  // 1. Prefer an absolute path we can stat — robust to a stripped-down PATH.
+  for (const candidate of RUNTIME_CANDIDATES) {
+    for (const binPath of candidate.paths) {
+      try {
+        fs.accessSync(binPath, fs.constants.X_OK);
+        containerRuntimeBin = binPath;
+        return candidate.runtime;
+      } catch {
+        // try next path
+      }
     }
   }
+
+  // 2. Fall back to PATH resolution (covers non-standard installs).
+  for (const candidate of RUNTIME_CANDIDATES) {
+    try {
+      execSync(`${candidate.runtime} --version`, { stdio: 'ignore' });
+      containerRuntimeBin = candidate.runtime; // bare name; spawn resolves via PATH
+      return candidate.runtime;
+    } catch {
+      // try next runtime
+    }
+  }
+
+  return null;
 }
 
 // Initial detection at import time
@@ -81,7 +123,7 @@ async function runContainer(args: string[], timeout = 60000): Promise<string> {
   }
 
   return new Promise((resolve, reject) => {
-    const proc = spawn(containerRuntime!, args);
+    const proc = spawn(containerRuntimeBin || containerRuntime!, args);
     let stdout = '';
     let stderr = '';
 
