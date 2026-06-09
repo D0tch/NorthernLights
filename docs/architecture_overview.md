@@ -31,7 +31,7 @@ graph TD
 - **React + TypeScript**
   - Modular UI with Tailwind and shared button classes from `src/index.css`.
 - **Zustand**
-  - Central store for playback state, library state, and listener settings.
+  - Central store for playback/queue state, entity lists (artists/albums/genres), and listener settings. The full track list is **not** held in memory — see [Library Data Loading](library_data_loading.md).
 - **PlaybackManager / CastManager**
   - Route playback to local audio or Chromecast while preserving queue identity and playback controls.
 
@@ -172,3 +172,22 @@ Each generated playlist now emits diagnostics including:
   - FFmpeg-backed HLS session generation in `hlsStream.service.ts`
 
 This keeps one playback architecture for local and cast scenarios while allowing transport-specific behavior where needed.
+
+## 8. Library Data Loading
+
+The client is built to scale to 100k+ tracks, so it **never loads the full
+track list at boot**:
+
+- **Entity-first** — views render from lightweight `/api/artists`, `/api/albums`
+  (with server-precomputed genre/year/type/art metadata), and `/api/genres`
+  lists. The Zustand `library` array stays empty in the main app.
+- **Per-entity tracks** — detail views fetch their tracks on demand
+  (`/api/albums|artists|genres/:id`) via the `useEntityTracks` hook.
+- **Server-side search** — `/api/library/search` (trigram), debounced client-side.
+- **Queue** — persisted and rehydrated via `reconcileQueue()` +
+  `POST /api/library/tracks/exists`; stream URLs rebuilt from `path`.
+- **On-demand full list** — only admin tools (Genre Matrix, Artist Entities)
+  load all tracks, via `ensureFullLibraryLoaded()`.
+
+See [Library Data Loading](library_data_loading.md) for the full design,
+endpoints, and rationale.

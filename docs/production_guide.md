@@ -174,10 +174,47 @@ sudo loginctl enable-linger aurora
 
 ## Reverse Proxy
 
-Example Nginx site:
+Aurora is a single-page app: opening a library view fires several requests in
+parallel (artists, albums, genres, plus per-entity art and detail loads). Over
+**HTTP/1.1 the browser caps you at ~6 connections per origin**, so those
+requests queue behind one another — on large libraries this shows up as long
+"Queueing" times in the network panel. Terminating **HTTP/2 or HTTP/3** at your
+proxy multiplexes them over a single connection and removes that bottleneck.
+
+Aurora itself needs no proxy-specific configuration — **any HTTP/2+ reverse
+proxy works**. The app speaks plain HTTP/1.1 to the proxy over localhost; only
+the browser-facing hop needs multiplexing. The examples below are a
+recommendation, not a requirement.
+
+### Caddy (recommended — automatic HTTPS, HTTP/3 by default)
+
+```caddyfile
+music.example.com {
+    reverse_proxy 127.0.0.1:3001
+}
+```
+
+Caddy enables HTTP/2 and HTTP/3 automatically and provisions TLS for you. To be
+explicit about protocols, set them in the global options block:
+
+```caddyfile
+{
+    servers {
+        protocols h1 h2 h3
+    }
+}
+
+music.example.com {
+    reverse_proxy 127.0.0.1:3001
+}
+```
+
+### Nginx
 
 ```nginx
 server {
+    listen 443 ssl;
+    http2 on;                      # multiplexing — avoids the 6-connection cap
     server_name music.example.com;
 
     client_max_body_size 0;
@@ -195,6 +232,17 @@ server {
     }
 }
 ```
+
+Nginx ships HTTP/3 (QUIC) support in recent versions but it requires extra
+`listen ... quic` directives and a compatible build; HTTP/2 alone already
+removes the connection-cap bottleneck.
+
+### Behind Cloudflare
+
+If you front the proxy with Cloudflare (or similar), enable **HTTP/3 (with
+QUIC)** under *Network* in the dashboard — it's on by default for most zones —
+so the browser↔Cloudflare hop is multiplexed regardless of your origin's
+protocol.
 
 Then set:
 

@@ -155,6 +155,8 @@ npm run dev
 
 Development runs Vite and the Express server concurrently. Production builds are served by the Express server from `dist/`.
 
+For how the system fits together, see [docs/architecture_overview.md](docs/architecture_overview.md) — including [Library Data Loading](docs/library_data_loading.md), which covers the entity-first / no-full-library-in-memory model that lets the client scale to large collections.
+
 Before submitting changes:
 
 ```bash
