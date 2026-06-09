@@ -1,6 +1,7 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
+import { useEntityTracks } from '../../hooks/useEntityTracks';
 import { TrackInfo } from '../../utils/fileSystem';
 import { AlbumCard, AlbumCardSkeleton } from './AlbumCard';
 import { BackButton } from './BackButton';
@@ -30,11 +31,17 @@ const GenreDetailSkeleton: React.FC<{ onBack: () => void }> = ({ onBack }) => (
 export const GenreDetail: React.FC = () => {
     const { genreId } = useParams<{ genreId: string }>();
     const navigate = useNavigate();
-    const { library, genres, setPlaylist, isLibraryLoading } = usePlayerStore();
+    const { genres, setPlaylist } = usePlayerStore();
 
     // Find genre info from entity list
     const genreInfo = useMemo(() => genres.find(g => g.id === genreId), [genres, genreId]);
     const genreName = genreInfo?.name || '';
+
+    // Tracks for this genre come from the per-genre endpoint (which matches
+    // genre_id plus the genre name in multi-genre tags), not the in-memory library.
+    const { tracks: genreTracks, loading: genreTracksLoading } = useEntityTracks(
+        genreId ? `/api/genres/${encodeURIComponent(genreId)}` : null,
+    );
 
     const { imageUrl } = useExternalImage(() => genreName ? fetchGenreImage(genreName) : Promise.resolve(undefined), [genreName]);
 
@@ -51,19 +58,6 @@ export const GenreDetail: React.FC = () => {
                 .finally(() => setSummaryLoading(false));
         }
     }, [genreName]);
-
-    const genreTracks = useMemo(() => {
-        if (!genreName || !genreId) return [];
-        const genreNameLower = genreName.toLowerCase();
-        
-        return library.filter(t => {
-            if (t.genreId === genreId) return true;
-            if (Array.isArray(t.genres)) {
-                return t.genres.some(g => g.toLowerCase() === genreNameLower);
-            }
-            return t.genre?.toLowerCase() === genreNameLower;
-        });
-    }, [library, genreId, genreName]);
 
     // Group genre tracks by album
     const albums = useMemo(() => {
@@ -88,7 +82,7 @@ export const GenreDetail: React.FC = () => {
         return Array.from(albumMap.values()).sort((a, b) => a.title.localeCompare(b.title));
     }, [genreTracks]);
 
-    if (isLibraryLoading && (!genreName || genreTracks.length === 0)) {
+    if (genreTracksLoading && genreTracks.length === 0) {
         return <GenreDetailSkeleton onBack={() => navigate(-1)} />;
     }
 

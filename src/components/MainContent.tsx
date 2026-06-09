@@ -32,7 +32,14 @@ const RouteFallback: React.FC = () => (
 export const MainContent: React.FC = () => {
   const location = useLocation();
   const library = usePlayerStore(state => state.library);
+  const albums = usePlayerStore(state => state.albums);
+  const artists = usePlayerStore(state => state.artists);
   const isLibraryLoading = usePlayerStore(state => state.isLibraryLoading);
+  // The library is "present" as soon as the lightweight entity lists load
+  // (entity-first), not only once the full track array arrives in the
+  // background. Gating on `library` (tracks) alone showed the empty "add a
+  // folder" prompt during the background-load window even when a library exists.
+  const hasLibrary = library.length > 0 || albums.length > 0 || artists.length > 0;
   const isScanningGlobal = usePlayerStore(state => state.isScanning);
   const playlist = usePlayerStore(state => state.playlist);
   const [playerPlacement] = usePlayerPlacement();
@@ -47,7 +54,7 @@ export const MainContent: React.FC = () => {
             : 'pb-32 md:pb-44'
           : 'pb-16 md:pb-4'
       }`}>
-        {library.length === 0 ? (
+        {!hasLibrary ? (
           isLibraryLoading && location.pathname !== '/library' ? (
             <div className="page-container">
               <div className="h-8 w-32 rounded bg-[var(--color-surface-variant)] animate-pulse mb-2" />

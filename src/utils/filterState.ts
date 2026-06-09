@@ -323,6 +323,25 @@ export function deriveAlbumMetadata(albums: AlbumInfo[], tracks: TrackInfo[]): E
   });
 
   return albums.map((album) => {
+    // Prefer server-precomputed fields (getAllAlbums) so this works with zero
+    // tracks loaded; fall back to deriving from the in-memory track list when
+    // the server fields are absent (older payloads / background-load window).
+    const srv = album as AlbumInfo & {
+      derived_genres?: string | null;
+      derived_release_type?: string | null;
+      derived_year?: number | null;
+      track_count?: number | null;
+    };
+    if (srv.derived_genres !== undefined || srv.track_count !== undefined) {
+      return {
+        ...album,
+        _derivedGenres: srv.derived_genres || '',
+        _derivedReleaseType: srv.derived_release_type || 'Album',
+        _derivedYear: srv.derived_year ?? null,
+        _trackCount: srv.track_count ?? 0,
+      };
+    }
+
     const key = `${album.title}::::${album.artist_name || ''}`;
     const albumTracks = tracksByAlbum.get(key) || [];
     const genres = new Set<string>();

@@ -194,6 +194,17 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
     const setAlbumFilters = usePlayerStore(state => state.setAlbumFilters);
     const setArtistQueryResultIds = usePlayerStore(state => state.setArtistQueryResultIds);
     const setAlbumQueryResultIds = usePlayerStore(state => state.setAlbumQueryResultIds);
+    const mediaAccessToken = usePlayerStore(state => state.mediaAccessToken);
+    const authToken = usePlayerStore(state => state.authToken);
+
+    // Build a LOCAL cover URL from the album's representative art_hash (from
+    // getAllAlbums). Lets cards show embedded art without the full track list,
+    // so they don't fall back to the rate-limited external art proxy.
+    const artHashUrl = useCallback((album: { art_hash?: string | null }) => {
+        if (!album.art_hash) return undefined;
+        const token = mediaAccessToken || authToken || '';
+        return `/api/art?hash=${album.art_hash}${token ? `&token=${token}` : ''}`;
+    }, [mediaAccessToken, authToken]);
 
     const pageRef = useRef<HTMLDivElement>(null);
     const [queryBuilderOpen, setQueryBuilderOpen] = useState(false);
@@ -204,7 +215,15 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
     // doesn't recompute whole-library passes. The useMemo here is just a
     // per-render guard; the real cache survives route unmount. See
     // utils/libraryDerivations.ts.
-    const { genres, tracksByAlbum } = useMemo(() => getTracksByAlbumAndGenres(library), [library]);
+    const { genres: derivedGenreNames, tracksByAlbum } = useMemo(() => getTracksByAlbumAndGenres(library), [library]);
+    // When the track list isn't loaded yet (entity-first load), fall back to
+    // the genre entity names so the Genres view still populates immediately.
+    const genres = useMemo(
+        () => (derivedGenreNames.length > 0
+            ? derivedGenreNames
+            : (genreEntities as EntityInfo[]).map(g => g.name).filter((n): n is string => !!n)),
+        [derivedGenreNames, genreEntities],
+    );
 
     const enrichedAlbums = useMemo(
         () => getEnrichedAlbums(albumEntities, library),
@@ -346,7 +365,13 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
         );
     }, [genreEntityByName]);
 
-    if (isLibraryLoading && library.length === 0) {
+    // The views render from the entity lists (artists/albums/genres), which load
+    // first; the full track array arrives in the background. Gate the
+    // skeleton/empty states on entity presence, not on `library` (tracks) —
+    // otherwise the views stay blank for the whole background-load window.
+    const hasEntities = artistEntities.length > 0 || albumEntities.length > 0 || genreEntities.length > 0;
+
+    if (isLibraryLoading && !hasEntities) {
         return (
             <div className="library-home page-container" ref={pageRef}>
                 <div className="library-sections">
@@ -384,7 +409,7 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
 
     // A failed load with an empty library must not look identical to a genuinely
     // empty library (which renders nothing). Show the error + a Retry instead.
-    if (library.length === 0 && libraryError) {
+    if (!hasEntities && libraryError) {
         return (
             <div className="library-home page-container">
                 <div className="flex flex-col items-center justify-center py-24 text-center gap-4">
@@ -403,7 +428,7 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
         );
     }
 
-    if (library.length === 0) {
+    if (!hasEntities) {
         return null;
     }
 
@@ -447,7 +472,7 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                                         <AlbumCard
                                             title={album.title}
                                             artist={album.artist_name || ''}
-                                            artUrl={album.image_url || (explicitTracks.find(t => t.artUrl)?.artUrl)}
+                                            artUrl={album.image_url || artHashUrl(album) || (explicitTracks.find(t => t.artUrl)?.artUrl)}
                                             subtitle={album.artist_name || ''}
                                             onPlay={() => { if (explicitTracks.length) setPlaylist(explicitTracks, 0); }}
                                             linkTo={album.id ? `/library/album/${album.id}` : undefined}

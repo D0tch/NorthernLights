@@ -4,6 +4,7 @@ import { usePlayerStore } from '../../store/index';
 import { TrackInfo } from '../../utils/fileSystem';
 import { normalizeArtistIdentityKey, parseArtistsForDisplay, trackMatchesArtist } from '../../utils/artistUtils';
 import { useKnownArtistKeys } from '../../hooks/useKnownArtistKeys';
+import { useEntityTracks } from '../../hooks/useEntityTracks';
 import { useArtistData } from '../../hooks/useArtistData';
 import { useArtistTopTracks } from '../../hooks/useArtistTopTracks';
 import { AlbumArt } from '../AlbumArt';
@@ -283,6 +284,20 @@ export const ArtistDetail: React.FC = () => {
     const getAuthHeader = usePlayerStore((s) => s.getAuthHeader);
     const isLibraryLoading = usePlayerStore((s) => s.isLibraryLoading);
 
+    // The artist's own tracks come from the per-artist endpoint so the page
+    // works without the full in-memory library. `library` is still used as a
+    // fallback and for the cross-artist "appears on" list until that moves
+    // server-side. Source for the album art/track maps below.
+    const { tracks: artistTracks, loading: artistTracksLoading } = useEntityTracks(
+        artistId ? `/api/artists/${encodeURIComponent(artistId)}` : null,
+    );
+    // "Appears on" / collaborations — server-computed so it works without the
+    // full library (falls back to the library-derived list below when empty).
+    const { tracks: appearsOnTracks } = useEntityTracks(
+        artistId ? `/api/artists/${encodeURIComponent(artistId)}/appears-on` : null,
+    );
+    const mapSourceTracks = library.length > 0 ? library : [...artistTracks, ...appearsOnTracks];
+
     // Map albumId → edition_label so each AlbumCard can render the "remaster",
     // "deluxe", etc. badge alongside the canonical edition (which has no label).
     const editionLabelByAlbumId = useMemo(() => {
@@ -299,26 +314,26 @@ export const ArtistDetail: React.FC = () => {
     // no external fetch required.
     const artUrlByAlbumId = useMemo(() => {
         const map = new Map<string, string>();
-        for (const t of library) {
+        for (const t of mapSourceTracks) {
             if (t.albumId && t.artUrl && !map.has(t.albumId)) {
                 map.set(t.albumId, t.artUrl);
             }
         }
         return map;
-    }, [library]);
+    }, [mapSourceTracks]);
 
     // Same idea for albumId → list of tracks in that album. Lets the
     // role-filtered AlbumCard's play button actually queue something.
     const tracksByAlbumId = useMemo(() => {
         const map = new Map<string, TrackInfo[]>();
-        for (const t of library) {
+        for (const t of mapSourceTracks) {
             if (!t.albumId) continue;
             const arr = map.get(t.albumId) || [];
             arr.push(t);
             map.set(t.albumId, arr);
         }
         return map;
-    }, [library]);
+    }, [mapSourceTracks]);
 
     // Find artist info from entity list
     const artistInfo = useMemo(() => artists.find(a => a.id === artistId), [artists, artistId]);
@@ -327,9 +342,10 @@ export const ArtistDetail: React.FC = () => {
     // Get MusicBrainz artist ID from the first track that has one
     const mbArtistId = useMemo(() => {
         if (!artistId) return null;
-        const track = library.find(t => t.artistId === artistId && t.mbArtistId);
+        const track = artistTracks.find(t => t.mbArtistId)
+            || library.find(t => t.artistId === artistId && t.mbArtistId);
         return track?.mbArtistId || null;
-    }, [library, artistId]);
+    }, [artistTracks, library, artistId]);
 
     const { imageUrl, artworkUrl, bio, disambiguation, area, type, lifeSpan, links, genres, communityTags, listeners, members, isLoading: artistLoading } = useArtistData(artistName, mbArtistId);
     const { onTour, events: upcomingEvents, loading: concertsLoading, stale: concertsStale } = useArtistConcerts(artistId);
@@ -432,9 +448,12 @@ export const ArtistDetail: React.FC = () => {
 
     // Tracks where this artist is the PRIMARY / album artist
     const primaryTracks = useMemo(() => {
+        // Prefer the per-artist fetch; fall back to the library (background load
+        // window) so this still works when both are available.
+        if (artistTracks.length > 0) return artistTracks;
         if (!artistName) return [];
         return library.filter(t => t.artistId === artistId);
-    }, [library, artistId, artistName]);
+    }, [artistTracks, library, artistId, artistName]);
 
     const knownArtistKeys = useKnownArtistKeys();
 
@@ -444,6 +463,9 @@ export const ArtistDetail: React.FC = () => {
     // entry like "Tony Bennett & Lady Gaga" in tracks.artists matches both
     // halves when both are known artists in the library).
     const otherCreditedTracks = useMemo(() => {
+        // Prefer the server-computed appears-on list; fall back to the
+        // library-derived (canonical-key) computation when it's empty.
+        if (appearsOnTracks.length > 0) return appearsOnTracks;
         if (!artistName) return [];
         const artistKey = normalizeArtistIdentityKey(artistName);
         if (!artistKey) return [];
@@ -461,7 +483,7 @@ export const ArtistDetail: React.FC = () => {
             }
             return trackMatchesArtist(t.artist, artistName) || splitMatches(t.artist);
         });
-    }, [library, artistId, artistName, knownArtistKeys]);
+    }, [appearsOnTracks, library, artistId, artistName, knownArtistKeys]);
 
     // Among the credited-but-not-owner tracks, identify whole albums where
     // this artist is a co-primary collaborator rather than a guest feature.
@@ -671,7 +693,7 @@ export const ArtistDetail: React.FC = () => {
 
     const hasAnyContent = primaryTracks.length > 0 || collaborationTracks.length > 0 || featuredTracks.length > 0;
 
-    if (isLibraryLoading && (!artistName || !hasAnyContent)) {
+    if ((isLibraryLoading || artistTracksLoading) && (!artistName || !hasAnyContent)) {
         return <ArtistDetailSkeleton onBack={() => navigate(-1)} hero={heroState} />;
     }
 

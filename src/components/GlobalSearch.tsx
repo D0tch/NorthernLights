@@ -4,7 +4,6 @@ import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../store';
 import { Search as SearchIcon, X, Play, MoreHorizontal, ArrowLeft } from 'lucide-react';
 import { TrackInfo } from '../utils/fileSystem';
-import { normalizeArtistIdentityKey } from '../utils/artistUtils';
 import { AlbumArt } from './AlbumArt';
 import { ArtistInitial } from './library/ArtistInitial';
 import { LoveButton } from './LoveButton';
@@ -191,9 +190,6 @@ const SearchResults = React.memo(function SearchResults({
 // ─── main component ───────────────────────────────────────────────────────────
 
 export const GlobalSearch: React.FC = () => {
-    const library = usePlayerStore((state: any) => state.library);
-    const artists = usePlayerStore((state: any) => state.artists);
-    const albums = usePlayerStore((state: any) => state.albums);
     const setPlaylist = usePlayerStore((state: any) => state.setPlaylist);
     const openContextMenu = usePlayerStore((state: any) => state.openContextMenu);
     const navigate = useNavigate();
@@ -348,81 +344,41 @@ export const GlobalSearch: React.FC = () => {
     const hasDebouncedQuery = q.length > 0;
     const canShowResults = hasQuery && hasDebouncedQuery;
 
-    const albumArtById = useMemo(() => {
-        const map = new Map<string, string>();
-        for (const track of library as TrackInfo[]) {
-            if (track.albumId && track.artUrl && !map.has(track.albumId)) {
-                map.set(track.albumId, track.artUrl);
-            }
-        }
-        return map;
-    }, [library]);
+    // Server-side search (trigram ILIKE) instead of scanning the in-memory
+    // library — scales to large libraries and removes the last big reason to
+    // hold every track client-side. Debounced via `debouncedQuery`; each
+    // keystroke aborts the prior in-flight request.
+    const [searchResults, setSearchResults] = useState<SearchMatches>(EMPTY_SEARCH_MATCHES);
+    const [searchLoading, setSearchLoading] = useState(false);
 
-    const { matchedArtists, matchedAlbums, matchedTracks } = useMemo<SearchMatches>(() => {
-        if (!q) return EMPTY_SEARCH_MATCHES;
+    useEffect(() => {
+        const term = debouncedQuery.trim();
+        if (!term) { setSearchResults(EMPTY_SEARCH_MATCHES); setSearchLoading(false); return; }
+        const ac = new AbortController();
+        setSearchLoading(true);
+        const authHeaders = (usePlayerStore.getState() as any).getAuthHeader?.() || {};
+        fetch(`/api/library/search?q=${encodeURIComponent(term)}&artistLimit=5&albumLimit=5&trackLimit=10`, { headers: authHeaders, signal: ac.signal })
+            .then(r => (r.ok ? r.json() : null))
+            .then(data => {
+                if (!data) { setSearchResults(EMPTY_SEARCH_MATCHES); setSearchLoading(false); return; }
+                const hydrate = usePlayerStore.getState().hydrateTracks;
+                setSearchResults({
+                    matchedArtists: (data.artists || []).map((a: any) => ({ name: a.name, id: a.id })),
+                    matchedAlbums: (data.albums || []).map((a: any) => ({
+                        title: a.title || 'Unknown Album',
+                        artist: a.artist_name || 'Unknown Artist',
+                        id: a.id,
+                        artUrl: a.image_url || undefined,
+                    })),
+                    matchedTracks: hydrate(data.tracks || []),
+                });
+                setSearchLoading(false);
+            })
+            .catch(() => { if (!ac.signal.aborted) { setSearchResults(EMPTY_SEARCH_MATCHES); setSearchLoading(false); } });
+        return () => ac.abort();
+    }, [debouncedQuery]);
 
-        // Canonical-key form of the query lets variants like "n'to" match "NTO".
-        const qKey = normalizeArtistIdentityKey(q);
-
-        const nextArtists: { name: string; id: string }[] = [];
-        for (const artist of artists as Array<{ name?: string; id: string }>) {
-            const name = artist.name;
-            if (!name) continue;
-            const lowerHit = name.toLowerCase().includes(q);
-            const keyHit = qKey ? normalizeArtistIdentityKey(name).includes(qKey) : false;
-            if (!lowerHit && !keyHit) continue;
-            nextArtists.push({ name, id: artist.id });
-            if (nextArtists.length >= 5) break;
-        }
-
-        const nextAlbums: { title: string; artist: string; id: string; artUrl?: string }[] = [];
-        for (const album of albums as Array<{ title?: string; artist_name?: string; id: string }>) {
-            const title = album.title || 'Unknown Album';
-            const artist = album.artist_name || 'Unknown Artist';
-            if (!title.toLowerCase().includes(q) && !artist.toLowerCase().includes(q)) continue;
-            nextAlbums.push({ title, artist, id: album.id, artUrl: albumArtById.get(album.id) });
-            if (nextAlbums.length >= 5) break;
-        }
-
-        // Cross-reference tracks via canonical key so tracks still tagged with
-        // pre-merge variants (e.g. "N'to") match the canonical artist ("NTO").
-        const matchedArtistKeys = new Set(
-            nextArtists
-                .map(artist => normalizeArtistIdentityKey(artist.name))
-                .filter(Boolean)
-        );
-        const tracksSet = new Set<string>();
-        const nextTracks: TrackInfo[] = [];
-
-        for (const track of library as TrackInfo[]) {
-            if (tracksSet.has(track.id)) continue;
-
-            const title = track.title || '';
-            const path = track.path || '';
-            const directMatch = title.toLowerCase().includes(q) || path.toLowerCase().includes(q);
-            let artistMatch = false;
-
-            if (!directMatch && matchedArtistKeys.size > 0) {
-                const trackArtists = Array.isArray(track.artists)
-                    ? track.artists
-                    : typeof track.artists === 'string'
-                        ? [track.artists]
-                        : [];
-                artistMatch = trackArtists.some(artist => matchedArtistKeys.has(normalizeArtistIdentityKey(artist)));
-            }
-
-            if (!directMatch && !artistMatch) continue;
-            nextTracks.push(track);
-            tracksSet.add(track.id);
-            if (nextTracks.length >= 10) break;
-        }
-
-        return {
-            matchedArtists: nextArtists,
-            matchedAlbums: nextAlbums,
-            matchedTracks: nextTracks,
-        };
-    }, [q, artists, albums, library, albumArtById]);
+    const { matchedArtists, matchedAlbums, matchedTracks } = searchResults;
 
     // ── shared handlers ───────────────────────────────────────────────────────
     const handleArtistClick = useCallback((artistId: string) => {

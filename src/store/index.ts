@@ -39,6 +39,15 @@ let playGeneration = 0;
 // state with another session's data. Mirrors the promise-cache in externalImagery.ts.
 let inFlightLibraryFetch: Promise<void> | null = null;
 let inFlightPlaylistsFetch: Promise<void> | null = null;
+// Dedup the background full-track load: without this, every fetchLibraryFromServer
+// caller (boot, health-reconnect, post-scan, StrictMode double-invoke) kicked off
+// another /api/library/tracks fetch — each re-serializing ~26MB server-side and
+// blocking the event loop, so interactive requests (album detail, art) piled up.
+let inFlightTracksFetch: Promise<void> | null = null;
+// The full track list is no longer loaded at boot. A couple of admin settings
+// tools still need it; they call ensureFullLibraryLoaded(), guarded here so it
+// loads at most once and only on demand.
+let inFlightFullLibrary: Promise<void> | null = null;
 let libraryFetchAbort: AbortController | null = null;
 let playlistsFetchAbort: AbortController | null = null;
 
@@ -68,6 +77,8 @@ function abortInFlightLibraryFetches() {
   playlistsFetchAbort = null;
   inFlightLibraryFetch = null;
   inFlightPlaylistsFetch = null;
+  inFlightTracksFetch = null;
+  inFlightFullLibrary = null;
 }
 
 function isAbortError(e: unknown): boolean {
@@ -328,6 +339,13 @@ export interface PlayerState {
   library: TrackInfo[];
   libraryFolders: string[];
   isLibraryLoading: boolean;
+  /**
+   * Optimistic loved-state overrides keyed by track id. Tracks rendered from
+   * per-entity/search fetches live in component state (not the store), so
+   * toggleTrackLove can't mutate them directly — this overlay lets those views
+   * reflect a toggle immediately, and decouples loved-state from `library`.
+   */
+  lovedOverlay: Record<string, boolean>;
   // Non-null when the last library/playlist fetch failed (network error or
   // non-OK status). Lets the UI distinguish "genuinely empty" from "load failed"
   // and offer a Retry instead of a blank screen.
@@ -489,6 +507,8 @@ export interface PlayerState {
   fetchNextInfinityTrack: (isPrefetch?: boolean) => Promise<void>;
 
   fetchLibraryFromServer: () => Promise<void>;
+  /** On-demand full track list load (admin tools only); no-op once loaded. */
+  ensureFullLibraryLoaded: () => Promise<void>;
   fetchPlaylistsFromServer: () => Promise<void>;
   fetchPlaylistFromServer: (playlistId: string) => Promise<boolean>;
   createPlaylist: (title: string, description?: string) => Promise<Playlist | null>;
@@ -502,6 +522,8 @@ export interface PlayerState {
   login: (username: string, password: string) => Promise<boolean>;
   register: (inviteToken: string, username: string, password: string) => Promise<boolean>;
   getAuthHeader: () => Record<string, string>;
+  /** Build stream/art URLs onto server-fetched tracks using the current token + quality. */
+  hydrateTracks: (tracks: TrackInfo[]) => TrackInfo[];
   addLibraryFolder: (folderPath: string) => Promise<void>;
   removeLibraryFolder: (folderName: string) => Promise<void>;
   rescanLibrary: (specificFolder?: string) => Promise<void>;
@@ -844,6 +866,7 @@ export const usePlayerStore = create<PlayerState>()(
         library: [] as TrackInfo[],
         libraryFolders: [] as string[],
         isLibraryLoading: false as boolean,
+        lovedOverlay: {} as Record<string, boolean>,
         libraryError: null as string | null,
         playlists: [] as Playlist[],
         isPlaylistsLoading: false as boolean,
@@ -1146,6 +1169,13 @@ export const usePlayerStore = create<PlayerState>()(
           return {} as Record<string, string>;
         },
 
+        hydrateTracks: (tracks: TrackInfo[]) => {
+          const { mediaAccessToken, authToken, streamingQuality } = get();
+          const token = mediaAccessToken || authToken || '';
+          const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+          return tracks.map((t) => hydrateServerTrack(t, token, quality));
+        },
+
         setSettings: (settings: Partial<PlayerState>) => {
           const previousStreamingQuality = get().streamingQuality;
           const previousPrebufferPolicy = get().prebufferPolicy;
@@ -1405,68 +1435,101 @@ export const usePlayerStore = create<PlayerState>()(
           const ac = new AbortController();
           libraryFetchAbort = ac;
           set({ isLibraryLoading: true, libraryError: null });
-          const run = (async () => {
-          try {
-            const authHeaders = (get() as any).getAuthHeader();
-            const res = await fetch('/api/library', { headers: authHeaders, signal: ac.signal });
-            if (res.ok) {
-              const data = await res.json();
-              
+
+          // Queue rehydration (replaces the old full-library load + reconcile):
+          // the restored play queue may contain tracks deleted since last
+          // session, and its stream URLs were built with a possibly-stale
+          // token. Prune missing ids via a tiny existence check and rebuild
+          // URLs from each track's path — no full track list needed.
+          const reconcileQueue = (): Promise<void> => {
+            if (inFlightTracksFetch) return inFlightTracksFetch;
+            const p = (async () => {
+            try {
+              const queue = get().playlist;
+              if (queue.length === 0) return;
+              const ids = queue.map((t) => t.id);
+              let existing = new Set<string>(ids);
+              try {
+                const authHeaders = (get() as any).getAuthHeader();
+                const res = await fetch('/api/library/tracks/exists', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', ...authHeaders },
+                  body: JSON.stringify({ ids }),
+                  signal: ac.signal,
+                });
+                if (res.ok) {
+                  const data = await res.json();
+                  if (Array.isArray(data.ids)) existing = new Set<string>(data.ids);
+                }
+              } catch (e) {
+                if (isAbortError(e) || ac.signal.aborted) return;
+                // On a network hiccup, keep the queue as-is rather than pruning.
+              }
+
               const { mediaAccessToken, authToken, streamingQuality } = get();
               const token = mediaAccessToken || authToken || '';
               const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
 
-              const libraryWithUrls = data.tracks.map((t: TrackInfo) => hydrateServerTrack(t, token, quality));
-
               set((state: PlayerState): Partial<PlayerState> => {
-                const libraryById = new Map(libraryWithUrls.map((track: TrackInfo) => [track.id, track]));
-                const libraryIds = new Set(libraryById.keys());
-                const queueChanged = state.playlist.some((track: TrackInfo) => !libraryIds.has(track.id));
-                let nextQueue = state.playlist.map((track: TrackInfo) => {
-                  const latestTrack = libraryById.get(track.id);
-                  return latestTrack
-                    ? {
-                        ...track,
-                        ...latestTrack,
-                        queueEntryId: track.queueEntryId,
-                        playlistAddedAt: track.playlistAddedAt,
-                      }
-                    : track;
-                });
+                const currentTrack = state.currentIndex !== null ? state.playlist[state.currentIndex] : null;
+                const nextQueue = state.playlist
+                  .filter((t) => existing.has(t.id))
+                  .map((t) => (t.path ? { ...t, ...buildTrackUrls(t.id, t.path, token, quality, (t as any).artHash) } : t));
                 let nextIndex = state.currentIndex;
-                const refreshedContextMenuTrack = state.contextMenu
-                  ? libraryById.get(state.contextMenu.track.id)
-                  : null;
-
-                if (queueChanged) {
-                  const currentTrack = state.currentIndex !== null ? state.playlist[state.currentIndex] : null;
-                  nextQueue = nextQueue.filter((track: TrackInfo) => libraryIds.has(track.id));
-
-                  if (currentTrack && !libraryIds.has(currentTrack.id)) {
+                if (currentTrack) {
+                  if (!existing.has(currentTrack.id)) {
                     playbackManager.stop();
                     nextIndex = null;
-                  } else if (state.currentIndex !== null && currentTrack) {
-                    const remappedIndex = nextQueue.findIndex((track: TrackInfo) => track.id === currentTrack.id);
-                    nextIndex = remappedIndex >= 0 ? remappedIndex : null;
+                  } else {
+                    const remapped = nextQueue.findIndex((t) => t.id === currentTrack.id);
+                    nextIndex = remapped >= 0 ? remapped : null;
                   }
                 }
-
-                return {
-                  library: libraryWithUrls,
-                  libraryFolders: data.directories,
-                  artists: data.artists || [] as ArtistInfo[],
-                  albums: data.albums || [] as AlbumInfo[],
-                  genres: data.genres || [],
-                  playlist: nextQueue,
-                  currentIndex: nextIndex,
-                  contextMenu: state.contextMenu && refreshedContextMenuTrack
-                    ? { ...state.contextMenu, track: { ...state.contextMenu.track, ...refreshedContextMenuTrack } }
-                    : state.contextMenu,
-                  isLibraryLoading: false,
-                };
+                return { playlist: nextQueue, currentIndex: nextIndex };
               });
+            } catch (e) {
+              if (isAbortError(e) || ac.signal.aborted) return;
+              console.error('Failed to reconcile queue', e);
+            } finally {
+              inFlightTracksFetch = null;
+            }
+            })();
+            inFlightTracksFetch = p;
+            return p;
+          };
+
+          const run = (async () => {
+          try {
+            const authHeaders = (get() as any).getAuthHeader();
+            // Entity-first: these lightweight lists make the library views
+            // interactive immediately, instead of waiting on the full track set.
+            const [artistsRes, albumsRes, genresRes, dirsRes] = await Promise.all([
+              fetch('/api/artists', { headers: authHeaders, signal: ac.signal }),
+              fetch('/api/albums', { headers: authHeaders, signal: ac.signal }),
+              fetch('/api/genres', { headers: authHeaders, signal: ac.signal }),
+              fetch('/api/library/directories', { headers: authHeaders, signal: ac.signal }),
+            ]);
+            if (artistsRes.ok && albumsRes.ok && genresRes.ok) {
+              const [artists, albums, genres, dirsData] = await Promise.all([
+                artistsRes.json(),
+                albumsRes.json(),
+                genresRes.json(),
+                dirsRes.ok ? dirsRes.json() : Promise.resolve({ directories: [] }),
+              ]);
+              set({
+                artists: (artists || []) as ArtistInfo[],
+                albums: (albums || []) as AlbumInfo[],
+                genres: genres || [],
+                libraryFolders: dirsData.directories || [],
+                isLibraryLoading: false,
+              });
+              // Reconcile the restored play queue against the server (prune
+              // deleted tracks, refresh stream URLs). Lightweight — no full
+              // track list is loaded.
+              void reconcileQueue();
             } else {
-              const msg = `Couldn't load your library (server returned ${res.status}).`;
+              const status = [artistsRes, albumsRes, genresRes].find(r => !r.ok)?.status;
+              const msg = `Couldn't load your library (server returned ${status}).`;
               set({ isLibraryLoading: false, libraryError: msg });
               get().addToast(msg, 'error', { actionLabel: 'Retry', onAction: () => { void get().fetchLibraryFromServer(); } });
             }
@@ -1484,6 +1547,32 @@ export const usePlayerStore = create<PlayerState>()(
           })();
           inFlightLibraryFetch = run;
           return run;
+        },
+
+        // On-demand: load the full track list into `library` for the admin
+        // tools that still need per-track data (Genre Matrix, Artist Entities).
+        // The main app no longer loads this at boot. Deduped; no-op once present.
+        ensureFullLibraryLoaded: async () => {
+          if (get().library.length > 0) return;
+          if (inFlightFullLibrary) return inFlightFullLibrary;
+          const p = (async () => {
+            try {
+              const authHeaders = (get() as any).getAuthHeader();
+              const res = await fetch('/api/library/tracks', { headers: authHeaders });
+              if (!res.ok) return;
+              const data = await res.json();
+              const { mediaAccessToken, authToken, streamingQuality } = get();
+              const token = mediaAccessToken || authToken || '';
+              const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+              set({ library: (data.tracks || []).map((t: TrackInfo) => hydrateServerTrack(t, token, quality)) });
+            } catch (e) {
+              console.error('Failed to load full library on demand', e);
+            } finally {
+              inFlightFullLibrary = null;
+            }
+          })();
+          inFlightFullLibrary = p;
+          return p;
         },
 
         fetchPlaylistsFromServer: async () => {
@@ -1726,6 +1815,9 @@ export const usePlayerStore = create<PlayerState>()(
               contextMenu: state.contextMenu && state.contextMenu.track.id === track.id
                 ? { ...state.contextMenu, track: { ...state.contextMenu.track, isLoved } }
                 : state.contextMenu,
+              // Lets server-fetched tracks (detail/search views, held in
+              // component state) reflect the toggle immediately.
+              lovedOverlay: { ...state.lovedOverlay, [track.id]: isLoved },
             };
           });
 
@@ -1749,7 +1841,7 @@ export const usePlayerStore = create<PlayerState>()(
             }
           } catch (error) {
             applyLoved(!!track.isLoved);
-            get().addToast('Failed to update favorite', 'error');
+            get().addToast('Failed to update like', 'error');
             console.error('Failed to update loved track', error);
             throw error;
           }
@@ -2453,6 +2545,14 @@ export const usePlayerStore = create<PlayerState>()(
       onRehydrateStorage: () => (state) => {
         setPlaybackDebugLogging(state?.playbackDebugLogging === true);
         castManager.setDiagnosticsVerbose(state?.playbackDebugLogging === true);
+        // A freshly-loaded page has no audio playing — the persisted 'playing'
+        // state would otherwise show a zombie play/pause UI and make
+        // restoreFromContinuitySnapshot() bail (it skips when state is already
+        // 'playing'). Coerce to 'paused'; restore then loads + seeks the track
+        // so the next gesture resumes from the saved position, not 0:00.
+        if (state && state.playbackState === 'playing') {
+          state.playbackState = 'paused';
+        }
       },
     }
   )

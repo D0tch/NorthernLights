@@ -42,6 +42,7 @@ import { parseArtistsForDisplay } from '../../utils/artistUtils';
 import { useKnownArtistKeys } from '../../hooks/useKnownArtistKeys';
 import type { TrackInfo } from '../../utils/fileSystem';
 import { getSuggestedPlaylistTracks } from '../../utils/playlistSuggestions';
+import { useEntityTracks } from '../../hooks/useEntityTracks';
 import { useNowPlayingState } from '../../hooks/useNowPlaying';
 import { NowPlayingBadge } from '../now-playing/NowPlayingBadge';
 import { NowPlayingBars } from '../now-playing/NowPlayingBars';
@@ -369,7 +370,12 @@ export const PlaylistDetail: React.FC = () => {
   const [isPreparingGeneratedPlaylist, setIsPreparingGeneratedPlaylist] = useState(false);
 
   const playlists = usePlayerStore((state) => state.playlists);
-  const library = usePlayerStore((state) => state.library);
+  // Suggestion candidates come from a bounded server pool (tracks related to
+  // this playlist by artist/genre/album-artist) instead of the full in-memory
+  // library; the overlap scoring below ranks them the same way.
+  const { tracks: suggestionPool } = useEntityTracks(
+    playlistId ? `/api/playlists/${encodeURIComponent(playlistId)}/suggestions` : null,
+  );
   const artists = usePlayerStore((state) => state.artists);
   const currentUser = usePlayerStore((state) => state.currentUser);
   const setPlaylist = usePlayerStore((state) => state.setPlaylist);
@@ -492,8 +498,8 @@ export const PlaylistDetail: React.FC = () => {
   }, [playlistTracks, knownArtistKeys]);
 
   const suggestionEntries = useMemo(
-    () => getSuggestedPlaylistTracks(library, deferredPlaylistTracks, 8),
-    [library, deferredPlaylistTracks]
+    () => getSuggestedPlaylistTracks(suggestionPool, deferredPlaylistTracks, 8),
+    [suggestionPool, deferredPlaylistTracks]
   );
 
   const [saveLabel, setSaveLabel] = useState<string | null>(null);

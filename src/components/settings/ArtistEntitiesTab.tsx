@@ -133,6 +133,10 @@ export const ArtistEntitiesTab: React.FC = () => {
     const fetchLibraryFromServer = usePlayerStore(state => state.fetchLibraryFromServer);
     const allArtists = usePlayerStore(state => state.artists);
     const library = usePlayerStore(state => state.library);
+    // Per-artist track/album counts are derived from the full library, which is
+    // no longer loaded at boot — load it on demand for this admin tool.
+    const ensureFullLibraryLoaded = usePlayerStore(state => state.ensureFullLibraryLoaded);
+    useEffect(() => { void ensureFullLibraryLoaded(); }, [ensureFullLibraryLoaded]);
 
     const [candidates, setCandidates] = useState<ArtistDuplicateCandidate[]>([]);
     const [loading, setLoading] = useState(false);

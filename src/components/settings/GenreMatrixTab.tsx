@@ -47,6 +47,10 @@ export const GenreMatrixTab: React.FC = () => {
     const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
     const loadSettings = usePlayerStore(state => state.loadSettings);
     const library = usePlayerStore(state => state.library);
+    // The full track list isn't loaded at boot anymore; this admin tool derives
+    // its genre/track counts from it, so load it on demand when the tab opens.
+    const ensureFullLibraryLoaded = usePlayerStore(state => state.ensureFullLibraryLoaded);
+    useEffect(() => { void ensureFullLibraryLoaded(); }, [ensureFullLibraryLoaded]);
 
     // Local state for MBDB to ensure we have fresh data
     const [mbdbLastImported, setMbdbLastImported] = useState<MbdbImportInfo | null>(() => normalizeMbdbImportInfo(storeMbdbLastImported));

@@ -4,6 +4,7 @@ import { useParams, useNavigate, useLocation, Link } from 'react-router-dom';
 import { usePlayerStore } from '../../store/index';
 import { AlbumArt } from '../AlbumArt';
 import { AlbumCoverDisc } from './AlbumCoverDisc';
+import { useEntityTracks } from '../../hooks/useEntityTracks';
 import { parseArtistsForDisplay } from '../../utils/artistUtils';
 import { useKnownArtistKeys } from '../../hooks/useKnownArtistKeys';
 import { formatTime } from '../../utils/formatTime';
@@ -514,8 +515,11 @@ export const AlbumDetail: React.FC = () => {
     const location = useLocation();
     const heroState = useMemo(() => readAlbumHeroState(location.state), [location.state]);
 
-    const library = usePlayerStore(state => state.library);
-    const isLibraryLoading = usePlayerStore(state => state.isLibraryLoading);
+    // Album tracks come from the per-album endpoint instead of filtering the
+    // in-memory library, so the album view no longer depends on the full track set.
+    const { tracks: albumTracks, loading: albumTracksLoading } = useEntityTracks(
+        albumId ? `/api/albums/${encodeURIComponent(albumId)}` : null,
+    );
     const albums = usePlayerStore(state => state.albums);
     const artists = usePlayerStore(state => state.artists);
     const setPlaylist = usePlayerStore(state => state.setPlaylist);
@@ -666,11 +670,6 @@ export const AlbumDetail: React.FC = () => {
         }
         return out;
     }, [albumCredits, albumCreditRoleOrder]);
-
-    const albumTracks = useMemo(() => {
-        if (!albumId) return [];
-        return library.filter(t => t.albumId === albumId);
-    }, [library, albumId]);
 
     const sortedTracks = useMemo(() => {
         return [...albumTracks].sort((a, b) => {
@@ -829,7 +828,7 @@ export const AlbumDetail: React.FC = () => {
 
     // ── Navigation helpers ─────────────────────────────────────────────────
 
-    if (!albumId || (isLibraryLoading && albumTracks.length === 0)) {
+    if (!albumId || (albumTracksLoading && albumTracks.length === 0)) {
         return <AlbumDetailSkeleton onBack={() => navigate(-1)} hero={heroState} />;
     }
 

@@ -1010,6 +1010,11 @@ export const Hub: React.FC = () => {
   // which re-rendered this 1600-LOC component on every store mutation —
   // including currentIndex/isBuffering/playbackState changes during playback.
   const library = usePlayerStore((s) => s.library);
+  const albumCount = usePlayerStore((s) => s.albums.length);
+  const hydrateTracks = usePlayerStore((s) => s.hydrateTracks);
+  // The library is "present" once the entity lists load (entity-first); Hub's
+  // own data is server-side, so it shouldn't wait for the full track array.
+  const hasLibrary = library.length > 0 || albumCount > 0;
   const setPlaylist = usePlayerStore((s) => s.setPlaylist);
   const getAuthHeader = usePlayerStore((s) => s.getAuthHeader);
   const togglePin = usePlayerStore((s) => s.togglePin);
@@ -1038,10 +1043,13 @@ export const Hub: React.FC = () => {
   const collectionsSignatureRef = useRef('');
   const smartBundleSignatureRef = useRef('');
 
+  // Prefer the fully-hydrated library track when present; otherwise hydrate the
+  // server-embedded track (build stream/art URLs) so Hub works and plays
+  // correctly even before the background track list loads.
   const resolveTracks = useCallback((rawTracks: any[]): TrackInfo[] =>
     (rawTracks || [])
-      .map((t: any) => library.find((lt) => lt.id === t.id) || t)
-      .filter(Boolean) as TrackInfo[], [library]);
+      .map((t: any) => library.find((lt) => lt.id === t.id) || hydrateTracks([t])[0])
+      .filter(Boolean) as TrackInfo[], [library, hydrateTracks]);
 
   const fetchSmartBundle = useCallback(async (options: { background?: boolean } = {}) => {
     if (!options.background) setIsSmartLoading(true);
@@ -1137,17 +1145,24 @@ export const Hub: React.FC = () => {
     }
   };
 
-  const handlePlayJumpTile = (tile: JumpTile) => {
+  const handlePlayJumpTile = async (tile: JumpTile) => {
     let tracks: TrackInfo[] = [];
     if (tile.type === 'playlist') {
       const pl = playlists.find((p) => p.id === tile.id);
       tracks = pl?.tracks || [];
-    } else if (tile.type === 'album') {
-      tracks = library
-        .filter((t: any) => t.albumId === tile.id)
-        .sort((a: any, b: any) => (a.discNumber || 0) - (b.discNumber || 0) || (a.trackNumber || 0) - (b.trackNumber || 0));
-    } else if (tile.type === 'artist') {
-      tracks = library.filter((t: any) => t.artistId === tile.id);
+    } else if (tile.type === 'album' || tile.type === 'artist') {
+      // Prefer the in-memory library; otherwise fetch the entity's tracks so
+      // tiles play even before the background track list loads.
+      tracks = library.filter((t: any) => (tile.type === 'album' ? t.albumId : t.artistId) === tile.id);
+      if (tracks.length === 0) {
+        try {
+          const res = await fetch(`/api/${tile.type === 'album' ? 'albums' : 'artists'}/${encodeURIComponent(tile.id)}`, { headers: getAuthHeader() });
+          if (res.ok) tracks = hydrateTracks((await res.json()).tracks || []);
+        } catch { /* leave empty */ }
+      }
+      if (tile.type === 'album') {
+        tracks = [...tracks].sort((a: any, b: any) => (a.discNumber || 0) - (b.discNumber || 0) || (a.trackNumber || 0) - (b.trackNumber || 0));
+      }
     }
     if (tracks.length > 0) setPlaylist(tracks, 0);
   };
@@ -1209,10 +1224,7 @@ export const Hub: React.FC = () => {
           .map((col: any) => ({
             ...col,
             tracks: col.tracks
-              .map((t: any) => {
-                const libTrack = library.find((lt) => lt.id === t.id);
-                return libTrack || (col.isLlmGenerated ? t : null);
-              })
+              .map((t: any) => library.find((lt) => lt.id === t.id) || hydrateTracks([t])[0])
               .filter(Boolean),
           }))
           .filter((col: any) => col.tracks.length > 0);
@@ -1232,7 +1244,7 @@ export const Hub: React.FC = () => {
     } finally {
       if (!options.background) setIsLoading(false);
     }
-  }, [fetchPlaylistsFromServer, getAuthHeader, library]);
+  }, [fetchPlaylistsFromServer, getAuthHeader, library, hydrateTracks]);
 
   const handleOpenSmartPlaylist = async (collection: HubCollection | null | undefined) => {
     if (!collection?.id || openingSmartPlaylistId) return;
@@ -1253,17 +1265,17 @@ export const Hub: React.FC = () => {
   const isInitialLoading = (isLoading || isSmartLoading) && collections.length === 0 && !smartBundle;
 
   useEffect(() => {
-    if (library.length > 0) {
+    if (hasLibrary) {
       fetchHubData();
       void fetchSmartBundle();
     } else {
       setIsLoading(false);
       setIsSmartLoading(false);
     }
-  }, [fetchHubData, fetchSmartBundle, library.length]);
+  }, [fetchHubData, fetchSmartBundle, hasLibrary]);
 
   useEffect(() => {
-    if (library.length === 0 || isInitialLoading) return;
+    if (!hasLibrary || isInitialLoading) return;
 
     const startedAt = Date.now();
     const interval = window.setInterval(() => {
@@ -1276,7 +1288,7 @@ export const Hub: React.FC = () => {
     }, HUB_REFRESH_POLL_MS);
 
     return () => window.clearInterval(interval);
-  }, [fetchHubData, fetchSmartBundle, library.length, isInitialLoading]);
+  }, [fetchHubData, fetchSmartBundle, hasLibrary, isInitialLoading]);
 
   useEffect(() => {
     if (shouldAnimateCards && !isLoading) hasPlayedHubCardIntro = true;
@@ -1458,7 +1470,7 @@ export const Hub: React.FC = () => {
           </p>
           <button
             onClick={handleGeneratePlaylists}
-            disabled={isGenerating || library.length === 0}
+            disabled={isGenerating || !hasLibrary}
             className="btn btn-primary btn-lg"
             aria-label="generate playlists"
           >
@@ -1474,7 +1486,7 @@ export const Hub: React.FC = () => {
               {generationError}
             </p>
           )}
-          {library.length === 0 && (
+          {!hasLibrary && (
             <p className="text-xs text-[var(--color-error)] mt-4 font-medium">
               scan music into your library first
             </p>

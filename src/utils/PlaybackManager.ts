@@ -663,6 +663,15 @@ class PlaybackManager {
         } catch (error) {
             // AbortError: play() was interrupted by a new source loading — not a real error
             if (error instanceof DOMException && error.name === 'AbortError') return;
+            // NotAllowedError: the browser blocked autoplay (no user gesture yet,
+            // e.g. restoring a session on reload). The audio is loaded and ready —
+            // surface it as paused and wait for a gesture instead of throwing,
+            // which would otherwise cascade into nextTrack() through the queue.
+            if (error instanceof DOMException && error.name === 'NotAllowedError') {
+                this.onPlayStateChangeCallback?.('paused');
+                this.updateMediaSessionPlaybackState('paused');
+                return;
+            }
             console.error('PlaybackManager playUrl error:', error);
             throw error;
         }
