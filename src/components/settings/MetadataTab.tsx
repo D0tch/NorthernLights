@@ -207,7 +207,7 @@ export const MetadataTab: React.FC = () => {
                 <h3 className="text-xl font-bold text-[var(--color-text-primary)]">Metadata Providers</h3>
             </div>
             <p className="text-sm text-[var(--color-text-muted)] mb-6">
-                Configure external APIs to enrich your local library with imagery, biographies, tags, popularity signals, favorites sync, and high-quality album art.
+                Configure external APIs to enrich your local library with imagery, biographies, tags, popularity signals, likes sync, and high-quality album art.
             </p>
 
             {/* Sub-tabs */}
@@ -342,8 +342,8 @@ export const MetadataTab: React.FC = () => {
                                 icon={<Headphones size={16} />}
                             />
                             <DependencyInfoBox
-                                title="Favorite Sync"
-                                description="Aurora's heart action sends Last.fm love/unlove in parallel with the local favorite"
+                                title="Like Sync"
+                                description="Aurora's heart action sends Last.fm love/unlove in parallel with the local like"
                                 icon={<Heart size={16} />}
                             />
                             <DependencyInfoBox

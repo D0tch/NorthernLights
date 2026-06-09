@@ -120,8 +120,16 @@ export function VirtualizedCardGrid<T>({
         virtualizer.measure();
     }, [columns, rowHeight, rowGap, items.length, virtualizer]);
 
-    const virtualRows = virtualizer.getVirtualItems();
-    const totalSize = virtualizer.getTotalSize();
+    // Don't render rows until the container has been measured. Before the
+    // first layout pass containerWidth is 0, which forces columnWidth → 0 and a
+    // tiny estimated row height; combined with an as-yet-unmeasured scroll
+    // element the virtualizer would compute an enormous visible range and mount
+    // hundreds of cards at once (each firing an /api/art request), piling up on
+    // HTTP/1.1 until the tab OOMs. useLayoutEffect sets the width before paint,
+    // so this gate costs no visible frame.
+    const measured = containerWidth > 0 && columnWidth > 0;
+    const virtualRows = measured ? virtualizer.getVirtualItems() : [];
+    const totalSize = measured ? virtualizer.getTotalSize() : 0;
 
     return (
         <div style={{ position: 'relative', width: '100%' }}>

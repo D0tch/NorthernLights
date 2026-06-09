@@ -32,8 +32,8 @@ export const LoveButton: React.FC<LoveButtonProps> = ({ track, className = '', s
       onClick={handleClick}
       disabled={isPending}
       aria-pressed={isLoved}
-      aria-label={isLoved ? 'Remove from favorites' : 'Add to favorites'}
-      title={isLoved ? 'Remove from favorites' : 'Add to favorites'}
+      aria-label={isLoved ? 'Remove from likes' : 'Add to likes'}
+      title={isLoved ? 'Remove from likes' : 'Add to likes'}
       className={`inline-flex items-center justify-center gap-1.5 rounded-full transition-ui active:scale-95 disabled:opacity-60 ${
         isLoved
           ? 'text-rose-500 drop-shadow-[0_0_8px_rgba(244,63,94,0.35)]'
@@ -41,7 +41,7 @@ export const LoveButton: React.FC<LoveButtonProps> = ({ track, className = '', s
       } ${className}`}
     >
       <Heart size={size} fill={isLoved ? 'currentColor' : 'none'} />
-      {showLabel && <span>{isLoved ? 'Loved' : 'Love'}</span>}
+      {showLabel && <span>{isLoved ? 'Liked' : 'Like'}</span>}
     </button>
   );
 };

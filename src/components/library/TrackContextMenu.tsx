@@ -356,7 +356,7 @@ export const TrackContextMenu: React.FC = () => {
     const handleToggleLove = async () => {
         try {
             await toggleTrackLove(track);
-            done(track.isLoved ? 'Removed favorite' : 'Loved track');
+            done(track.isLoved ? 'Removed like' : 'Liked track');
         } catch {
             setAddedStatus(null);
         }
@@ -438,7 +438,7 @@ export const TrackContextMenu: React.FC = () => {
                         <ContextMenuButton icon={<ListPlus size={15} />} label="Add to Queue" onClick={handleAddToQueue} />
                         <ContextMenuButton
                             icon={<Heart size={15} fill={track.isLoved ? 'currentColor' : 'none'} />}
-                            label={track.isLoved ? 'Remove Favorite' : 'Love Track'}
+                            label={track.isLoved ? 'Unlike' : 'Like'}
                             onClick={() => void handleToggleLove()}
                         />
 
