@@ -77,50 +77,35 @@ export async function initDB(): Promise<Pool> {
       });
 
       // Slow-query observability: time every pool.query() and warn when it
-      // exceeds DB_SLOW_QUERY_MS (default 500ms). Callback-style calls are passed
-      // through untouched. This is the only production visibility into queries
-      // that degrade as the library grows toward 100k+ tracks.
-      // Slow-query observability with acquire-vs-execute breakdown. The naive
-      // approach (timing pool.query as one number) conflates two very different
-      // costs: waiting for a free pool connection (Node/pool pressure) and the
-      // query actually running in Postgres. We split them by acquiring the
-      // client ourselves — so a slow line says WHERE the time went. Callback-
-      // style calls pass through untouched.
+      // exceeds DB_SLOW_QUERY_MS (default 500ms). We wrap the NATIVE pool.query
+      // (rather than reimplementing it with connect()+release()) so pg keeps
+      // full control of connection lifecycle — critically, discarding broken
+      // connections on error. A hand-rolled version that called release()
+      // without the error returned dead connections to the pool after a DB
+      // blip, poisoning it and turning a recoverable reconnect into a cascade.
+      // Callback-style calls are passed through untouched.
       const slowQueryMs = parseInt(process.env.DB_SLOW_QUERY_MS || '500', 10);
       const originalQuery = instance.query.bind(instance);
-      const originalConnect = instance.connect.bind(instance);
       (instance as any).query = (...args: any[]) => {
         if (typeof args[args.length - 1] === 'function') {
           return (originalQuery as any)(...args);
         }
-        const queryText = () =>
-          String((typeof args[0] === 'string' ? args[0] : args[0]?.text) ?? '')
-            .replace(/\s+/g, ' ').trim().slice(0, 200);
         const start = process.hrtime.bigint();
-        return (async () => {
-          let client: import('pg').PoolClient;
-          try {
-            client = await originalConnect();
-          } catch (err) {
-            const acquireMs = Number(process.hrtime.bigint() - start) / 1e6;
-            // Couldn't even get a connection — pool exhausted or connect timeout.
-            // This is the signal that the bottleneck is pool pressure, not SQL.
-            console.warn(`[DB] connection acquire failed after ${acquireMs.toFixed(0)}ms (pool exhausted?): ${queryText()}`);
-            throw err;
-          }
-          const acquiredAt = process.hrtime.bigint();
-          try {
-            const result = await (client as any).query(...args);
-            const acquireMs = Number(acquiredAt - start) / 1e6;
-            const execMs = Number(process.hrtime.bigint() - acquiredAt) / 1e6;
-            if (acquireMs + execMs >= slowQueryMs) {
-              console.warn(`[DB] slow query ${(acquireMs + execMs).toFixed(0)}ms (acquire ${acquireMs.toFixed(0)}ms + exec ${execMs.toFixed(0)}ms): ${queryText()}`);
-            }
-            return result;
-          } finally {
-            client.release();
-          }
-        })();
+        const result = (originalQuery as any)(...args);
+        if (result && typeof result.then === 'function') {
+          result.then(
+            () => {
+              const ms = Number(process.hrtime.bigint() - start) / 1e6;
+              if (ms >= slowQueryMs) {
+                const text = String((typeof args[0] === 'string' ? args[0] : args[0]?.text) ?? '')
+                  .replace(/\s+/g, ' ').trim().slice(0, 200);
+                console.warn(`[DB] slow query ${ms.toFixed(0)}ms: ${text}`);
+              }
+            },
+            () => { /* query errors surface to the caller; pg handles the client */ },
+          );
+        }
+        return result;
       };
 
       // Test connection and initialize schema
