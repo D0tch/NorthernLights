@@ -195,6 +195,23 @@ pm2 save
 
 ok "Server started"
 
+# ─── Rootless Podman: enable user lingering ──────────────────────────
+# Aurora manages Postgres as a rootless Podman container owned by this user.
+# Without lingering, systemd destroys the user's runtime dir (/run/user/<uid>)
+# on logout, which kills the container and leaves Aurora unable to reach the
+# database ("Failed to obtain podman configuration: lstat /run/user/<uid>").
+# Lingering keeps it alive across logouts and reboots. (Docker / rootful
+# Podman don't need this.)
+if [ "$RUNTIME" = "podman" ]; then
+  info "Enabling user lingering so the rootless database container survives logout..."
+  if $SUDO loginctl enable-linger "$(id -un)" 2>/dev/null; then
+    ok "Lingering enabled for $(id -un)"
+  else
+    warn "Could not enable lingering automatically. Run this so the DB container survives logout:"
+    echo -e "  ${CYAN}sudo loginctl enable-linger $(id -un)${NC}"
+  fi
+fi
+
 # ─── PM2 startup (requires user to run a sudo command) ───────────────
 
 info "Setting up PM2 startup script..."

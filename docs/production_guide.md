@@ -129,6 +129,22 @@ pm2 startup
 
 Run the command printed by `pm2 startup`, then run `pm2 save` again.
 
+**Rootless Podman: enable lingering.** If Aurora manages PostgreSQL via *rootless*
+Podman (the default when you don't run as root), you **must** enable lingering for
+the user PM2 runs as:
+
+```bash
+loginctl enable-linger $(whoami)
+loginctl show-user $(whoami) | grep Linger   # expect Linger=yes
+```
+
+Without this, the user's runtime directory (`/run/user/<uid>`) is destroyed when
+your login/SSH session ends, which **kills the Podman container** and leaves
+Aurora logging `Failed to obtain podman configuration: lstat /run/user/<uid>: no
+such file or directory` followed by repeated DB reconnects. Lingering keeps the
+runtime directory and user services alive across logouts and reboots. (Not needed
+when Podman runs rootful / as root, or when using Docker.)
+
 Useful commands:
 
 ```bash
