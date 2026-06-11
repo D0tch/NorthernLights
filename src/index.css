@@ -973,7 +973,12 @@ body {
 /* Shared page container for library detail/list views */
 .page-container {
   padding: 1rem;
-  overflow-y: auto;
+  /* NOTE: no `overflow-y: auto` here. The actual scroll viewport is MainContent's
+     wrapper (.flex-1.overflow-y-auto); this element is nested inside it and only
+     grows to its content. A redundant overflow here made it a second "scroll"
+     container that never scrolled, which defeated VirtualizedCardGrid's windowing
+     (react-virtual measured this element's full content height and mounted every
+     card). Keep scrolling on the single ancestor viewport. */
   flex: 1;
 }
 
