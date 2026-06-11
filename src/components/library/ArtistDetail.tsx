@@ -281,6 +281,7 @@ export const ArtistDetail: React.FC = () => {
     const artists = usePlayerStore((s) => s.artists);
     const albums = usePlayerStore((s) => s.albums);
     const setPlaylist = usePlayerStore((s) => s.setPlaylist);
+    const hydrateTracks = usePlayerStore((s) => s.hydrateTracks);
     const getAuthHeader = usePlayerStore((s) => s.getAuthHeader);
     const isLibraryLoading = usePlayerStore((s) => s.isLibraryLoading);
 
@@ -388,9 +389,11 @@ export const ArtistDetail: React.FC = () => {
             });
             if (!res.ok) throw new Error('Failed to load radio');
             const { playlist } = await res.json();
-            const tracks = (playlist?.tracks || [])
-                .map((t: any) => library.find(lt => lt.id === t.id) || t)
-                .filter(Boolean);
+            // Hydrate the server tracks (builds stream + art URLs from path/artHash).
+            // The in-memory `library` is empty in the main app, so mapping against
+            // it would leave raw, art-less tracks in the queue until a reload
+            // rebuilt them from the persisted snapshot.
+            const tracks = hydrateTracks(playlist?.tracks || []);
             if (tracks.length > 0) setPlaylist(tracks, 0);
         } catch (e) {
             console.error('[Artist Radio] Failed to start radio', e);
