@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useProviderConnectionTest } from '../../hooks/useProviderConnectionTest';
 import { useToast } from '../../hooks/useToast';
@@ -16,6 +16,108 @@ type JambaseStatusResp = {
   hardStop: boolean;
   monthlyCap: number;
 };
+
+interface CreditsJobProgress {
+    running: boolean;
+    total: number;
+    processed: number;
+    succeeded: number;
+    skipped: number;
+    failed: number;
+    creditsWritten: number;
+    ranOutOfQuota: boolean;
+    startedAt: number | null;
+    finishedAt: number | null;
+}
+
+// Drives a provider's credit-enrichment background job: starts it, polls its
+// progress (~1.5s), surfaces a completion toast, and resumes the bar if a job is
+// already running when the tab mounts. Shared by MusicBrainz and Genius.
+function useCreditsJob(
+    provider: 'musicbrainz' | 'genius',
+    label: string,
+    notConnectedMsg: string,
+    getAuthHeader: () => Record<string, string>,
+    addToast: (msg: string, type: 'success' | 'error' | 'info') => void,
+    onDone: () => void,
+) {
+    const base = `/api/library/credits/enrich/${provider}`;
+    const [running, setRunning] = useState(false);
+    const [progress, setProgress] = useState<CreditsJobProgress | null>(null);
+    const pollRef = useRef<number | null>(null);
+
+    const stop = useCallback(() => {
+        if (pollRef.current) { window.clearInterval(pollRef.current); pollRef.current = null; }
+    }, []);
+
+    const poll = useCallback(async () => {
+        try {
+            const res = await fetch(`${base}/progress`, { headers: getAuthHeader() });
+            if (!res.ok) return;
+            const p: CreditsJobProgress = await res.json();
+            setProgress(p);
+            if (!p.running) {
+                stop();
+                setRunning(false);
+                const more = p.ranOutOfQuota ? ' · rate-limited, run again to continue' : '';
+                const skipped = p.skipped > 0 ? ` · ${p.skipped} had none` : '';
+                addToast(`${label}: ${p.succeeded} tracks credited (${p.creditsWritten} rows)${skipped}${more}`, p.succeeded > 0 ? 'success' : 'info');
+                onDone();
+            }
+        } catch { /* transient — keep polling */ }
+    }, [base, getAuthHeader, stop, addToast, label, onDone]);
+
+    const begin = useCallback(() => {
+        if (pollRef.current) return;
+        setRunning(true);
+        pollRef.current = window.setInterval(() => { void poll(); }, 1500);
+    }, [poll]);
+
+    // Resume the bar if a job is already running when this tab mounts.
+    useEffect(() => {
+        let cancelled = false;
+        (async () => {
+            try {
+                const res = await fetch(`${base}/progress`, { headers: getAuthHeader() });
+                if (!res.ok || cancelled) return;
+                const p: CreditsJobProgress = await res.json();
+                setProgress(p);
+                if (p.running) begin();
+            } catch { /* ignore */ }
+        })();
+        return () => { cancelled = true; stop(); };
+    }, [base, getAuthHeader, begin, stop]);
+
+    const start = useCallback(async () => {
+        setRunning(true);
+        try {
+            const res = await fetch(base, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                addToast(data.error || `${label} enrichment failed`, 'error');
+                setRunning(false);
+                return;
+            }
+            if (data.progress) setProgress(data.progress);
+            if (data.started || data.reason === 'already_running') {
+                begin();
+            } else {
+                setRunning(false);
+                if (data.reason === 'nothing_to_do') addToast(`${label}: nothing left to enrich`, 'info');
+                else if (data.reason === 'not_connected') addToast(notConnectedMsg, 'error');
+                onDone();
+            }
+        } catch (e: any) {
+            addToast(e?.message || 'Enrichment failed', 'error');
+            setRunning(false);
+        }
+    }, [base, getAuthHeader, addToast, label, notConnectedMsg, begin, onDone]);
+
+    return { running, progress, start };
+}
 
 export const MetadataTab: React.FC = () => {
     const lastFmApiKey = usePlayerStore(state => state.lastFmApiKey);
@@ -61,8 +163,6 @@ export const MetadataTab: React.FC = () => {
         alreadyGenius: number;
     }
     const [creditsStatus, setCreditsStatus] = useState<CreditsStatus | null>(null);
-    const [mbEnrichRunning, setMbEnrichRunning] = useState(false);
-    const [geniusEnrichRunning, setGeniusEnrichRunning] = useState(false);
 
     const refreshCreditsStatus = useCallback(async () => {
         try {
@@ -77,35 +177,9 @@ export const MetadataTab: React.FC = () => {
         void refreshCreditsStatus();
     }, [refreshCreditsStatus]);
 
-    const runCreditEnrich = useCallback(async (provider: 'musicbrainz' | 'genius') => {
-        const setRunning = provider === 'musicbrainz' ? setMbEnrichRunning : setGeniusEnrichRunning;
-        setRunning(true);
-        try {
-            const res = await fetch(`/api/library/credits/enrich/${provider}`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
-                body: JSON.stringify({ limit: 200 }),
-            });
-            if (!res.ok) {
-                const err = await res.json().catch(() => ({}));
-                addToast(err.error || `${provider} enrichment failed`, 'error');
-                return;
-            }
-            const data = await res.json();
-            const provLabel = provider === 'musicbrainz' ? 'MusicBrainz' : 'Genius';
-            if (data.attempted === 0) {
-                addToast(`${provLabel}: nothing left to enrich`, 'info');
-            } else {
-                const more = data.ranOutOfQuota ? ' (rate-limited — try again later)' : '';
-                addToast(`${provLabel}: ${data.succeeded} tracks credited (${data.creditsWritten} rows)${more}`, 'success');
-            }
-            void refreshCreditsStatus();
-        } catch (e: any) {
-            addToast(e?.message || 'Enrichment failed', 'error');
-        } finally {
-            setRunning(false);
-        }
-    }, [addToast, getAuthHeader, refreshCreditsStatus]);
+    const mbJob = useCreditsJob('musicbrainz', 'MusicBrainz', 'Connect MusicBrainz first', getAuthHeader, addToast, refreshCreditsStatus);
+    const geniusJob = useCreditsJob('genius', 'Genius', 'Add a Genius API key first', getAuthHeader, addToast, refreshCreditsStatus);
+
     const showToast = useCallback((msg: string, type: 'success' | 'error' | 'info') => addToast(msg, type), [addToast]);
 
     const [metadataTab, setMetadataTab] = useState<MetadataSubTab>('overview');
@@ -454,23 +528,41 @@ export const MetadataTab: React.FC = () => {
 
                     {/* Genius credit-import action */}
                     {!!geniusApiKey && (
-                        <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 mb-4 flex items-center justify-between gap-4 shadow-sm">
-                            <div className="min-w-0">
-                                <div className="text-sm font-semibold text-[var(--color-text-primary)]">Import producer / writer credits</div>
-                                <div className="text-xs text-[var(--color-text-muted)] mt-1">
-                                    {creditsStatus
-                                        ? `${creditsStatus.alreadyGenius} tracks already enriched · ${(creditsStatus.bySource['genius'] || 0)} credit rows on file`
-                                        : 'Loads on demand · runs in batches of 200 tracks'}
+                        <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 mb-4 shadow-sm">
+                            <div className="flex items-center justify-between gap-4">
+                                <div className="min-w-0">
+                                    <div className="text-sm font-semibold text-[var(--color-text-primary)]">Import producer / writer credits</div>
+                                    <div className="text-xs text-[var(--color-text-muted)] mt-1">
+                                        {geniusJob.running && geniusJob.progress
+                                            ? `Importing… ${geniusJob.progress.processed} of ${geniusJob.progress.total} tracks · ${geniusJob.progress.creditsWritten} credit rows added`
+                                            : creditsStatus
+                                                ? `${creditsStatus.alreadyGenius} tracks already enriched · ${(creditsStatus.bySource['genius'] || 0)} credit rows on file`
+                                                : 'Matches tracks on Genius by title + artist'}
+                                    </div>
                                 </div>
+                                <button
+                                    type="button"
+                                    onClick={() => void geniusJob.start()}
+                                    disabled={geniusJob.running}
+                                    className="btn btn-ghost btn-sm whitespace-nowrap disabled:opacity-50"
+                                >
+                                    {geniusJob.running ? 'Importing…' : 'Import credits'}
+                                </button>
                             </div>
-                            <button
-                                type="button"
-                                onClick={() => void runCreditEnrich('genius')}
-                                disabled={geniusEnrichRunning}
-                                className="btn btn-ghost btn-sm whitespace-nowrap disabled:opacity-50"
-                            >
-                                {geniusEnrichRunning ? 'Importing…' : 'Import credits'}
-                            </button>
+                            {geniusJob.running && geniusJob.progress && geniusJob.progress.total > 0 && (
+                                <div className="mt-3" aria-label="Genius credit import progress">
+                                    <div className="h-1.5 w-full rounded-full bg-[var(--glass-border)] overflow-hidden">
+                                        <div
+                                            className="h-full rounded-full bg-[var(--color-primary)] transition-[width] duration-500 ease-out"
+                                            style={{ width: `${Math.min(100, Math.round((geniusJob.progress.processed / geniusJob.progress.total) * 100))}%` }}
+                                        />
+                                    </div>
+                                    <div className="text-[10px] text-[var(--color-text-muted)] mt-1 tabular-nums">
+                                        {Math.min(100, Math.round((geniusJob.progress.processed / geniusJob.progress.total) * 100))}%
+                                        {geniusJob.progress.skipped > 0 && ` · ${geniusJob.progress.skipped} not found`}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 
@@ -539,23 +631,41 @@ export const MetadataTab: React.FC = () => {
 
                     {/* MusicBrainz credit-import action */}
                     {musicBrainzConnected && (
-                        <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 mb-4 flex items-center justify-between gap-4 shadow-sm">
-                            <div className="min-w-0">
-                                <div className="text-sm font-semibold text-[var(--color-text-primary)]">Import role credits</div>
-                                <div className="text-xs text-[var(--color-text-muted)] mt-1">
-                                    {creditsStatus
-                                        ? `${creditsStatus.alreadyMusicbrainz} of ${creditsStatus.eligibleMusicbrainz} eligible tracks enriched · ${(creditsStatus.bySource['musicbrainz'] || 0)} credit rows on file`
-                                        : 'Requires tracks with MusicBrainz recording IDs · runs in batches of 200'}
+                        <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 mb-4 shadow-sm">
+                            <div className="flex items-center justify-between gap-4">
+                                <div className="min-w-0">
+                                    <div className="text-sm font-semibold text-[var(--color-text-primary)]">Import role credits</div>
+                                    <div className="text-xs text-[var(--color-text-muted)] mt-1">
+                                        {mbJob.running && mbJob.progress
+                                            ? `Importing… ${mbJob.progress.processed} of ${mbJob.progress.total} tracks · ${mbJob.progress.creditsWritten} credit rows added`
+                                            : creditsStatus
+                                                ? `${creditsStatus.alreadyMusicbrainz} of ${creditsStatus.eligibleMusicbrainz} eligible tracks enriched · ${(creditsStatus.bySource['musicbrainz'] || 0)} credit rows on file`
+                                                : 'Requires tracks with MusicBrainz recording IDs · throttled to ~1/sec'}
+                                    </div>
                                 </div>
+                                <button
+                                    type="button"
+                                    onClick={() => void mbJob.start()}
+                                    disabled={mbJob.running}
+                                    className="btn btn-ghost btn-sm whitespace-nowrap disabled:opacity-50"
+                                >
+                                    {mbJob.running ? 'Importing…' : 'Import credits'}
+                                </button>
                             </div>
-                            <button
-                                type="button"
-                                onClick={() => void runCreditEnrich('musicbrainz')}
-                                disabled={mbEnrichRunning}
-                                className="btn btn-ghost btn-sm whitespace-nowrap disabled:opacity-50"
-                            >
-                                {mbEnrichRunning ? 'Importing…' : 'Import credits'}
-                            </button>
+                            {mbJob.running && mbJob.progress && mbJob.progress.total > 0 && (
+                                <div className="mt-3" aria-label="MusicBrainz credit import progress">
+                                    <div className="h-1.5 w-full rounded-full bg-[var(--glass-border)] overflow-hidden">
+                                        <div
+                                            className="h-full rounded-full bg-[var(--color-primary)] transition-[width] duration-500 ease-out"
+                                            style={{ width: `${Math.min(100, Math.round((mbJob.progress.processed / mbJob.progress.total) * 100))}%` }}
+                                        />
+                                    </div>
+                                    <div className="text-[10px] text-[var(--color-text-muted)] mt-1 tabular-nums">
+                                        {Math.min(100, Math.round((mbJob.progress.processed / mbJob.progress.total) * 100))}%
+                                        {mbJob.progress.skipped > 0 && ` · ${mbJob.progress.skipped} with no credits`}
+                                    </div>
+                                </div>
+                            )}
                         </div>
                     )}
 
