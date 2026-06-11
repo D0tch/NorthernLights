@@ -13,18 +13,8 @@ import {
 } from './PlaylistContextMenu';
 import { prefetchPlaylistDetail } from '../../utils/routePrefetch';
 import type { PlaylistHeroState } from '../../utils/heroState';
-import { VirtualizedCardGrid } from './VirtualizedCardGrid';
+import { HorizontalScrollRail } from '../HorizontalScrollRail';
 import CreatePlaylistModal from './CreatePlaylistModal';
-
-// Playlist cards are wide (1/2/3 columns) and fixed-height — distinct from the
-// square album/artist thumbnails the grid defaults to.
-const PLAYLIST_BREAKPOINTS = [
-  { minWidth: 1024, columns: 3 }, // lg:grid-cols-3
-  { minWidth: 640, columns: 2 },  // sm:grid-cols-2
-  { minWidth: 0, columns: 1 },    // grid-cols-1
-] as const;
-const PLAYLIST_CARD_HEIGHT = 200; // matches PlaylistCard's h-[200px]
-const playlistGap = (w: number): number => (w >= 1024 ? 24 : w >= 640 ? 20 : 16); // gap-6 / gap-5 / gap-4
 
 // ─── Playlist Card ────────────────────────────────────────────────────────────
 
@@ -33,13 +23,25 @@ const PlaylistCard: React.FC<{
   onOpen: () => void;
   onMenuOpen: (x: number, y: number) => void;
   onPlay: () => void;
-}> = ({ playlist, onOpen, onMenuOpen, onPlay }) => {
-  const { artUrls, bgColor } = useDominantColor(playlist.tracks);
-  const hasCovers = artUrls.length > 0;
+  /** Owner's username — when set, the card shows a "by <owner>" byline. */
+  ownerName?: string;
+  /** Hide the kebab menu for playlists the current user can't manage. */
+  showMenu?: boolean;
+}> = ({ playlist, onOpen, onMenuOpen, onPlay, ownerName, showMenu = true }) => {
+  const { artUrls } = useDominantColor(playlist.tracks);
+  const covers = artUrls.slice(0, 4);
+  // Collage thumbnails render small, so request the smallest pre-encoded art
+  // bucket (256) instead of the server default (640).
+  const sizeArt = (url: string) =>
+    url.includes('/api/art') && !/[?&]size=/.test(url) ? `${url}&size=256` : url;
+
+  const subtitle = ownerName
+    ? `by ${ownerName}`
+    : `${playlist.tracks.length} ${playlist.tracks.length === 1 ? 'track' : 'tracks'}`;
 
   return (
     <div
-      className="relative h-[200px] overflow-hidden p-4 sm:p-5 cursor-pointer group rounded-[var(--radius)] bg-[var(--glass-bg)] border border-[var(--glass-border)] backdrop-blur-sm transition-ui duration-200 hover:-translate-y-0.5 hover:shadow-md active:scale-[0.98]"
+      className="group flex flex-col relative cursor-pointer"
       onClick={onOpen}
       onPointerEnter={prefetchPlaylistDetail}
       onPointerDown={prefetchPlaylistDetail}
@@ -51,88 +53,82 @@ const PlaylistCard: React.FC<{
       }}
       aria-label={`Open ${playlist.title}`}
     >
-      {/* Colour bleed */}
-      <div
-        className="absolute inset-0 rounded-[inherit] opacity-[0.05] group-hover:opacity-[0.10] transition-opacity pointer-events-none"
-        style={{ background: `linear-gradient(135deg, ${bgColor}, transparent 60%)` }}
-      />
-
-      {/* Top row: stacked art + kebab */}
-      <div className="relative flex items-start justify-between mb-4">
-        <div className="flex items-center">
-          {hasCovers ? (
-            artUrls.slice(0, 4).map((url, i) => {
-              // These collage thumbnails render at ~48-56px, so request the
-              // smallest pre-encoded bucket (256) instead of the server default
-              // (640). `loading="lazy"` keeps a long, non-virtualized playlist
-              // list from firing every card's 4 art requests at once on mount —
-              // off-screen covers only load as they scroll into view, which is
-              // what stops the request backlog when flicking between tabs.
-              const sized = url.includes('/api/art') && !/[?&]size=/.test(url)
-                ? `${url}&size=256`
-                : url;
-              return (
-                <img
-                  key={i}
-                  src={sized}
-                  alt=""
-                  loading="lazy"
-                  decoding="async"
-                  className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg shadow-sm object-cover"
-                  style={{ marginLeft: i > 0 ? '-10px' : 0, zIndex: 10 - i }}
-                />
+      {/* Square art cover — 2×2 collage of track covers */}
+      <div className="relative aspect-square w-full mb-3 rounded-2xl border border-black/5 dark:border-white/5 bg-white/5 dark:bg-black/20 shadow-md overflow-hidden transition-transform duration-300 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100">
+        {covers.length > 1 ? (
+          <div className="grid h-full w-full grid-cols-2 grid-rows-2 gap-px">
+            {[0, 1, 2, 3].map((i) => {
+              const url = covers[i];
+              return url ? (
+                <img key={i} src={sizeArt(url)} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+              ) : (
+                <div key={i} className="flex items-center justify-center bg-[var(--color-surface-variant)]">
+                  <Disc3 className="w-5 h-5 text-[var(--color-text-muted)] opacity-30" />
+                </div>
               );
-            })
-          ) : (
-            <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg bg-[var(--color-surface-variant)] flex items-center justify-center">
-              <Disc3 className="w-6 h-6 text-[var(--color-text-muted)] opacity-40" />
-            </div>
-          )}
-        </div>
+            })}
+          </div>
+        ) : covers.length === 1 ? (
+          <img src={sizeArt(covers[0])} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center bg-[var(--color-surface-variant)]">
+            <Disc3 className="w-10 h-10 text-[var(--color-text-muted)] opacity-40" />
+          </div>
+        )}
 
-        <button
-          onClick={(e) => { e.stopPropagation(); onMenuOpen(e.clientX, e.clientY); }}
-          className="w-9 h-9 rounded-full flex items-center justify-center text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-white/10 dark:hover:bg-white/5 transition-colors"
-          aria-label="More options"
-        >
-          <MoreHorizontal size={18} />
-        </button>
+        {/* Badges — top-left pill (matches AlbumCard edition pill) */}
+        {(playlist.isLlmGenerated || playlist.pinned) && (
+          <div className="absolute top-2.5 left-2.5 z-20 flex items-center gap-1 pointer-events-none">
+            {playlist.isLlmGenerated && (
+              <span className="text-[10px] font-bold uppercase tracking-[0.15em] text-white/95 bg-black/35 backdrop-blur-sm px-2 py-0.5 rounded-full">
+                AI
+              </span>
+            )}
+            {playlist.pinned && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-[0.15em] text-white/95 bg-black/35 backdrop-blur-sm px-2 py-0.5 rounded-full">
+                <Pin className="h-2.5 w-2.5" /> Pinned
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Kebab — top-right, hover-reveal */}
+        {showMenu && (
+          <button
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onMenuOpen(e.clientX, e.clientY); }}
+            aria-label="More options"
+            className="absolute top-2 right-2 z-20 w-8 h-8 rounded-full flex items-center justify-center text-white/95 bg-black/35 backdrop-blur-sm opacity-0 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity hover:bg-black/55"
+          >
+            <MoreHorizontal size={16} />
+          </button>
+        )}
+
+        {/* Hover overlay + centered play */}
+        <div className="absolute inset-0 bg-transparent group-hover:bg-black/40 transition-colors duration-300 flex items-center justify-center z-10 pointer-events-none rounded-2xl">
+          <button
+            onClick={(e) => { e.preventDefault(); e.stopPropagation(); onPlay(); }}
+            aria-label={`Play ${playlist.title}`}
+            className="
+              z-20 pointer-events-auto w-14 h-14 rounded-full flex items-center justify-center
+              opacity-0 md:scale-75 md:group-hover:opacity-100 md:group-hover:scale-100
+              transition-ui duration-300 ease-out hover:scale-110 active:scale-95 motion-reduce:transition-none
+              bg-[var(--color-primary)] hover:bg-[var(--color-primary-dark)] text-white backdrop-blur-sm
+              shadow-[0_4px_24px_rgba(16,185,129,0.3)] hover:shadow-[0_8px_32px_rgba(16,185,129,0.5)]
+              focus-visible:opacity-100 focus-visible:scale-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-white
+            "
+          >
+            <Play size={22} fill="currentColor" className="text-white ml-0.5" />
+          </button>
+        </div>
       </div>
 
-      {/* Info */}
-      <div className="relative z-10">
-        <h3 className="font-semibold text-base sm:text-lg text-[var(--color-text-primary)] line-clamp-1 group-hover:text-[var(--color-primary)] transition-colors">
+      {/* Text */}
+      <div className="flex flex-col px-1 relative z-10 pointer-events-none">
+        <div className="font-semibold text-sm md:text-base tracking-wide truncate text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)] transition-colors motion-reduce:transition-none">
           {playlist.title}
-        </h3>
-
-        <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
-          <p className="text-xs text-[var(--color-text-muted)]">
-            {playlist.tracks.length} {playlist.tracks.length === 1 ? 'track' : 'tracks'}
-          </p>
-          {playlist.isLlmGenerated && (
-            <span
-              className="rounded-full bg-[var(--color-primary)]/15 border border-transparent px-2 py-px text-[10px] font-semibold uppercase tracking-wider text-[var(--color-primary)]"
-              style={{ borderColor: 'color-mix(in srgb, var(--color-primary) 30%, transparent)' }}
-            >
-              AI
-            </span>
-          )}
-          {playlist.pinned && (
-            <span className="inline-flex items-center gap-1 rounded-full border border-amber-400/30 bg-amber-500/10 px-2 py-px text-[10px] font-semibold uppercase tracking-wider text-amber-400">
-              <Pin className="h-2.5 w-2.5" /> Pinned
-            </span>
-          )}
         </div>
+        <div className="text-xs md:text-sm text-[var(--color-text-secondary)] truncate mt-0.5">{subtitle}</div>
       </div>
-
-      {/* Play FAB — always visible on mobile, hover-reveal on desktop */}
-      <button
-        onClick={(e) => { e.stopPropagation(); onPlay(); }}
-        className="absolute bottom-4 right-4 w-11 h-11 rounded-full bg-[var(--color-primary)] text-white flex items-center justify-center shadow-lg shadow-emerald-500/30 sm:opacity-0 sm:translate-y-2 sm:group-hover:opacity-100 sm:group-hover:translate-y-0 sm:group-focus-within:opacity-100 sm:group-focus-within:translate-y-0 transition-ui duration-200 hover:bg-[var(--color-primary-dark)] hover:scale-110 active:scale-95 z-20"
-        aria-label={`Play ${playlist.title}`}
-      >
-        <Play className="w-5 h-5 ml-0.5" fill="currentColor" />
-      </button>
     </div>
   );
 };
@@ -140,14 +136,12 @@ const PlaylistCard: React.FC<{
 // ─── Card skeleton ────────────────────────────────────────────────────────────
 
 const PlaylistCardSkeleton: React.FC = () => (
-  <div className="h-[200px] p-4 sm:p-5 bg-[var(--glass-bg)] border border-[var(--glass-border)] rounded-[var(--radius)] animate-pulse">
-    <div className="flex items-center mb-4">
-      <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg bg-[var(--color-surface-variant)]" />
-      <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg bg-[var(--color-surface-variant)] -ml-2.5" />
-      <div className="w-12 h-12 sm:w-14 sm:h-14 rounded-lg bg-[var(--color-surface-variant)] -ml-2.5" />
+  <div className="flex flex-col animate-pulse">
+    <div className="aspect-square w-full mb-3 rounded-2xl bg-[var(--color-surface-variant)]" />
+    <div className="px-1 space-y-1.5">
+      <div className="h-4 w-3/4 rounded bg-[var(--color-surface-variant)]" />
+      <div className="h-3 w-1/2 rounded bg-[var(--color-surface-variant)]" />
     </div>
-    <div className="h-5 w-3/4 rounded bg-[var(--color-surface-variant)] mb-2" />
-    <div className="h-3 w-1/3 rounded bg-[var(--color-surface-variant)]" />
   </div>
 );
 
@@ -272,10 +266,41 @@ const GeneratePlaylistModal: React.FC<{ onClose: () => void; onGenerated: () => 
   );
 };
 
+// ─── Rail ─────────────────────────────────────────────────────────────────────
+
+// A titled horizontal shelf of playlist cards, mirroring the Hub's rail layout.
+const PlaylistRail: React.FC<{ title: string; subtitle?: string; children: React.ReactNode }> = ({
+  title,
+  subtitle,
+  children,
+}) => (
+  <section>
+    <div className="mb-3">
+      <h2 className="text-lg sm:text-xl font-bold text-[var(--color-text-primary)]">{title}</h2>
+      {subtitle && <p className="text-sm text-[var(--color-text-secondary)] mt-0.5">{subtitle}</p>}
+    </div>
+    <HorizontalScrollRail
+      ariaLabel={title}
+      viewportClassName="flex overflow-x-auto snap-x snap-mandatory gap-4 sm:gap-5 hide-scrollbar pb-1"
+    >
+      {children}
+    </HorizontalScrollRail>
+  </section>
+);
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export const Playlists: React.FC = () => {
-  const { playlists, setPlaylist, deletePlaylist, togglePin, fetchPlaylistsFromServer, isPlaylistsLoading } = usePlayerStore();
+  const {
+    playlists,
+    discoverPlaylists,
+    setPlaylist,
+    deletePlaylist,
+    togglePin,
+    fetchPlaylistsFromServer,
+    fetchDiscoverPlaylists,
+    isPlaylistsLoading,
+  } = usePlayerStore();
   const navigate = useNavigate();
   const pageRef = useRef<HTMLDivElement>(null);
 
@@ -285,7 +310,8 @@ export const Playlists: React.FC = () => {
 
   useEffect(() => {
     void fetchPlaylistsFromServer();
-  }, [fetchPlaylistsFromServer]);
+    void fetchDiscoverPlaylists();
+  }, [fetchPlaylistsFromServer, fetchDiscoverPlaylists]);
 
   // Created via the modal; open the new (empty) playlist so the user can start
   // adding tracks right away.
@@ -317,12 +343,66 @@ export const Playlists: React.FC = () => {
     ? playlists.find((p) => p.id === activeMenu.playlist.id) ?? activeMenu.playlist
     : null;
 
-  // Pinned first, then original order
-  const sorted = [...playlists].sort((a, b) => {
-    if (a.pinned && !b.pinned) return -1;
-    if (!a.pinned && b.pinned) return 1;
-    return 0;
+  // `playlists` holds the current user's own playlists (from GET /api/playlists);
+  // a discovered playlist opened by URL also gets upserted there with isOwner:false
+  // — exclude those so the own-playlist rails stay strictly the user's own.
+  const ownPlaylists = playlists.filter((p) => p.isOwner !== false);
+
+  // Pinned bubble to the front of whichever category rail they belong to.
+  const pinnedFirst = (arr: Playlist[]) =>
+    [...arr].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+
+  // Partition own playlists by nature: manual (hand-built), AI (LLM-generated),
+  // radios (artist-radio smart playlists), and the remaining system/smart ones
+  // (daylist, on-repeat, rewinds…). These four buckets are disjoint and cover
+  // every own playlist.
+  const isRadio = (p: Playlist) => p.generationSource === 'artist-radio';
+  const userPlaylists = pinnedFirst(ownPlaylists.filter((p) => !p.isLlmGenerated && !p.isSystem));
+  const llmPlaylists = pinnedFirst(ownPlaylists.filter((p) => p.isLlmGenerated));
+  const radioPlaylists = pinnedFirst(ownPlaylists.filter((p) => p.isSystem && isRadio(p)));
+  const curatedPlaylists = pinnedFirst(ownPlaylists.filter((p) => p.isSystem && !isRadio(p)));
+
+  const buildHero = (pl: Playlist): PlaylistHeroState => ({
+    kind: 'playlist',
+    title: pl.title,
+    description: pl.description || undefined,
+    trackCount: pl.tracks.length,
+    artUrls: pl.tracks.map((t) => t.artUrl).filter((u): u is string => !!u).slice(0, 4),
+    isLlmGenerated: pl.isLlmGenerated || false,
+    isSystem: pl.isSystem || false,
+    pinned: pl.pinned || false,
+    backLabel: 'Back to Playlists',
   });
+
+  const renderCard = (pl: Playlist, opts?: { ownerName?: string; showMenu?: boolean }) => (
+    <div key={pl.id ?? pl.title} className="shrink-0 snap-start w-[min(52vw,200px)] sm:w-[190px]">
+      <PlaylistCard
+        playlist={pl}
+        ownerName={opts?.ownerName}
+        showMenu={opts?.showMenu ?? true}
+        onOpen={() => navigate(`/playlists/${pl.id}`, { state: buildHero(pl) })}
+        onPlay={() => { if (pl.tracks.length > 0) setPlaylist(pl.tracks, 0); }}
+        onMenuOpen={(x, y) => openMenu(pl, x, y)}
+      />
+    </div>
+  );
+
+  const renderRail = (
+    title: string,
+    items: Playlist[],
+    opts?: { subtitle?: string; discover?: boolean }
+  ) =>
+    items.length > 0 ? (
+      <PlaylistRail key={title} title={title} subtitle={opts?.subtitle}>
+        {items.map((pl) =>
+          opts?.discover
+            ? renderCard(pl, { ownerName: pl.ownerUsername || undefined, showMenu: false })
+            : renderCard(pl)
+        )}
+      </PlaylistRail>
+    ) : null;
+
+  const hasAnything = ownPlaylists.length > 0 || discoverPlaylists.length > 0;
 
   return (
     <div ref={pageRef} className="page-container space-y-8">
@@ -367,7 +447,7 @@ export const Playlists: React.FC = () => {
             Your Playlists
           </h1>
           <p className="text-sm text-[var(--color-text-secondary)] mt-1">
-            {playlists.length} {playlists.length === 1 ? 'playlist' : 'playlists'} in your library
+            {ownPlaylists.length} {ownPlaylists.length === 1 ? 'playlist' : 'playlists'} in your library
           </p>
         </div>
 
@@ -384,14 +464,16 @@ export const Playlists: React.FC = () => {
         </div>
       </header>
 
-      {/* ── Grid ── */}
-      {isPlaylistsLoading && playlists.length === 0 ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5 lg:gap-6">
+      {/* ── Rails ── */}
+      {isPlaylistsLoading && !hasAnything ? (
+        <div className="flex gap-4 sm:gap-5 overflow-hidden">
           {Array.from({ length: 6 }).map((_, i) => (
-            <PlaylistCardSkeleton key={i} />
+            <div key={i} className="shrink-0 w-[min(52vw,200px)] sm:w-[190px]">
+              <PlaylistCardSkeleton />
+            </div>
           ))}
         </div>
-      ) : playlists.length === 0 ? (
+      ) : !hasAnything ? (
         <div className="flex flex-col items-center justify-center py-20 text-center">
           <div className="w-16 h-16 rounded-full bg-[var(--color-surface-variant)] flex items-center justify-center mb-4">
             <Sparkles className="w-8 h-8 text-[var(--color-primary)]" />
@@ -414,36 +496,16 @@ export const Playlists: React.FC = () => {
           </div>
         </div>
       ) : (
-        <VirtualizedCardGrid
-          items={sorted}
-          getKey={(pl) => pl.id ?? pl.title}
-          estimatedRowHeight={() => PLAYLIST_CARD_HEIGHT}
-          scrollParentRef={pageRef}
-          columnBreakpoints={PLAYLIST_BREAKPOINTS}
-          rowGapForWidth={playlistGap}
-          columnGapForWidth={playlistGap}
-          renderItem={(pl) => {
-            const hero: PlaylistHeroState = {
-              kind: 'playlist',
-              title: pl.title,
-              description: pl.description || undefined,
-              trackCount: pl.tracks.length,
-              artUrls: pl.tracks.map((t) => t.artUrl).filter((u): u is string => !!u).slice(0, 4),
-              isLlmGenerated: pl.isLlmGenerated || false,
-              isSystem: pl.isSystem || false,
-              pinned: pl.pinned || false,
-              backLabel: 'Back to Playlists',
-            };
-            return (
-              <PlaylistCard
-                playlist={pl}
-                onOpen={() => navigate(`/playlists/${pl.id}`, { state: hero })}
-                onPlay={() => { if (pl.tracks.length > 0) setPlaylist(pl.tracks, 0); }}
-                onMenuOpen={(x, y) => openMenu(pl, x, y)}
-              />
-            );
-          }}
-        />
+        <div className="space-y-8">
+          {renderRail('Your playlists', userPlaylists)}
+          {renderRail('AI playlists', llmPlaylists)}
+          {renderRail('Radios', radioPlaylists)}
+          {renderRail('Curated for you', curatedPlaylists)}
+          {renderRail('By other listeners', discoverPlaylists, {
+            subtitle: 'Playlists shared across your household',
+            discover: true,
+          })}
+        </div>
       )}
     </div>
   );

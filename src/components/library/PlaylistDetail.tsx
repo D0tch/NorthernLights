@@ -1,4 +1,4 @@
-import React, { memo, useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from 'react';
+import React, { memo, useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import {
@@ -24,7 +24,10 @@ import {
   Disc3,
   GripVertical,
   Loader2,
+  Lock,
+  LockOpen,
   MoreHorizontal,
+  Pencil,
   Pin,
   Play,
   Plus,
@@ -34,7 +37,6 @@ import {
 import { AlbumArt } from '../AlbumArt';
 import { LoveButton } from '../LoveButton';
 import { BackButton } from './BackButton';
-import { useDominantColor } from '../../hooks/useDominantColor';
 import { useToast } from '../../hooks/useToast';
 import { usePlayerStore } from '../../store';
 import { formatTime } from '../../utils/formatTime';
@@ -90,6 +92,125 @@ function getSmartPlaylistPreparationUrl(playlistId: string): string | null {
   }
   return null;
 }
+
+interface InlineEditableTextProps {
+  /** The raw, editable value (may be empty even when a placeholder is displayed). */
+  value: string;
+  /** Persist a trimmed, changed value. Not called when unchanged (or emptied when allowEmpty is false). */
+  onSave: (next: string) => void;
+  ariaLabel: string;
+  placeholder?: string;
+  /** Font/colour classes for the text. */
+  textClassName: string;
+  /**
+   * Width/flex utilities for the wrapper, controlling how the field sizes within
+   * its parent — e.g. `'w-full'` (block) or `'flex-1 min-w-0'` (flex row). The
+   * field itself is always `w-full` of this wrapper.
+   */
+  fieldClassName?: string;
+  /** Allow saving an empty value (description). When false (title), emptying reverts. */
+  allowEmpty?: boolean;
+  pencilSize?: number;
+}
+
+/**
+ * Hover-to-reveal inline editor. ONE <textarea> stays mounted and just toggles
+ * readOnly between view and edit — using the same element for both makes the
+ * box (width, wrapping, height, text position) identical, so entering edit mode
+ * feels like editing the text in place with no layout shift. The textarea
+ * soft-wraps to follow its container width; Enter commits (no newlines), Escape
+ * cancels, blur commits. Used for the playlist name and description.
+ */
+const InlineEditableText: React.FC<InlineEditableTextProps> = ({
+  value,
+  onSave,
+  ariaLabel,
+  placeholder,
+  textClassName,
+  fieldClassName = 'w-full',
+  allowEmpty = false,
+  pencilSize = 16,
+}) => {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Keep the draft in sync with external changes while not actively editing.
+  useEffect(() => {
+    if (!editing) setDraft(value);
+  }, [value, editing]);
+
+  const autosize = useCallback((el: HTMLTextAreaElement) => {
+    el.style.height = 'auto';
+    el.style.height = `${el.scrollHeight}px`;
+  }, []);
+
+  useEffect(() => {
+    if (editing) inputRef.current?.focus();
+  }, [editing]);
+
+  // Auto-size to content in both read-only and edit states so the box height is
+  // identical whether or not you're editing.
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (el) autosize(el);
+  }, [value, draft, editing, autosize]);
+
+  const commit = useCallback(() => {
+    setEditing(false);
+    const next = draft.trim();
+    if (next === value || (!allowEmpty && next.length === 0)) {
+      setDraft(value);
+      return;
+    }
+    onSave(next);
+  }, [draft, value, allowEmpty, onSave]);
+
+  const cancel = useCallback(() => {
+    setDraft(value);
+    setEditing(false);
+  }, [value]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commit();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      cancel();
+    }
+  };
+
+  return (
+    <div className={`group/edit relative ${fieldClassName}`}>
+      <textarea
+        ref={inputRef}
+        value={editing ? draft : value}
+        readOnly={!editing}
+        rows={1}
+        aria-label={ariaLabel}
+        placeholder={placeholder}
+        onChange={(e) => { setDraft(e.target.value); autosize(e.target); }}
+        onMouseDown={() => { if (!editing) setEditing(true); }}
+        onFocus={() => { if (!editing) setEditing(true); }}
+        onBlur={commit}
+        onKeyDown={handleKeyDown}
+        // `pr-9` reserves the gutter the pencil floats in; `py-0 pl-0` strips the
+        // control's intrinsic padding; the focus-visible overrides drop the
+        // global green focus outline, leaving only the bottom border.
+        className={`${textClassName} block w-full pr-9 py-0 pl-0 bg-transparent border-b-2 outline-none focus:outline-none focus-visible:outline-none resize-none overflow-hidden cursor-text placeholder:italic placeholder:text-[var(--color-text-muted)] ${editing ? 'border-[var(--color-primary)]' : 'border-transparent'}`}
+      />
+      <button
+        type="button"
+        aria-label={ariaLabel}
+        onClick={(e) => { e.stopPropagation(); setEditing(true); inputRef.current?.focus(); }}
+        className="absolute right-0 top-1.5 shrink-0 rounded-md p-1.5 text-[var(--color-text-muted)] opacity-0 transition-opacity hover:bg-black/5 hover:text-[var(--color-primary)] focus-visible:opacity-100 group-hover/edit:opacity-100 dark:hover:bg-white/10"
+      >
+        <Pencil size={pencilSize} />
+      </button>
+    </div>
+  );
+};
 
 const PlaylistDetailSkeleton: React.FC<{ onBack: () => void; hero?: PlaylistHeroState }> = ({ onBack, hero }) => {
   const heroArt = (hero?.artUrls || []).slice(0, 4);
@@ -377,11 +498,12 @@ export const PlaylistDetail: React.FC = () => {
     playlistId ? `/api/playlists/${encodeURIComponent(playlistId)}/suggestions` : null,
   );
   const artists = usePlayerStore((state) => state.artists);
-  const currentUser = usePlayerStore((state) => state.currentUser);
   const setPlaylist = usePlayerStore((state) => state.setPlaylist);
   const playNext = usePlayerStore((state) => state.playNext);
   const openContextMenu = usePlayerStore((state) => state.openContextMenu);
   const replaceTracksInUserPlaylist = usePlayerStore((state) => state.replaceTracksInUserPlaylist);
+  const updatePlaylistMeta = usePlayerStore((state) => state.updatePlaylistMeta);
+  const togglePlaylistPrivacy = usePlayerStore((state) => state.togglePlaylistPrivacy);
   const addTracksToUserPlaylist = usePlayerStore((state) => state.addTracksToUserPlaylist);
   const fetchPlaylistsFromServer = usePlayerStore((state) => state.fetchPlaylistsFromServer);
   const fetchPlaylistFromServer = usePlayerStore((state) => state.fetchPlaylistFromServer);
@@ -448,10 +570,18 @@ export const PlaylistDetail: React.FC = () => {
   }, [fetchPlaylistFromServer, fetchPlaylistsFromServer, getAuthHeader, playlist, playlistId]);
 
   const isSystemPlaylist = !!playlist?.isSystem;
+  // Ownership mirrors the Playlists tab: a playlist is the current user's unless
+  // the server explicitly flagged it isOwner:false. Every playlist from
+  // GET /api/playlists is the user's own by construction (so isOwner is absent
+  // there); only discovered playlists from other users carry isOwner:false. This
+  // avoids depending on currentUser.id being populated/matching, which broke
+  // editing your own playlists. The backend still enforces owner-only writes.
+  const isOwner = !!playlist && playlist.isOwner !== false;
+  // Anyone may listen; only the owner of a non-system playlist may edit it.
+  const canEdit = isOwner && !isSystemPlaylist;
   const playlistTracks = playlist?.tracks || [];
   const trackListRef = useRef<HTMLDivElement>(null);
   const deferredPlaylistTracks = useDeferredValue(playlistTracks);
-  const { bgColor } = useDominantColor(playlistTracks);
 
   const heroArtUrls = useMemo(
     () => Array.from(new Set(playlistTracks.map((track) => track.artUrl).filter(Boolean) as string[])).slice(0, 8),
@@ -626,7 +756,33 @@ export const PlaylistDetail: React.FC = () => {
     }
   }, [playlist, getAuthHeader, addToast]);
 
-  const renderPlaylistTrackRow = useCallback((track: TrackInfo, index: number, readOnly = isSystemPlaylist) => {
+  const handleSaveMeta = useCallback(
+    async (updates: { title?: string; description?: string }) => {
+      if (!playlist?.id) return;
+      try {
+        await updatePlaylistMeta(playlist.id, updates);
+      } catch {
+        addToast('Failed to save changes.', 'error');
+      }
+    },
+    [playlist?.id, updatePlaylistMeta, addToast]
+  );
+
+  const handleTogglePrivacy = useCallback(async () => {
+    if (!playlist?.id) return;
+    const nextPrivate = !playlist.isPrivate;
+    try {
+      await togglePlaylistPrivacy(playlist.id, nextPrivate);
+      addToast(
+        nextPrivate ? 'Playlist hidden from others.' : 'Playlist is now discoverable.',
+        'info'
+      );
+    } catch {
+      addToast('Failed to update privacy.', 'error');
+    }
+  }, [playlist?.id, playlist?.isPrivate, togglePlaylistPrivacy, addToast]);
+
+  const renderPlaylistTrackRow = useCallback((track: TrackInfo, index: number, readOnly = !canEdit) => {
     const itemId = sortableItems[index];
     if (!playlist || !itemId) return null;
 
@@ -652,7 +808,7 @@ export const PlaylistDetail: React.FC = () => {
     getArtistLink,
     handleMoveTrack,
     handlePlayFromIndex,
-    isSystemPlaylist,
+    canEdit,
     openContextMenu,
     playbackState,
     playlist,
@@ -681,12 +837,6 @@ export const PlaylistDetail: React.FC = () => {
     <div className="page-container relative overflow-x-hidden">
       <div className="pointer-events-none absolute left-1/2 top-0 h-[32rem] md:h-[44rem] w-screen -translate-x-1/2 overflow-hidden z-0">
         <div
-          className="absolute inset-0"
-          style={{
-            background: `radial-gradient(circle at top, color-mix(in srgb, ${bgColor} 18%, transparent) 0%, transparent 64%)`,
-          }}
-        />
-        <div
           className="absolute left-1/2 top-[-4%] grid w-[165vw] md:w-[138vw] lg:w-[118vw] grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-3 opacity-20 md:opacity-25"
           style={{
             transform: 'translateX(-50%) rotate(-18deg) scale(1.1)',
@@ -709,10 +859,6 @@ export const PlaylistDetail: React.FC = () => {
             </div>
           ))}
         </div>
-        <div className="absolute inset-0 bg-gradient-to-b from-[var(--color-bg)]/14 via-transparent via-10% to-transparent" />
-        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent via-18% to-[var(--color-bg)]/82" />
-        <div className="absolute bottom-0 left-0 w-full h-44 md:h-56 bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)]/94 via-46% to-transparent" />
-        <div className="absolute bottom-0 left-0 w-full h-24 md:h-32 bg-[radial-gradient(ellipse_at_center,rgba(0,0,0,0.08)_0%,transparent_72%)] dark:bg-[radial-gradient(ellipse_at_center,rgba(255,255,255,0.05)_0%,transparent_72%)]" />
       </div>
 
       <div className="relative z-10">
@@ -743,13 +889,27 @@ export const PlaylistDetail: React.FC = () => {
                 ? 'Curated for You'
                 : playlist.isLlmGenerated
                   ? 'AI Curated Playlist'
-                  : `Playlist by ${currentUser?.username || 'You'}`}
+                  : isOwner
+                    ? 'Playlist by You'
+                    : `Playlist by ${playlist.ownerUsername || 'another listener'}`}
             </div>
 
             <div className="flex flex-wrap items-center gap-3 my-2">
-              <h1 className="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight leading-tight text-[var(--color-text-primary)] line-clamp-2" title={playlist.title}>
-                {playlist.title}
-              </h1>
+              {canEdit ? (
+                <InlineEditableText
+                  value={playlist.title}
+                  ariaLabel="Edit playlist name"
+                  placeholder="Playlist name"
+                  fieldClassName="flex-1 min-w-0"
+                  textClassName="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight leading-tight text-[var(--color-text-primary)]"
+                  pencilSize={20}
+                  onSave={(next) => handleSaveMeta({ title: next })}
+                />
+              ) : (
+                <h1 className="font-bold text-4xl md:text-5xl lg:text-6xl tracking-tight leading-tight text-[var(--color-text-primary)] line-clamp-2" title={playlist.title}>
+                  {playlist.title}
+                </h1>
+              )}
               {currentTrackId && playlistTracks.some(t => t.id === currentTrackId) && playbackState !== 'stopped' && (
                 <NowPlayingBadge state={playbackState === 'playing' ? 'playing' : 'paused'} className="self-center shrink-0" />
               )}
@@ -768,11 +928,26 @@ export const PlaylistDetail: React.FC = () => {
               </span>
             </h2>
 
-            <p className="shrink-0 text-sm text-[var(--color-text-secondary)] leading-relaxed mb-4 mt-2 line-clamp-3 max-w-3xl">
-              {playlist.description || (isSystemPlaylist
-                ? 'Refreshed automatically based on your listening.'
-                : 'Reorder the sequence, trim the weak links, and grow this playlist with nearby tracks from your library.')}
-            </p>
+            {canEdit ? (
+              <div className="mb-4 mt-2 w-full max-w-3xl">
+                <InlineEditableText
+                  value={playlist.description || ''}
+                  allowEmpty
+                  ariaLabel="Edit playlist description"
+                  placeholder="Add a description…"
+                  fieldClassName="w-full"
+                  textClassName="text-sm text-[var(--color-text-secondary)] leading-relaxed"
+                  pencilSize={14}
+                  onSave={(next) => handleSaveMeta({ description: next })}
+                />
+              </div>
+            ) : (
+              (playlist.description || isSystemPlaylist) && (
+                <p className="shrink-0 text-sm text-[var(--color-text-secondary)] leading-relaxed mb-4 mt-2 line-clamp-3 max-w-3xl">
+                  {playlist.description || 'Refreshed automatically based on your listening.'}
+                </p>
+              )
+            )}
 
             <div className="mt-2 flex flex-wrap justify-center md:justify-start items-center gap-3 w-full md:w-auto">
               <button
@@ -785,7 +960,7 @@ export const PlaylistDetail: React.FC = () => {
                   Play Playlist
                 </span>
               </button>
-              {!isSystemPlaylist && playlist.id && (
+              {canEdit && playlist.id && (
                 <button
                   onClick={handleShare}
                   className="btn btn-ghost btn-lg"
@@ -794,6 +969,21 @@ export const PlaylistDetail: React.FC = () => {
                   <span className="inline-flex items-center gap-2">
                     <Share2 size={18} />
                     Share
+                  </span>
+                </button>
+              )}
+              {canEdit && playlist.id && (
+                <button
+                  onClick={handleTogglePrivacy}
+                  className="btn btn-ghost btn-lg"
+                  aria-label={playlist.isPrivate ? 'Make this playlist discoverable' : 'Hide this playlist from others'}
+                  title={playlist.isPrivate
+                    ? 'Private — only you can see this playlist'
+                    : 'Discoverable — other listeners can find and play this playlist'}
+                >
+                  <span className="inline-flex items-center gap-2">
+                    {playlist.isPrivate ? <Lock size={18} /> : <LockOpen size={18} />}
+                    {playlist.isPrivate ? 'Private' : 'Discoverable'}
                   </span>
                 </button>
               )}
@@ -820,11 +1010,13 @@ export const PlaylistDetail: React.FC = () => {
 
           {playlistTracks.length === 0 ? (
             <div className="px-6 py-12 text-center text-[var(--color-text-secondary)] border-b border-black/5 dark:border-white/5">
-              {isSystemPlaylist
-                ? 'No tracks yet — listen to a few songs and check back soon.'
-                : 'Add tracks from the library to start shaping this playlist.'}
+              {canEdit
+                ? 'Add tracks from the library to start shaping this playlist.'
+                : isSystemPlaylist
+                  ? 'No tracks yet — listen to a few songs and check back soon.'
+                  : 'This playlist is empty.'}
             </div>
-          ) : isSystemPlaylist ? (
+          ) : !canEdit ? (
             <div
               ref={trackListRef}
               className={shouldVirtualizePlaylistRows ? 'max-h-[70vh] overflow-y-auto overflow-x-hidden hide-scrollbar pr-1' : undefined}
@@ -915,7 +1107,7 @@ export const PlaylistDetail: React.FC = () => {
           )}
         </div>
 
-        {!isSystemPlaylist && suggestionEntries.length > 0 && (
+        {canEdit && suggestionEntries.length > 0 && (
           <div className="pt-2">
             <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
               <div className="min-w-0">
