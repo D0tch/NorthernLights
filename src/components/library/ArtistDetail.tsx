@@ -288,7 +288,7 @@ export const ArtistDetail: React.FC = () => {
     // works without the full in-memory library. `library` is still used as a
     // fallback and for the cross-artist "appears on" list until that moves
     // server-side. Source for the album art/track maps below.
-    const { tracks: artistTracks, loading: artistTracksLoading } = useEntityTracks(
+    const { tracks: artistTracks, meta: artistMeta, loading: artistTracksLoading } = useEntityTracks<{ name?: string }>(
         artistId ? `/api/artists/${encodeURIComponent(artistId)}` : null,
     );
     // "Appears on" / collaborations — server-computed so it works without the
@@ -337,7 +337,11 @@ export const ArtistDetail: React.FC = () => {
 
     // Find artist info from entity list
     const artistInfo = useMemo(() => artists.find(a => a.id === artistId), [artists, artistId]);
-    const artistName = artistInfo?.name || '';
+    // Prefer the in-memory entity row, but fall back to the authoritative name
+    // from /api/artists/:id. The endpoint resolves merged artists and includes
+    // credit-only artists (composers, lyricists, …) that aren't in the in-memory
+    // list, so credited-author links resolve instead of showing "Artist not found".
+    const artistName = artistInfo?.name || artistMeta?.name || '';
 
     // Get MusicBrainz artist ID from the first track that has one
     const mbArtistId = useMemo(() => {
@@ -366,6 +370,7 @@ export const ArtistDetail: React.FC = () => {
     // maestro, performer for everyone else.
     const [rolesInLibrary, setRolesInLibrary] = useState<Array<{ role: string; credits: number }>>([]);
     const [albumsByRole, setAlbumsByRole] = useState<Record<string, any[]>>({});
+    const [creditsLoading, setCreditsLoading] = useState<boolean>(true);
     const [selectedRole, setSelectedRole] = useState<string>('all');
     const linksButtonRef = useRef<HTMLButtonElement>(null);
     const isArtistPlaying = useIsCurrentCollection({ artistId: artistId ?? undefined });
@@ -425,11 +430,13 @@ export const ArtistDetail: React.FC = () => {
         if (!artistId) {
             setRolesInLibrary([]);
             setAlbumsByRole({});
+            setCreditsLoading(false);
             setSelectedRole('all');
             return;
         }
         let cancelled = false;
         setSelectedRole('all');
+        setCreditsLoading(true);
         fetch(`/api/artists/${artistId}/credits`, { headers: getAuthHeader() })
             .then(res => res.ok ? res.json() : null)
             .then(data => {
@@ -442,6 +449,9 @@ export const ArtistDetail: React.FC = () => {
                     setRolesInLibrary([]);
                     setAlbumsByRole({});
                 }
+            })
+            .finally(() => {
+                if (!cancelled) setCreditsLoading(false);
             });
         return () => { cancelled = true; };
     }, [artistId, getAuthHeader]);
@@ -691,9 +701,15 @@ export const ArtistDetail: React.FC = () => {
         return result.slice(0, 12);
     }, [genres, communityTags]);
 
-    const hasAnyContent = primaryTracks.length > 0 || collaborationTracks.length > 0 || featuredTracks.length > 0;
+    // Credit-only artists (e.g. a composer with no tracks they primarily perform)
+    // have no primary/collab/featured tracks, but their page is still meaningful:
+    // it shows the roles they hold and the albums they're credited on. Count that
+    // as content so the page renders instead of falling through to "not found".
+    const hasCreditContent = rolesInLibrary.length > 0 ||
+        Object.values(albumsByRole).some(list => Array.isArray(list) && list.length > 0);
+    const hasAnyContent = primaryTracks.length > 0 || collaborationTracks.length > 0 || featuredTracks.length > 0 || hasCreditContent;
 
-    if ((isLibraryLoading || artistTracksLoading) && (!artistName || !hasAnyContent)) {
+    if ((isLibraryLoading || artistTracksLoading || creditsLoading) && (!artistName || !hasAnyContent)) {
         return <ArtistDetailSkeleton onBack={() => navigate(-1)} hero={heroState} />;
     }
 
