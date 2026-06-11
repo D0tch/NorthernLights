@@ -2420,7 +2420,19 @@ export async function getGenreById(id: string) {
 
 export async function getAllArtists() {
   const db = await initDB();
-  const res = await db.query('SELECT * FROM artists WHERE merged_into IS NULL ORDER BY name ASC');
+  // Lean projection for the Artists grid + its facet filters only. The grid
+  // needs id/name/image_url/artwork_url; the Genre/Type/Country/Decade facets
+  // need genres/community_tags/artist_type/area/lifespan_begin. Everything else
+  // on the row (bio, links, members, listeners, disambiguation, …) is shipped
+  // for nothing here — the detail page fetches the full row via getArtistById.
+  // `SELECT *` over ~5k+ artists bloated the boot payload and its main-thread
+  // JSON.parse, which was a real cost on mobile; this keeps the list tiny.
+  const res = await db.query(
+    `SELECT id, name, image_url, artwork_url, genres, community_tags, artist_type, area, lifespan_begin
+       FROM artists
+      WHERE merged_into IS NULL
+      ORDER BY name ASC`
+  );
   return res.rows;
 }
 
