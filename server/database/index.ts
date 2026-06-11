@@ -2271,9 +2271,12 @@ export async function getCreditsStatus(): Promise<{ total: number; bySource: Rec
   };
 }
 
-// Returns up to `limit` tracks that have an mb_recording_id but no
-// credits from MusicBrainz yet. Powers the MB enrichment job.
-export async function getTracksNeedingMbCredits(limit: number): Promise<Array<{ id: string; mb_recording_id: string; title: string; artist: string }>> {
+// Full work-list for the MB credit-enrichment job: every track with an
+// mb_recording_id but no MusicBrainz credits yet, capped to keep the in-memory
+// list bounded on very large libraries. The job iterates this list once, so a
+// recording MB has no credits for is attempted exactly once per run — progress
+// is measured by tracks *attempted*, not credited, so the bar can reach 100%.
+export async function listTracksNeedingMbCredits(max = 100000): Promise<Array<{ id: string; mb_recording_id: string; title: string; artist: string }>> {
   const db = await initDB();
   const res = await db.query(
     `SELECT t.id, t.mb_recording_id, t.title, COALESCE(t.artist, t.album_artist) AS artist
@@ -2284,15 +2287,21 @@ export async function getTracksNeedingMbCredits(limit: number): Promise<Array<{ 
          WHERE tac.track_id = t.id AND tac.source = 'musicbrainz'
        )
      LIMIT $1`,
-    [Math.max(1, Math.min(5000, limit))]
+    [Math.max(1, Math.min(500000, max))]
   );
   return res.rows as any[];
 }
 
+
 // Returns up to `limit` tracks that don't yet have Genius credits.
 // Prefers tracks with a cached genius_song_id so they skip the search
 // round-trip; falls back to (title, artist) for new tracks.
-export async function getTracksNeedingGeniusCredits(limit: number): Promise<Array<{ id: string; title: string; artist: string; genius_song_id: string | null }>> {
+// Full work-list for the Genius credit-enrichment job (every track with a
+// title + artist and no Genius credits yet), capped to keep the list bounded.
+// Tracks whose Genius song id is already resolved come first so the second
+// pass skips the search step. See listTracksNeedingMbCredits for why the job
+// iterates a single snapshot rather than re-querying per batch.
+export async function listTracksNeedingGeniusCredits(max = 100000): Promise<Array<{ id: string; title: string; artist: string; genius_song_id: string | null }>> {
   const db = await initDB();
   const res = await db.query(
     `SELECT t.id, t.title, COALESCE(t.artist, t.album_artist) AS artist, t.genius_song_id
@@ -2305,7 +2314,7 @@ export async function getTracksNeedingGeniusCredits(limit: number): Promise<Arra
        )
      ORDER BY (t.genius_song_id IS NOT NULL) DESC
      LIMIT $1`,
-    [Math.max(1, Math.min(5000, limit))]
+    [Math.max(1, Math.min(500000, max))]
   );
   return res.rows as any[];
 }

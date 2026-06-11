@@ -10,7 +10,7 @@ import { loveTrack, unloveTrack } from '../services/lastfm.service';
 import { submitMbRecordingRating } from '../services/musicbrainz.service';
 import { scanStatus, scanClients, broadcastScanStatus } from '../state';
 import { requireAdmin } from '../middleware/auth';
-import { enrichCreditsFromMusicBrainz, enrichCreditsFromGenius } from '../services/creditsEnrichment.service';
+import { startMbCreditsEnrichment, getMbCreditsProgress, startGeniusCreditsEnrichment, getGeniusCreditsProgress } from '../services/creditsEnrichment.service';
 import { enrichArtistImages, enrichArtistImagesInBackground } from '../services/artistImageEnrichment.service';
 import { getCreditsStatus, refreshArtistAudioProfiles, searchLibrary, getExistingTrackIds } from '../database';
 import { createRateLimiter } from '../middleware/rateLimit';
@@ -149,10 +149,11 @@ router.get('/credits/status', requireAdmin, async (_req, res) => {
   }
 });
 
-router.post('/credits/enrich/musicbrainz', requireAdmin, async (req, res) => {
+// Start the MusicBrainz credit-enrichment background job (throttled to ~1 req/s,
+// so it can run for minutes). Returns immediately; the client polls /progress.
+router.post('/credits/enrich/musicbrainz', requireAdmin, async (_req, res) => {
   try {
-    const limit = typeof req.body?.limit === 'number' ? req.body.limit : undefined;
-    const result = await enrichCreditsFromMusicBrainz({ limit });
+    const result = await startMbCreditsEnrichment();
     res.json(result);
   } catch (err: any) {
     console.error('[Credits] MB enrichment error:', err);
@@ -160,15 +161,24 @@ router.post('/credits/enrich/musicbrainz', requireAdmin, async (req, res) => {
   }
 });
 
-router.post('/credits/enrich/genius', requireAdmin, async (req, res) => {
+router.get('/credits/enrich/musicbrainz/progress', requireAdmin, (_req, res) => {
+  res.json(getMbCreditsProgress());
+});
+
+// Start the Genius credit-enrichment background job. Returns immediately; the
+// client polls /progress.
+router.post('/credits/enrich/genius', requireAdmin, async (_req, res) => {
   try {
-    const limit = typeof req.body?.limit === 'number' ? req.body.limit : undefined;
-    const result = await enrichCreditsFromGenius({ limit });
+    const result = await startGeniusCreditsEnrichment();
     res.json(result);
   } catch (err: any) {
     console.error('[Credits] Genius enrichment error:', err);
     res.status(500).json({ error: err?.message || 'Genius enrichment failed' });
   }
+});
+
+router.get('/credits/enrich/genius/progress', requireAdmin, (_req, res) => {
+  res.json(getGeniusCreditsProgress());
 });
 
 // Backfill artist pictures for the whole library using the configured artist-image
