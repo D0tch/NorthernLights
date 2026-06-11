@@ -375,6 +375,16 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                 <div className="library-sections">
                     {showAlbums && (
                         <section className="library-section mb-8 md:mb-12">
+                            {/* Render the real FilterBar (empty facets while loading) so the
+                                grid starts at its final Y — otherwise it appears on the real
+                                view and shifts everything down (a CLS the user can see). */}
+                            <FilterBar
+                                view="albums"
+                                filterState={albumFilters}
+                                onFilterChange={setAlbumFilters}
+                                onOpenQueryBuilder={() => handleOpenQueryBuilder('albums')}
+                                facetValues={albumFacetValues}
+                            />
                             <div className="album-grid">
                                 {Array.from({ length: GRID_SKELETON_COUNT }).map((_, i) => (
                                     <AlbumCardSkeleton key={i} />
@@ -384,6 +394,13 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                     )}
                     {showArtists && (
                         <section className="library-section mb-8 md:mb-12">
+                            <FilterBar
+                                view="artists"
+                                filterState={artistFilters}
+                                onFilterChange={setArtistFilters}
+                                onOpenQueryBuilder={() => handleOpenQueryBuilder('artists')}
+                                facetValues={artistFacetValues}
+                            />
                             <div className="artist-grid">
                                 {Array.from({ length: GRID_SKELETON_COUNT }).map((_, i) => (
                                     <ArtistCardSkeleton key={i} />

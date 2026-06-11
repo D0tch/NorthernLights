@@ -10,8 +10,15 @@ export const InviteRegister = React.lazy(() => import('./InviteRegister').then(m
 
 const RouteFallback: React.FC = () => (
   <div className="page-container">
-    <div className="h-8 w-32 rounded bg-[var(--color-surface-variant)] animate-pulse mb-2" />
-    <div className="h-4 w-48 rounded bg-[var(--color-surface-variant)] animate-pulse mb-8" />
+    {/* Filter-toolbar-shaped placeholder (~80px footprint, matching FilterBar's
+        ~56px rack + 24px margin) so the grid sits at the same Y as the real
+        library views — avoids the layout shift when this fallback is replaced.
+        A neutral row of pills is also harmless for the non-library lazy routes. */}
+    <div className="flex gap-2 py-2.5 mb-6">
+      {Array.from({ length: 5 }).map((_, i) => (
+        <div key={i} className="h-9 w-10 rounded-xl bg-[var(--color-surface-variant)] animate-pulse" />
+      ))}
+    </div>
     <div className="album-grid">
       {Array.from({ length: 8 }).map((_, i) => (
         <div key={i} className="flex flex-col animate-pulse">
@@ -57,8 +64,14 @@ export const MainContent: React.FC = () => {
         {!hasLibrary ? (
           isLibraryLoading && location.pathname !== '/library' ? (
             <div className="page-container">
-              <div className="h-8 w-32 rounded bg-[var(--color-surface-variant)] animate-pulse mb-2" />
-              <div className="h-4 w-48 rounded bg-[var(--color-surface-variant)] animate-pulse mb-8" />
+              {/* Same filter-toolbar-shaped placeholder as RouteFallback so the
+                  whole loading chain (this → route fallback → real view) keeps the
+                  grid at one Y and doesn't shift. */}
+              <div className="flex gap-2 py-2.5 mb-6">
+                {Array.from({ length: 5 }).map((_, i) => (
+                  <div key={i} className="h-9 w-10 rounded-xl bg-[var(--color-surface-variant)] animate-pulse" />
+                ))}
+              </div>
               <div className="album-grid">
                 {Array.from({ length: 12 }).map((_, i) => (
                   <div key={i} className="flex flex-col animate-pulse">
