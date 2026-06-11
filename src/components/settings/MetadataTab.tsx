@@ -298,7 +298,11 @@ export const MetadataTab: React.FC = () => {
                                     if (!res.ok || data.error) {
                                         showToast(data.error || 'Failed to clear cache', 'error');
                                     } else {
-                                        showToast('Provider image & bio cache cleared', 'success');
+                                        // Pull the freshly-cleared entity rows so the grid drops the old
+                                        // images immediately; the server is re-fetching them in the
+                                        // background and a later refresh will show the new pictures.
+                                        await usePlayerStore.getState().fetchLibraryFromServer();
+                                        showToast('Cleared — re-fetching artist images in the background', 'success');
                                     }
                                 } catch (e: any) {
                                     showToast(e?.message || 'Network error', 'error');
