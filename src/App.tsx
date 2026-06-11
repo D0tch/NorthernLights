@@ -280,6 +280,7 @@ const App: React.FC = () => {
   const { addToast } = useToast();
   const prevOnlineRef = React.useRef(isOnline);
   const pendingUpdate = usePlayerStore(state => state.pendingUpdate);
+  const setPendingUpdate = usePlayerStore(state => state.setPendingUpdate);
   const playbackState = usePlayerStore(state => state.playbackState);
 
   React.useEffect(() => {
@@ -338,15 +339,13 @@ const App: React.FC = () => {
   }, [addToast]);
 
   const handleApplyPwaUpdate = React.useCallback(() => {
-    if (playbackState === 'playing') {
-      playbackManager.persistContinuitySnapshot();
-      addToast('Update ready. Pause playback before reloading.', 'info');
-      return;
-    }
-
+    // Snapshot where we are so the new build can pick up from the same track and
+    // position. This works mid-playback too: restoreFromContinuitySnapshot() runs
+    // on the next load and resumes (the browser may require a tap to actually
+    // start audio after a reload, but nothing is lost).
     playbackManager.persistContinuitySnapshot();
     void applyPendingPwaUpdate();
-  }, [addToast, playbackState]);
+  }, []);
 
   const isSidebarOpen = usePlayerStore((s) => s.isSidebarOpen);
   const setIsSidebarOpen = usePlayerStore((s) => s.setIsSidebarOpen);
@@ -600,6 +599,12 @@ const App: React.FC = () => {
               <p className="text-sm font-medium text-[var(--color-text-primary)]">Update Available</p>
               <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">Reload to get the latest version.</p>
             </div>
+            <button
+              onClick={() => setPendingUpdate(false)}
+              className="btn btn-ghost btn-sm"
+            >
+              Later
+            </button>
             <button
               onClick={handleApplyPwaUpdate}
               className="btn btn-primary btn-sm flex items-center gap-1.5"
