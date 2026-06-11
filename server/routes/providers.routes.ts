@@ -12,6 +12,7 @@ import {
 import { requireAuth, requireAdmin } from '../middleware/auth';
 import { mbFetch, checkMbEnabled, refreshMbToken } from '../services/musicbrainz.service';
 import { writeDebugLog } from '../services/debugLogger.service';
+import { enrichArtistImagesInBackground } from '../services/artistImageEnrichment.service';
 import {
   getArtistData,
   getArtistTopTracks,
@@ -1115,6 +1116,11 @@ router.get('/providers/external/proxy-image', async (req, res) => {
 router.post('/providers/external/refresh', requireAdmin, async (req, res) => {
   try {
     await clearExternalCache();
+    // The Artists grid renders from the cached artists.image_url (no per-card
+    // refetch), so after wiping the cache we must repopulate it or the grid
+    // would fall back to initials forever. Bounded + throttled, and a no-op when
+    // no provider is configured (library is canon).
+    enrichArtistImagesInBackground();
     res.json({ status: 'ok', message: 'External metadata cache cleared' });
   } catch (err: any) {
     console.error('[ExternalMeta] refresh error:', err.message);

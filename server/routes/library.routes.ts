@@ -11,6 +11,7 @@ import { submitMbRecordingRating } from '../services/musicbrainz.service';
 import { scanStatus, scanClients, broadcastScanStatus } from '../state';
 import { requireAdmin } from '../middleware/auth';
 import { enrichCreditsFromMusicBrainz, enrichCreditsFromGenius } from '../services/creditsEnrichment.service';
+import { enrichArtistImages, enrichArtistImagesInBackground } from '../services/artistImageEnrichment.service';
 import { getCreditsStatus, refreshArtistAudioProfiles, searchLibrary, getExistingTrackIds } from '../database';
 import { createRateLimiter } from '../middleware/rateLimit';
 
@@ -167,6 +168,18 @@ router.post('/credits/enrich/genius', requireAdmin, async (req, res) => {
   } catch (err: any) {
     console.error('[Credits] Genius enrichment error:', err);
     res.status(500).json({ error: err?.message || 'Genius enrichment failed' });
+  }
+});
+
+// Backfill artist pictures for the whole library using the configured artist-image
+// provider. No-ops (skipped: 'no_provider') when no metadata provider is set up.
+router.post('/artist-images/enrich', requireAdmin, async (_req, res) => {
+  try {
+    const result = await enrichArtistImages();
+    res.json(result);
+  } catch (err: any) {
+    console.error('[ArtistImages] enrichment error:', err);
+    res.status(500).json({ error: err?.message || 'Artist image enrichment failed' });
   }
 });
 
@@ -890,6 +903,13 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
     });
   }
 
+  // Fill in pictures for any newly-added artists (and backfill the rest), bounded
+  // and throttled. No-ops when no metadata provider is configured — library is
+  // canon, and no provider simply means initials in the Artists grid.
+  if (itemsToProcess.length > 0) {
+    enrichArtistImagesInBackground();
+  }
+
   const totalDuration = ((Date.now() - totalStartTime) / 1000).toFixed(1);
   console.log(`[Scanner] Sync walk complete for ${dirPath}: ~${itemsToProcess.length} processed, -${stalePaths.length} removed (Total: ${totalDuration}s)`);
   return { removed: stalePaths.length, added: itemsToProcess.length };
@@ -960,6 +980,9 @@ router.post('/refresh-metadata', async (req, res) => {
       setImmediate(() => {
         genreMatrixService.runDiffAndGenerate().catch(e => console.error('[Genre Matrix]', e));
       });
+
+      // Backfill artist pictures for the whole library (no-op without a provider).
+      enrichArtistImagesInBackground();
 
     } catch (error: any) {
       resetScanStatus(processedExistingFiles);
