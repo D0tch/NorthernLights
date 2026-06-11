@@ -4,7 +4,6 @@ import { usePlayerStore } from '../../store/index';
 import { AlbumCard, AlbumCardSkeleton } from './AlbumCard';
 import { ArtistInitial } from './ArtistInitial';
 import { useExternalImage } from '../../hooks/useExternalImage';
-import { useArtistData } from '../../hooks/useArtistData';
 import { fetchGenreImage } from '../../utils/externalImagery';
 import { useInView } from '../../hooks/useInView';
 import { FilterBar } from './FilterBar';
@@ -143,20 +142,19 @@ const ArtistLink: React.FC<{ to: string; state: ArtistHeroState; children: React
     );
 };
 
-const ArtistCard: React.FC<{ artist: string }> = ({ artist }) => {
-    const [ref, inView] = useInView();
-    const { imageUrl } = useArtistData(artist, undefined, { enabled: inView });
-
+// Presentational + memoized: renders the already-loaded cached artist image
+// (from the entity row) or a letter placeholder. It does NOT fetch per card —
+// previously each visible card fired a full `useArtistData` request (image +
+// bio + tags, 200ms-debounced) on scroll, flooding the rate-limited provider
+// proxy and re-rendering constantly, which made the mobile grid janky. The
+// external image is fetched/cached lazily when the artist's detail page is
+// opened; the grid just shows whatever's already cached, plus initials.
+const ArtistCard = React.memo(function ArtistCard({ artist, imageUrl }: { artist: string; imageUrl?: string }) {
     return (
-        <div
-            ref={ref}
-            className="artist-card group flex flex-col items-center cursor-pointer transition-transform duration-300 hover:scale-105"
-        >
-            <div
-                className="w-full aspect-square rounded-full overflow-hidden shadow-[var(--shadow-sm)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)] mb-4 flex items-center justify-center transition-ui duration-300 group-hover:border-[var(--color-primary)] group-hover:shadow-[var(--shadow-md)]"
-            >
+        <div className="artist-card group flex flex-col items-center cursor-pointer transition-transform duration-300 hover:scale-105">
+            <div className="w-full aspect-square rounded-full overflow-hidden shadow-[var(--shadow-sm)] border-4 border-[var(--glass-border)] bg-[var(--glass-bg)] mb-4 flex items-center justify-center transition-ui duration-300 group-hover:border-[var(--color-primary)] group-hover:shadow-[var(--shadow-md)]">
                 {imageUrl ? (
-                    <img src={imageUrl} alt={artist} className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                    <img src={imageUrl} alt={artist} loading="lazy" decoding="async" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
                 ) : (
                     <ArtistInitial name={artist} className="text-4xl md:text-5xl text-[var(--color-primary)] opacity-50 group-hover:opacity-100 transition-opacity" />
                 )}
@@ -164,7 +162,7 @@ const ArtistCard: React.FC<{ artist: string }> = ({ artist }) => {
             <div className="font-bold text-base md:text-lg text-center text-[var(--color-text-primary)] group-hover:text-[var(--color-primary)] transition-colors truncate w-full px-2">{artist}</div>
         </div>
     );
-};
+});
 
 const GRID_SKELETON_COUNT = 12;
 
@@ -527,7 +525,7 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
                                             to={artistHref}
                                             state={artistHero}
                                         >
-                                            <ArtistCard artist={artistName} />
+                                            <ArtistCard artist={artistName} imageUrl={(entity as any).image_url || (entity as any).artwork_url || undefined} />
                                         </ArtistLink>
                                     );
                                 }}
