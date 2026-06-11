@@ -210,6 +210,14 @@ export interface Playlist {
   generationSource?: 'manual' | 'hub' | 'custom' | 'system' | 'on-repeat' | 'repeat-rewind' | 'daylist' | 'artist-radio' | 'seasonal-rewind' | 'year-rewind';
   pinned?: boolean;
   createdAt?: number;
+  /** Owner's user id (present on server-fetched playlists). */
+  userId?: string | null;
+  /** Owner's username, for the "Playlist by <owner>" byline on discovered playlists. */
+  ownerUsername?: string | null;
+  /** Owner has hidden this playlist from cross-user discovery. */
+  isPrivate?: boolean;
+  /** True when the current user owns this playlist (server-computed on single fetch). */
+  isOwner?: boolean;
   tracks: TrackInfo[];
 }
 
@@ -356,6 +364,8 @@ export interface PlayerState {
   playlists: Playlist[];
   isPlaylistsLoading: boolean;
   playlistsError: string | null;
+  /** Manual playlists owned by other users, surfaced in the discovery rail. */
+  discoverPlaylists: Playlist[];
 
   // Entity State (for navigation)
   artists: ArtistInfo[];
@@ -513,10 +523,13 @@ export interface PlayerState {
   /** On-demand full track list load (admin tools only); no-op once loaded. */
   ensureFullLibraryLoaded: () => Promise<void>;
   fetchPlaylistsFromServer: () => Promise<void>;
+  fetchDiscoverPlaylists: () => Promise<void>;
   fetchPlaylistFromServer: (playlistId: string) => Promise<boolean>;
   createPlaylist: (title: string, description?: string) => Promise<Playlist | null>;
   deletePlaylist: (playlistId: string) => Promise<void>;
   togglePin: (playlistId: string, pinned: boolean) => Promise<void>;
+  updatePlaylistMeta: (playlistId: string, updates: { title?: string; description?: string }) => Promise<void>;
+  togglePlaylistPrivacy: (playlistId: string, isPrivate: boolean) => Promise<void>;
   replaceTracksInUserPlaylist: (playlistId: string, trackIds: string[]) => Promise<void>;
   addTracksToUserPlaylist: (playlistId: string, trackIds: string[]) => Promise<void>;
   setAuthToken: (token: string, mediaAccessToken?: string | null, sseAccessToken?: string | null) => void;
@@ -874,6 +887,7 @@ export const usePlayerStore = create<PlayerState>()(
         playlists: [] as Playlist[],
         isPlaylistsLoading: false as boolean,
         playlistsError: null as string | null,
+        discoverPlaylists: [] as Playlist[],
         artists: [] as ArtistInfo[],
         albums: [] as AlbumInfo[],
         genres: [] as EntityInfo[],
@@ -1628,6 +1642,39 @@ export const usePlayerStore = create<PlayerState>()(
            return run;
         },
 
+        // Manual playlists owned by other users, for the discovery rail. Tracks
+        // are hydrated with stream URLs the same way as own playlists so the
+        // discovered playlists are immediately playable.
+        fetchDiscoverPlaylists: async () => {
+           try {
+              const authHeaders = (get() as any).getAuthHeader();
+              const res = await fetch('/api/playlists/discover', { headers: authHeaders });
+              if (!res.ok) return;
+              const data = await res.json();
+
+              const { mediaAccessToken, authToken, library } = get();
+              const token = mediaAccessToken || authToken || '';
+
+              const populated = (data.playlists || []).map((pl: any) => {
+                 const mappedTracks = (pl.tracks || []).map((t: any) => {
+                    const fullTrack = library.find((lt: TrackInfo) => lt.id === t.id);
+                    const track = fullTrack ? { ...t, ...fullTrack, playlistAddedAt: t.playlistAddedAt } : t;
+                    if (!track.path) return null;
+                    const quality = (get().streamingQuality === 'auto' ? '128k' : get().streamingQuality);
+                    return {
+                      ...track,
+                      ...buildTrackUrls(track.id, track.path, token, quality, (track as any).artHash),
+                    };
+                 }).filter(Boolean);
+                 return { ...pl, tracks: mappedTracks };
+              });
+
+              set({ discoverPlaylists: populated });
+           } catch (e) {
+              console.error('Failed to fetch discoverable playlists', e);
+           }
+        },
+
         // Fetch a single playlist with its tracks and upsert it into the
         // playlists array. Avoids the cost of refetching every playlist when
         // the user opens just one. Returns false when the playlist is not
@@ -1726,6 +1773,55 @@ export const usePlayerStore = create<PlayerState>()(
                }
             } catch (e) {
                console.error("Failed to toggle pin", e);
+            }
+         },
+
+         togglePlaylistPrivacy: async (playlistId: string, isPrivate: boolean) => {
+            const previousPlaylists = get().playlists;
+            set({
+               playlists: previousPlaylists.map((p: Playlist) =>
+                  p.id === playlistId ? { ...p, isPrivate } : p
+               ),
+            });
+            try {
+               const authHeaders = (get() as any).getAuthHeader();
+               const res = await fetch(`/api/playlists/${playlistId}/privacy`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json', ...authHeaders },
+                  body: JSON.stringify({ isPrivate }),
+               });
+               if (!res.ok) throw new Error(`Privacy update failed with status ${res.status}`);
+            } catch (e) {
+               set({ playlists: previousPlaylists });
+               console.error('Failed to update playlist privacy', e);
+               throw e;
+            }
+         },
+
+         updatePlaylistMeta: async (playlistId: string, updates: { title?: string; description?: string }) => {
+            const previousPlaylists = get().playlists;
+            const target = previousPlaylists.find((p: Playlist) => p.id === playlistId);
+            if (!target) return;
+
+            // Optimistic local update; reverted if the server rejects.
+            set({
+               playlists: previousPlaylists.map((p: Playlist) =>
+                  p.id === playlistId ? { ...p, ...updates } : p
+               ),
+            });
+
+            try {
+               const authHeaders = (get() as any).getAuthHeader();
+               const res = await fetch(`/api/playlists/${playlistId}`, {
+                  method: 'PATCH',
+                  headers: { 'Content-Type': 'application/json', ...authHeaders },
+                  body: JSON.stringify(updates),
+               });
+               if (!res.ok) throw new Error(`Playlist update failed with status ${res.status}`);
+            } catch (e) {
+               set({ playlists: previousPlaylists });
+               console.error(`Failed to update playlist ${playlistId}`, e);
+               throw e;
             }
          },
 

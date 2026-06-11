@@ -7,9 +7,13 @@ import {
   deletePlaylist,
   getPlaylistMeta,
   togglePlaylistPin,
+  updatePlaylistMeta,
   getPlaylistByIdForUser,
+  getPlaylistByIdReadable,
   getPlaylistsForUserWithTracks,
+  getDiscoverablePlaylistsWithTracks,
   setPlaylistShare,
+  togglePlaylistPrivacy,
   getPlaylistSuggestionPool,
 } from '../database';
 
@@ -30,15 +34,32 @@ router.get('/', async (req, res) => {
   }
 });
 
+// Manual playlists owned by other household users that are discoverable.
+// Defined before `/:id` so the literal path isn't captured by the param route.
+router.get('/discover', async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+
+    const playlists = await getDiscoverablePlaylistsWithTracks(userId);
+    res.json({ playlists });
+  } catch (error) {
+    console.error('Discoverable playlists fetch error:', error);
+    res.status(500).json({ error: 'Failed to fetch discoverable playlists' });
+  }
+});
+
 // Get a single playlist with its tracks. Cheap path for the detail view —
-// no need to load every other playlist's tracks just to open one.
+// no need to load every other playlist's tracks just to open one. Readable by
+// the owner always, and by any user for discoverable (manual, non-private)
+// playlists; the response carries `isOwner` so the client can gate editing.
 router.get('/:id', async (req, res) => {
   try {
     const userId = req.user?.userId;
     if (!userId) return res.status(401).json({ error: 'Not authenticated' });
 
     const { id } = req.params;
-    const meta = await getPlaylistByIdForUser(id as string, userId);
+    const meta = await getPlaylistByIdReadable(id as string, userId);
     if (!meta) return res.status(404).json({ error: 'Playlist not found' });
 
     const tracks = await getPlaylistTracks(id as string, userId);
@@ -136,6 +157,56 @@ router.delete('/:id', async (req, res) => {
   }
 });
 
+// Update an owned playlist's name and/or description (owner or admin).
+router.patch('/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+
+    const { title, description } = req.body;
+    if (title === undefined && description === undefined) {
+      return res.status(400).json({ error: 'Nothing to update' });
+    }
+
+    const updates: { title?: string; description?: string | null } = {};
+    if (title !== undefined) {
+      if (typeof title !== 'string' || !title.trim()) {
+        return res.status(400).json({ error: 'Title must be a non-empty string' });
+      }
+      updates.title = title.trim().slice(0, 200);
+    }
+    if (description !== undefined) {
+      if (description !== null && typeof description !== 'string') {
+        return res.status(400).json({ error: 'Description must be a string' });
+      }
+      updates.description = description === null ? null : description.slice(0, 2000);
+    }
+
+    const meta = await getPlaylistMeta(id as string);
+    if (!meta) return res.status(404).json({ error: 'Playlist not found' });
+    if (meta.isSystem) {
+      return res.status(403).json({ error: 'System playlists are read-only' });
+    }
+    if (meta.userId && meta.userId !== userId && req.user?.role !== 'admin') {
+      return res.status(403).json({ error: 'Not your playlist' });
+    }
+
+    const updated = await updatePlaylistMeta(
+      id as string,
+      userId,
+      updates,
+      req.user?.role === 'admin'
+    );
+    if (!updated) return res.status(404).json({ error: 'Playlist not found' });
+
+    res.json({ status: 'ok', playlist: updated });
+  } catch (error) {
+    console.error('Playlist update error:', error);
+    res.status(500).json({ error: 'Failed to update playlist' });
+  }
+});
+
 // Pin/unpin a playlist
 router.patch('/:id/pin', async (req, res) => {
   try {
@@ -154,6 +225,28 @@ router.patch('/:id/pin', async (req, res) => {
   } catch (error) {
     console.error('Playlist pin error:', error);
     res.status(500).json({ error: 'Failed to update pin status' });
+  }
+});
+
+// Mark a playlist private (hidden from discovery) or discoverable again.
+// Owner-scoped via togglePlaylistPrivacy's WHERE user_id clause.
+router.patch('/:id/privacy', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+
+    const { isPrivate } = req.body;
+    if (typeof isPrivate !== 'boolean') {
+      return res.status(400).json({ error: 'isPrivate must be a boolean' });
+    }
+
+    const ok = await togglePlaylistPrivacy(id, userId, isPrivate);
+    if (!ok) return res.status(404).json({ error: 'Playlist not found' });
+    res.json({ status: 'ok', isPrivate });
+  } catch (error) {
+    console.error('Playlist privacy error:', error);
+    res.status(500).json({ error: 'Failed to update privacy status' });
   }
 });
 

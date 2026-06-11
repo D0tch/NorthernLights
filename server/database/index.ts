@@ -739,6 +739,14 @@ export async function initDB(): Promise<Pool> {
         END $$;
         CREATE UNIQUE INDEX IF NOT EXISTS playlists_share_token_idx ON playlists(share_token) WHERE share_token IS NOT NULL;
 
+        -- Discovery opt-out: manual playlists are discoverable by other users by
+        -- default; the owner can mark one private to hide it from discovery.
+        DO $$
+        BEGIN
+          ALTER TABLE playlists ADD COLUMN IF NOT EXISTS is_private BOOLEAN NOT NULL DEFAULT FALSE;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+
         -- ==========================================
         -- JAMBASE / CONCERTS
         -- ==========================================
@@ -3751,6 +3759,10 @@ function mapPlaylistRow(row: any) {
     isLlmGenerated: row.is_llm_generated,
     isSystem: row.is_system,
     pinned: row.pinned,
+    userId: row.user_id ?? null,
+    // owner_username is only present when the query JOINs the users table.
+    ownerUsername: row.owner_username ?? null,
+    isPrivate: !!row.is_private,
     generationSource: row.generation_source || (row.is_system ? 'system' : row.is_llm_generated ? 'hub' : 'manual'),
     createdAt: new Date(row.created_at).getTime(),
   };
@@ -3769,6 +3781,28 @@ export async function getPlaylistByIdForUser(playlistId: string, userId: string)
   return mapPlaylistRow(res.rows[0]);
 }
 
+// Single-playlist lookup readable by any authenticated user: the owner always,
+// plus discoverable (manual, non-private) playlists for everyone else. Returns
+// the mapped playlist with an `isOwner` flag and the owner's username, or null
+// when the caller may not read it (→ 404 at the route).
+export async function getPlaylistByIdReadable(playlistId: string, userId: string) {
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT p.*, u.username AS owner_username
+       FROM playlists p
+       LEFT JOIN users u ON u.id = p.user_id
+      WHERE p.id = $1
+        AND (
+          p.user_id = $2
+          OR (p.is_system = FALSE AND p.is_llm_generated = FALSE AND p.is_private = FALSE)
+        )`,
+    [playlistId, userId]
+  );
+  if (res.rows.length === 0) return null;
+  const row = res.rows[0];
+  return { ...mapPlaylistRow(row), isOwner: row.user_id === userId };
+}
+
 // Bulk-load all playlists for a user with their tracks attached, using two
 // queries instead of N+1. Tracks are grouped by playlist_id in JS, preserving
 // the per-playlist sort_order.
@@ -3776,7 +3810,11 @@ export async function getPlaylistsForUserWithTracks(userId: string) {
   const db = await initDB();
   const [playlistsRes, tracksRes] = await Promise.all([
     db.query(
-      'SELECT * FROM playlists WHERE user_id = $1 ORDER BY created_at DESC',
+      `SELECT p.*, u.username AS owner_username
+         FROM playlists p
+         LEFT JOIN users u ON u.id = p.user_id
+        WHERE p.user_id = $1
+        ORDER BY p.created_at DESC`,
       [userId]
     ),
     db.query(
@@ -3807,6 +3845,56 @@ export async function getPlaylistsForUserWithTracks(userId: string) {
 
   return playlistsRes.rows.map((row: any) => ({
     ...mapPlaylistRow(row),
+    tracks: tracksByPlaylist.get(row.id) || [],
+  }));
+}
+
+// Manual playlists owned by *other* users that are discoverable (not system,
+// not AI-generated, not marked private). Mirrors getPlaylistsForUserWithTracks
+// — two queries, tracks grouped in JS — and joins the owner's username so the
+// client can tag each one "Playlist by <owner>". Loved-state is scoped to the
+// viewing user so hearts render correctly on tracks they've loved.
+export async function getDiscoverablePlaylistsWithTracks(currentUserId: string) {
+  const db = await initDB();
+  const discoverFilter = `p.user_id <> $1 AND p.is_system = FALSE AND p.is_llm_generated = FALSE AND p.is_private = FALSE`;
+  const [playlistsRes, tracksRes] = await Promise.all([
+    db.query(
+      `SELECT p.*, u.username AS owner_username
+         FROM playlists p
+         JOIN users u ON u.id = p.user_id
+        WHERE ${discoverFilter}
+        ORDER BY p.created_at DESC`,
+      [currentUserId]
+    ),
+    db.query(
+      `
+        SELECT
+          pt.playlist_id,
+          t.*,
+          pt.added_at AS playlist_added_at,
+          (ult.track_id IS NOT NULL) AS is_loved
+        FROM playlist_tracks pt
+        JOIN tracks t ON t.id = pt.track_id
+        JOIN playlists p ON p.id = pt.playlist_id
+        LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $1
+        WHERE ${discoverFilter}
+        ORDER BY pt.playlist_id, pt.sort_order ASC
+      `,
+      [currentUserId]
+    ),
+  ]);
+
+  const tracksByPlaylist = new Map<string, any[]>();
+  for (const row of tracksRes.rows) {
+    const playlistId = row.playlist_id;
+    const arr = tracksByPlaylist.get(playlistId) || [];
+    arr.push(mapTrackRow(row));
+    tracksByPlaylist.set(playlistId, arr);
+  }
+
+  return playlistsRes.rows.map((row: any) => ({
+    ...mapPlaylistRow(row),
+    isOwner: false,
     tracks: tracksByPlaylist.get(row.id) || [],
   }));
 }
@@ -3988,6 +4076,53 @@ export async function togglePlaylistPin(playlistId: string, userId: string, pinn
     [!!pinned, playlistId, userId]
   );
   return res.rows.length > 0;
+}
+
+// Owner-scoped toggle for whether a playlist is hidden from cross-user
+// discovery. Returns false when the playlist doesn't exist or isn't owned.
+export async function togglePlaylistPrivacy(playlistId: string, userId: string, isPrivate: boolean) {
+  const db = await initDB();
+  const res = await db.query(
+    'UPDATE playlists SET is_private = $1 WHERE id = $2 AND user_id = $3 RETURNING id',
+    [!!isPrivate, playlistId, userId]
+  );
+  return res.rows.length > 0;
+}
+
+// Update an owned playlist's name and/or description. Owner-scoped unless the
+// caller is an admin. Returns the updated row, or null if nothing matched.
+export async function updatePlaylistMeta(
+  playlistId: string,
+  userId: string,
+  updates: { title?: string; description?: string | null },
+  isAdmin: boolean = false
+): Promise<{ id: string; title: string; description: string | null } | null> {
+  const db = await initDB();
+  const sets: string[] = [];
+  const params: any[] = [];
+  let i = 1;
+  if (updates.title !== undefined) {
+    sets.push(`title = $${i++}`);
+    params.push(updates.title);
+  }
+  if (updates.description !== undefined) {
+    sets.push(`description = $${i++}`);
+    params.push(updates.description);
+  }
+  if (sets.length === 0) return null;
+
+  params.push(playlistId);
+  let where = `id = $${i++}`;
+  if (!isAdmin) {
+    where += ` AND user_id = $${i++}`;
+    params.push(userId);
+  }
+
+  const res = await db.query(
+    `UPDATE playlists SET ${sets.join(', ')} WHERE ${where} RETURNING id, title, description`,
+    params
+  );
+  return res.rows[0] || null;
 }
 
 export async function getVectorStats() {
