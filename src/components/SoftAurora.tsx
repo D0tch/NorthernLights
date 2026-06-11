@@ -158,7 +158,10 @@ void main() {
 
   col *= uBrightness;
   float alpha = clamp(length(col), 0.0, 1.0);
-  gl_FragColor = vec4(col, alpha);
+  // Output premultiplied colour (rgb already scaled by alpha). Paired with the
+  // renderer's premultipliedAlpha:true, this composites identically in Chrome
+  // and Firefox — the non-premultiplied path rendered milky/washed in Chrome.
+  gl_FragColor = vec4(col * alpha, alpha);
 }
 `;
 
@@ -183,7 +186,7 @@ export default function SoftAurora({
   useEffect(() => {
     if (!containerRef.current) return;
     const container = containerRef.current;
-    const renderer = new Renderer({ alpha: true, premultipliedAlpha: false });
+    const renderer = new Renderer({ alpha: true, premultipliedAlpha: true });
     const gl = renderer.gl;
     gl.clearColor(0, 0, 0, 0);
 

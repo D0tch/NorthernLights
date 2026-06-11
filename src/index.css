@@ -23,8 +23,8 @@
   --color-primary-dark: #047857; 
   --color-secondary: #E5E5EA; /* Light grey */
   --color-text-primary: #1C1C1E; /* Almost black */
-  --color-text-secondary: #3A3A3C;
-  --color-text-muted: #8E8E93; 
+  --color-text-secondary: #3a3a48;
+  --color-text-muted: #3a3a48;
   --color-border: rgba(0, 0, 0, 0.05); /* Soft glass borders */
   --color-accent: #E11D48; /* Rose 600 */
   --color-error: #FF3B30;
@@ -138,8 +138,8 @@
   --color-primary-dark: #10B981;
   --color-secondary: #0ea5e9; /* Sky Blue */
   --color-text-primary: #d8d8e8;
-  --color-text-secondary: #8e8ea0;
-  --color-text-muted: #55556a;
+  --color-text-secondary: #c6c6da;
+  --color-text-muted: #c6c6da;
   --color-border: rgba(34, 201, 131, 0.08);
   --color-accent: #f43f5e; /* Rose 500 */
   --color-error: #f87171;
@@ -152,9 +152,12 @@
   --aurora-extra-glow: #10b981; /* High altitude Emerald */
   --aurora-pink: #f43f5e;
 
-  /* Glass - Dark Mode */
-  --glass-bg: rgba(4, 2, 14, 0.6);
-  --glass-bg-hover: rgba(10, 8, 28, 0.7);
+  /* Glass - Dark Mode. Opacity kept high so the dark fill dominates the
+     backdrop-filter blur: Chrome blurs the dark backdrop into a lighter "milky"
+     haze through translucent glass, while Firefox stays dark — a more opaque
+     fill makes both browsers render the surfaces consistently dark. */
+  --glass-bg: rgba(4, 2, 14, 0.78);
+  --glass-bg-hover: rgba(10, 8, 28, 0.85);
   --glass-border: rgba(255, 255, 255, 0.04);
   --glass-border-hover: rgba(34, 201, 131, 0.15);
   --glass-shadow: 0 8px 40px rgba(0, 0, 0, 0.6);
