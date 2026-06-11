@@ -13,6 +13,22 @@ import { setPwaUpdateHandler } from './utils/pwaUpdate';
 // Initialize Buffer polyfill for music-metadata-browser
 createBuffer();
 
+// Auto-recover from stale lazy chunks. After a deploy the hashed route chunks
+// change; a tab still running the old build that navigates to a not-yet-loaded
+// route asks for a chunk the server no longer has → Vite fires `vite:preloadError`
+// and React would otherwise show a blank screen until a manual F5. We reload once
+// to pull the new build, guarding with sessionStorage so a genuinely missing
+// asset can't trap us in a reload loop.
+window.addEventListener('vite:preloadError', (event) => {
+  const RELOAD_KEY = 'nl-chunk-reload-at';
+  const last = Number(sessionStorage.getItem(RELOAD_KEY) || 0);
+  // Allow a fresh recovery reload at most once every 10s.
+  if (Date.now() - last < 10000) return;
+  event.preventDefault();
+  sessionStorage.setItem(RELOAD_KEY, String(Date.now()));
+  window.location.reload();
+});
+
 // Register the PWA service worker
 const updateServiceWorker = registerSW({
   immediate: true,
