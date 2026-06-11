@@ -250,6 +250,9 @@ export interface TrackCredit {
 
 export interface AlbumInfo extends EntityInfo {
   image_url?: string;
+  // Representative cover hash from getAllAlbums; used to build a local
+  // /api/art?hash= URL so grids/tiles show embedded art without the track list.
+  art_hash?: string | null;
   mbid?: string;
   description?: string;
   tags?: string;

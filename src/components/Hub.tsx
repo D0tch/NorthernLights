@@ -1010,7 +1010,10 @@ export const Hub: React.FC = () => {
   // which re-rendered this 1600-LOC component on every store mutation —
   // including currentIndex/isBuffering/playbackState changes during playback.
   const library = usePlayerStore((s) => s.library);
+  const albums = usePlayerStore((s) => s.albums);
   const albumCount = usePlayerStore((s) => s.albums.length);
+  const authToken = usePlayerStore((s) => s.authToken);
+  const mediaAccessToken = usePlayerStore((s) => s.mediaAccessToken);
   const hydrateTracks = usePlayerStore((s) => s.hydrateTracks);
   // The library is "present" once the entity lists load (entity-first); Hub's
   // own data is server-side, so it shouldn't wait for the full track array.
@@ -1173,6 +1176,15 @@ export const Hub: React.FC = () => {
   const resolveTileImage = (tile: JumpTile): string | null => {
     if (tile.imageUrl) return tile.imageUrl;
     if (tile.type === 'album') {
+      // The in-memory `library` track array is empty in the main app (loaded
+      // on demand only), so resolve album art from the albums entity list via
+      // its representative art_hash — the same local cover URL the Albums grid
+      // uses. Fall back to a track's artUrl when the library happens to be loaded.
+      const album = albums.find((a) => a.id === tile.id);
+      if (album?.art_hash) {
+        const token = mediaAccessToken || authToken || '';
+        return `/api/art?hash=${album.art_hash}${token ? `&token=${token}` : ''}`;
+      }
       const t = library.find((lt) => (lt as any).albumId === tile.id);
       return t?.artUrl ?? null;
     }
