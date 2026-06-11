@@ -2407,6 +2407,30 @@ export async function getAllArtists() {
   return res.rows;
 }
 
+// Artists that have never been enriched and still have no image. Used by the
+// bounded artist-image batch job (server/services/artistImageEnrichment.service.ts).
+// `last_updated = 0` means getArtistData has never written a cache row for this
+// artist, so once it runs (even when the provider has no image) the artist drops
+// out of this set and isn't re-fetched every scan. New artists added by a scan
+// start at last_updated 0, so they are picked up automatically. Ordered by track
+// count so the artists you actually own the most of get pictures first.
+export async function getArtistsNeedingImage(limit: number) {
+  const db = await initDB();
+  const safeLimit = Math.max(1, Math.min(20000, Math.floor(limit) || 0));
+  const res = await db.query(
+    `SELECT a.id, a.name, a.mbid
+       FROM artists a
+      WHERE a.merged_into IS NULL
+        AND (a.image_url IS NULL OR a.image_url = '')
+        AND COALESCE(a.last_updated, 0) = 0
+        AND lower(btrim(a.name)) NOT IN ('', 'unknown artist', 'various artists', '???')
+      ORDER BY (SELECT count(*) FROM tracks t WHERE t.artist_id = a.id) DESC, a.name ASC
+      LIMIT $1`,
+    [safeLimit]
+  );
+  return res.rows as Array<{ id: string; name: string; mbid: string | null }>;
+}
+
 export async function getAllAlbums() {
   const db = await initDB();
   // Per-album track-derived metadata, computed server-side so the Albums and
