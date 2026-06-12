@@ -203,6 +203,10 @@ const defaultSystemPlaylistConfig = {
   genreRediscovery: true,
   decadeMixes: true,
   decadeGenreMixes: true,
+  // Smart-bundle rails (gated in smartHub.service); listed here only so
+  // normalizeSystemPlaylistConfig round-trips them instead of dropping them.
+  smartJumpBackIn: true,
+  uniquelyYours: true,
 };
 
 function normalizeSystemPlaylistConfig(value: unknown): Record<keyof typeof defaultSystemPlaylistConfig, boolean> {
@@ -1496,6 +1500,11 @@ export async function getHubCollections(
   const latestEngineCreatedAt = cachedEngineCreatedAt.length > 0 ? Math.max(...cachedEngineCreatedAt) : null;
   const engineSchedule = (await getSystemSetting('hubGenerationSchedule')) || 'Daily';
   const engineIntervalMs = getEngineHubGenerationIntervalMs(engineSchedule);
+  // When an admin changes the system-playlist toggles we stamp this timestamp;
+  // any engine playlists generated before it are stale, so a newly-enabled
+  // family regenerates on the next Hub load instead of waiting out the schedule
+  // interval (or a manual Reset Hub) — which made the toggles feel dead.
+  const configUpdatedAt = Number(await getSystemSetting('systemPlaylistConfigUpdatedAt')) || 0;
   const cachedEngineHubs = (
     await Promise.all(cachedEnginePlaylists.map(async (playlist: any) => {
       const tracks = await getPlaylistTracks(playlist.id, userId);
@@ -1515,6 +1524,7 @@ export async function getHubCollections(
     cachedEngineHubs.length > 0 &&
     cachedEngineHubs.length === cachedEnginePlaylists.length &&
     latestEngineCreatedAt !== null &&
+    latestEngineCreatedAt >= configUpdatedAt &&
     (engineIntervalMs === null || (Date.now() - latestEngineCreatedAt) < engineIntervalMs);
 
   if (engineCacheIsFresh) {

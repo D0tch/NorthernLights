@@ -18,8 +18,8 @@ const systemPlaylistOptions = [
     },
     {
         key: 'jumpBackIn',
-        title: 'Jump Back In',
-        description: 'Older favourites that have been waiting.',
+        title: 'Jump Back In Mix',
+        description: 'Discover-rail mix of older favourites that have been waiting.',
     },
     {
         key: 'genreHeavyRotation',
@@ -43,9 +43,24 @@ const systemPlaylistOptions = [
     },
 ] as const;
 
+// Personalized history-driven rails (smart hub bundle), shown to the user as
+// "Jump back in" and "Uniquely yours". Gated server-side in smartHub.service.
+const smartSectionOptions = [
+    {
+        key: 'smartJumpBackIn',
+        title: 'Jump Back In',
+        description: 'The "jump back in" rail of recently played albums, artists, and playlists.',
+    },
+    {
+        key: 'uniquelyYours',
+        title: 'Uniquely Yours',
+        description: 'The "uniquely yours" rail: On Repeat, Repeat Rewind, Daylist, and Artist Radio.',
+    },
+] as const;
+
 const defaultSystemPlaylistConfig = Object.fromEntries(
-    systemPlaylistOptions.map(option => [option.key, true])
-) as Record<typeof systemPlaylistOptions[number]['key'], boolean>;
+    [...systemPlaylistOptions, ...smartSectionOptions].map(option => [option.key, true])
+) as Record<typeof systemPlaylistOptions[number]['key'] | typeof smartSectionOptions[number]['key'], boolean>;
 
 export const SystemTab: React.FC = () => {
     const audioAnalysisCpu = usePlayerStore(state => state.audioAnalysisCpu);
@@ -256,6 +271,37 @@ export const SystemTab: React.FC = () => {
                         </div>
                         <div className="grid gap-3 sm:grid-cols-2">
                             {systemPlaylistOptions.map(option => {
+                                const enabled = effectiveSystemPlaylistConfig[option.key];
+                                return (
+                                    <div
+                                        key={option.key}
+                                        className="flex items-start justify-between gap-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-4"
+                                    >
+                                        <div className="min-w-0">
+                                            <p className="text-sm font-semibold text-[var(--color-text-primary)]">{option.title}</p>
+                                            <p className="mt-1 text-xs leading-snug text-[var(--color-text-muted)]">{option.description}</p>
+                                        </div>
+                                        <button
+                                            type="button"
+                                            aria-pressed={enabled}
+                                            onClick={() => setSystemPlaylistEnabled(option.key, !enabled)}
+                                            className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors ${enabled ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}
+                                        >
+                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                                        </button>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+
+                    <div className="pt-5 border-t border-[var(--glass-border)]">
+                        <div className="mb-3">
+                            <h4 className="text-lg font-semibold text-[var(--color-text-primary)]">Personalized Rails</h4>
+                            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">Toggle the history-driven rails at the top of the Hub. These build from each user's own listening, so they stay empty until a user has played enough.</p>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                            {smartSectionOptions.map(option => {
                                 const enabled = effectiveSystemPlaylistConfig[option.key];
                                 return (
                                     <div

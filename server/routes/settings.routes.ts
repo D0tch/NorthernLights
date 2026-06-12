@@ -102,6 +102,13 @@ router.post('/settings', async (req, res) => {
       }
     }
 
+    // Stamp when the Hub system-playlist toggles change so the engine-playlist
+    // cache is treated as stale and re-enabled families regenerate on the next
+    // Hub load (see getHubCollections), rather than waiting out the schedule.
+    if (settings.systemPlaylistConfig !== undefined) {
+      await setSystemSetting('systemPlaylistConfigUpdatedAt', Date.now());
+    }
+
     if (settings.audioAnalysisCpu !== undefined || settings.scannerConcurrency !== undefined) {
       import('../state').then(m => m.settingsEmitter.emit('concurrencyChanged'));
     }

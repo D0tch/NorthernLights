@@ -1389,6 +1389,14 @@ export async function computeSmartHubBundle(userId: string) {
     };
   }
 
+  // Admin Hub-Playlists toggles. Missing key → enabled (default on). The
+  // `uniquelyYours` switch gates the whole on-repeat / repeat-rewind / daylist /
+  // artist-radio rail; `smartJumpBackIn` gates the "Jump back in" tiles.
+  const rawConfig = await getSystemSetting('systemPlaylistConfig');
+  const cfg = rawConfig && typeof rawConfig === 'object' ? rawConfig as Record<string, unknown> : {};
+  const jumpBackInEnabled = cfg.smartJumpBackIn !== false;
+  const uniquelyYoursEnabled = cfg.uniquelyYours !== false;
+
   const [
     jumpBackIn,
     onRepeat,
@@ -1398,26 +1406,26 @@ export async function computeSmartHubBundle(userId: string) {
     seasonalRewind,
     yearRewind,
   ] = await Promise.all([
-    computeJumpBackIn(userId).catch((e) => {
+    jumpBackInEnabled ? computeJumpBackIn(userId).catch((e) => {
       console.error('[SmartHub] jumpBackIn failed', e);
       return [];
-    }),
-    computeOnRepeat(userId).catch((e) => {
+    }) : Promise.resolve([]),
+    uniquelyYoursEnabled ? computeOnRepeat(userId).catch((e) => {
       console.error('[SmartHub] onRepeat failed', e);
       return null;
-    }),
-    computeRepeatRewind(userId).catch((e) => {
+    }) : Promise.resolve(null),
+    uniquelyYoursEnabled ? computeRepeatRewind(userId).catch((e) => {
       console.error('[SmartHub] repeatRewind failed', e);
       return null;
-    }),
-    computeDaylist(userId).catch((e) => {
+    }) : Promise.resolve(null),
+    uniquelyYoursEnabled ? computeDaylist(userId).catch((e) => {
       console.error('[SmartHub] daylist failed', e);
       return null;
-    }),
-    computeArtistRadioCandidates(userId).catch((e) => {
+    }) : Promise.resolve(null),
+    uniquelyYoursEnabled ? computeArtistRadioCandidates(userId).catch((e) => {
       console.error('[SmartHub] artistRadios failed', e);
       return [];
-    }),
+    }) : Promise.resolve([]),
     computeSeasonalRewind(userId).catch((e) => {
       console.error('[SmartHub] seasonalRewind failed', e);
       return null;

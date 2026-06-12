@@ -138,6 +138,11 @@ const defaultSystemPlaylistConfig = {
   genreRediscovery: true,
   decadeMixes: true,
   decadeGenreMixes: true,
+  // Personalized history-driven rails from the smart hub bundle, distinct from
+  // the engine Discover playlists above. `uniquelyYours` gates the whole
+  // on-repeat / repeat-rewind / daylist / artist-radio rail.
+  smartJumpBackIn: true,
+  uniquelyYours: true,
 };
 
 const normalizeSystemPlaylistConfig = (value: unknown): Record<string, boolean> => {
