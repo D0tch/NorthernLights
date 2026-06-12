@@ -19,6 +19,8 @@ export const ScrobblingTab: React.FC = () => {
     const setListenBrainzConnected = usePlayerStore(state => state.setListenBrainzConnected);
     const setListenBrainzUsername = usePlayerStore(state => state.setListenBrainzUsername);
     const setListenBrainzScrobbleEnabled = usePlayerStore(state => state.setListenBrainzScrobbleEnabled);
+    const subsonicProviderScrobbleEnabled = usePlayerStore(state => state.subsonicProviderScrobbleEnabled);
+    const setSubsonicProviderScrobbleEnabled = usePlayerStore(state => state.setSubsonicProviderScrobbleEnabled);
 
     const { addToast } = useToast();
 
@@ -196,6 +198,32 @@ export const ScrobblingTab: React.FC = () => {
                 </div>
 
                 <div className="account-provider-list">
+                    <div className="account-provider">
+                        <div className="account-provider__main">
+                            <div className="account-provider__copy">
+                                <div className="account-provider__title-row">
+                                    <h5>OpenSubsonic Clients</h5>
+                                    <span className="account-status">{subsonicProviderScrobbleEnabled ? 'Bridge on' : 'Bridge off'}</span>
+                                </div>
+                                <p>Forward Subsonic playback reports to connected services only when the client does not scrobble on its own.</p>
+                            </div>
+                        </div>
+
+                        <div className="account-provider__setting">
+                            <span>Bridge Subsonic scrobbles</span>
+                            <button
+                                type="button"
+                                role="switch"
+                                aria-checked={subsonicProviderScrobbleEnabled}
+                                onClick={() => setSubsonicProviderScrobbleEnabled(!subsonicProviderScrobbleEnabled)}
+                                className="account-switch"
+                                data-state={subsonicProviderScrobbleEnabled ? 'on' : 'off'}
+                            >
+                                <span className="account-switch__thumb" />
+                            </button>
+                        </div>
+                    </div>
+
                     <div className="account-provider">
                         <div className="account-provider__main">
                             <div className="account-provider__copy">

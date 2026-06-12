@@ -139,6 +139,8 @@ GET /rest/hls.view?id=song:track-id&apiKey=aurora_sub_...
 GET /rest/scrobble.view?id=song:track-id&apiKey=aurora_sub_...
 ```
 
+`scrobble` accepts repeated `id` values, optional `time` values in epoch milliseconds, and `submission=false` for now-playing notifications. Submission scrobbles update Aurora's per-user play history. Forwarding those Subsonic scrobbles to connected Last.fm or ListenBrainz accounts is controlled by **Settings -> Scrobbling -> Bridge Subsonic scrobbles** and is off by default to avoid duplicate scrobbles from clients such as Symfonium that submit directly.
+
 Playlists:
 
 ```text

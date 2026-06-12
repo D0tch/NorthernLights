@@ -11,6 +11,10 @@ import { getOrCreateHlsSession, getSessionInfo, touchSession, getSessionOutputDi
 import { generateScopedToken, verifyScopedToken } from '../services/scopedToken.service';
 import { writeDebugLog } from '../services/debugLogger.service';
 import { queueLlmHubRefreshForUser } from '../services/hubRefresh.service';
+import { scrobbleTracks as scrobbleLastFmTracks, updateNowPlaying as updateLastFmNowPlaying } from '../services/lastfm.service';
+import { scrobbleTracks as scrobbleListenBrainzTracks, updateNowPlaying as updateListenBrainzNowPlaying } from '../services/listenbrainz.service';
+import type { LfmTrack } from '../services/lastfm.service';
+import type { LbTrack } from '../services/listenbrainz.service';
 
 const router = Router();
 const SUBSONIC_VERSION = '1.16.1';
@@ -25,6 +29,7 @@ const OPEN_SUBSONIC_ENABLED_CACHE_MS = 2_000;
 // indexBasedQueue extension) is stored as a JSON blob in user_settings.
 const PLAYQUEUE_SETTING_KEY = 'subsonic:playqueue';
 const EFFNET_SIMILARITY_WEIGHT = 0.55;
+const SUBSONIC_PROVIDER_SCROBBLE_SETTING_KEY = 'subsonicProviderScrobbleEnabled';
 
 type SubsonicContext = {
   userId: string;
@@ -37,6 +42,13 @@ type SubsonicContext = {
 };
 
 type SubsonicErrorCode = 41 | 42 | 43 | 44 | 50 | 70;
+type ProviderScrobbleTrack = LfmTrack & LbTrack;
+export type SubsonicScrobbleEvent = {
+  rawId: string;
+  trackId: string;
+  playedAt?: Date;
+  timestamp?: number;
+};
 
 const MIME_TYPES: Record<string, string> = {
   mp3: 'audio/mpeg',
@@ -447,6 +459,71 @@ function subsonicArtistId(id: string) { return `artist:${id}`; }
 function subsonicAlbumId(id: string) { return `album:${id}`; }
 function subsonicSongId(id: string) { return `song:v1:${encodeSongId(id)}`; }
 
+function parseSubsonicEpochMillis(value: string | undefined): Date | undefined {
+  if (!value) return undefined;
+  const millis = Number(value);
+  if (!Number.isFinite(millis) || millis <= 0) return undefined;
+  const date = new Date(millis);
+  return Number.isNaN(date.getTime()) ? undefined : date;
+}
+
+export function isSubsonicSubmission(value: string | undefined): boolean {
+  if (value === undefined) return true;
+  const normalized = String(value).trim().toLowerCase();
+  if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+  if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+  return true;
+}
+
+export function buildSubsonicScrobbleEvents(ids: string[], times: string[]): SubsonicScrobbleEvent[] {
+  const events: SubsonicScrobbleEvent[] = [];
+  ids.forEach((rawId, index) => {
+    const cleanedId = String(rawId || '').trim();
+    if (!cleanedId) return;
+    const playedAt = parseSubsonicEpochMillis(times[index]);
+    const event: SubsonicScrobbleEvent = {
+      rawId: cleanedId,
+      trackId: songId(cleanedId),
+    };
+    if (playedAt) {
+      event.playedAt = playedAt;
+      event.timestamp = Math.floor(playedAt.getTime() / 1000);
+    }
+    events.push(event);
+  });
+  return events;
+}
+
+function settingEnabled(value: unknown): boolean {
+  return value === true || value === 'true';
+}
+
+export async function isSubsonicProviderScrobbleBridgeEnabled(userId: string): Promise<boolean> {
+  return settingEnabled(await getUserSetting(userId, SUBSONIC_PROVIDER_SCROBBLE_SETTING_KEY));
+}
+
+function positiveInt(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : undefined;
+}
+
+function mapTrackToProviderScrobble(track: any, event: SubsonicScrobbleEvent): ProviderScrobbleTrack | null {
+  const artist = String(track.artist || '').trim();
+  const title = String(track.title || '').trim();
+  if (!artist || !title) return null;
+  const payload: ProviderScrobbleTrack = {
+    artist,
+    track: title,
+    album: String(track.album || '').trim() || undefined,
+    albumArtist: String(track.album_artist || '').trim() || undefined,
+    duration: positiveInt(track.duration),
+    trackNumber: positiveInt(track.track_number),
+    timestamp: event.timestamp,
+    mbid: String(track.mb_recording_id || track.mb_track_id || '').trim() || undefined,
+  };
+  return payload;
+}
+
 function toIso(value: unknown): string | undefined {
   if (!value) return undefined;
   const date = value instanceof Date
@@ -582,6 +659,59 @@ async function getTrackRow(id: string, userId: string) {
     WHERE t.id = $1
   `, [songId(id), userId]);
   return res.rows[0] || null;
+}
+
+export async function sendProviderScrobbleReports(userId: string, tracks: ProviderScrobbleTrack[], submission: boolean) {
+  const action = submission ? 'scrobble' : 'now-playing';
+  try {
+    if (tracks.length === 0) return;
+    if (!(await isSubsonicProviderScrobbleBridgeEnabled(userId))) return;
+    const [
+      lastFmConnected,
+      lastFmScrobbleEnabled,
+      listenBrainzConnected,
+      listenBrainzScrobbleEnabled,
+    ] = await Promise.all([
+      getUserSetting(userId, 'lastFmConnected'),
+      getUserSetting(userId, 'lastFmScrobbleEnabled'),
+      getUserSetting(userId, 'listenBrainzConnected'),
+      getUserSetting(userId, 'listenBrainzScrobbleEnabled'),
+    ]);
+
+    const jobs: Array<{ provider: string; action: string; run: () => Promise<unknown> }> = [];
+    if (settingEnabled(lastFmConnected) && settingEnabled(lastFmScrobbleEnabled)) {
+      jobs.push({
+        provider: 'lastfm',
+        action,
+        run: () => submission
+          ? scrobbleLastFmTracks(userId, tracks)
+          : updateLastFmNowPlaying(userId, tracks[tracks.length - 1]),
+      });
+    }
+    if (settingEnabled(listenBrainzConnected) && settingEnabled(listenBrainzScrobbleEnabled)) {
+      jobs.push({
+        provider: 'listenbrainz',
+        action,
+        run: () => submission
+          ? scrobbleListenBrainzTracks(userId, tracks)
+          : updateListenBrainzNowPlaying(userId, tracks[tracks.length - 1]),
+      });
+    }
+
+    const results = await Promise.allSettled(jobs.map((job) => job.run()));
+    results.forEach((result, index) => {
+      if (result.status === 'rejected') {
+        const job = jobs[index];
+        writeSubsonicLog(`provider_error provider=${job.provider} action=${job.action} count=${tracks.length} message=${String(result.reason?.message || result.reason).slice(0, 240)}`);
+      }
+    });
+  } catch (error: any) {
+    writeSubsonicLog(`provider_error provider=bridge action=${action} count=${tracks.length} message=${String(error?.message || error).slice(0, 240)}`);
+  }
+}
+
+export function queueProviderScrobbleReports(userId: string, tracks: ProviderScrobbleTrack[], submission: boolean) {
+  void sendProviderScrobbleReports(userId, tracks, submission);
 }
 
 async function resolvePlayableTrack(id: string, userId: string) {
@@ -1282,9 +1412,41 @@ async function handleAnnotations(req: Request, res: Response, method: string, ct
       await setTrackRatingForUser(ctx.userId, songId(id), Number.isFinite(rating) ? rating : 0);
       return sendSubsonic(req, res, subsonicSuccess({}));
     }
-    case 'scrobble':
-      if (id) await recordPlaybackForUser(ctx.userId, songId(id));
+    case 'scrobble': {
+      const events = buildSubsonicScrobbleEvents(getParamList(req, 'id'), getParamList(req, 'time'));
+      if (events.length === 0) return sendError(req, res, 70, 'Missing scrobble id');
+
+      const submission = isSubsonicSubmission(getParam(req, 'submission'));
+      const providerTracks: ProviderScrobbleTrack[] = [];
+      let recorded = 0;
+      let missing = 0;
+      let unreportable = 0;
+
+      for (const event of events) {
+        const track = await getTrackRow(event.trackId, ctx.userId);
+        if (!track) {
+          missing += 1;
+          continue;
+        }
+
+        const providerTrack = mapTrackToProviderScrobble(track, event);
+        if (providerTrack) providerTracks.push(providerTrack);
+        else unreportable += 1;
+
+        if (submission) {
+          await recordPlaybackForUser(ctx.userId, event.trackId, event.playedAt);
+          recorded += 1;
+        }
+      }
+
+      if (recorded === 0 && providerTracks.length === 0 && missing > 0) {
+        return sendError(req, res, 70, 'Track not found');
+      }
+
+      queueProviderScrobbleReports(ctx.userId, providerTracks, submission);
+      writeSubsonicLog(`scrobble mode=${submission ? 'submission' : 'now-playing'} ids=${events.length} recorded=${recorded} reportable=${providerTracks.length} missing=${missing} unreportable=${unreportable} ${clientInfo(req)}`);
       return sendSubsonic(req, res, subsonicSuccess({}));
+    }
     default:
       return false;
   }

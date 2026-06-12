@@ -427,6 +427,7 @@ export interface PlayerState {
   listenBrainzScrobbleEnabled: boolean;
   listenBrainzConnected: boolean;
   listenBrainzUsername: string;
+  subsonicProviderScrobbleEnabled: boolean;
   geniusApiKey: string;
   musicBrainzEnabled: boolean;
   musicBrainzClientId: string;
@@ -602,6 +603,7 @@ export interface PlayerState {
   setListenBrainzScrobbleEnabled: (enabled: boolean) => void;
   setListenBrainzConnected: (connected: boolean) => void;
   setListenBrainzUsername: (username: string) => void;
+  setSubsonicProviderScrobbleEnabled: (enabled: boolean) => void;
   setGeniusApiKey: (key: string) => void;
   setMusicBrainzEnabled: (enabled: boolean) => void;
   setMusicBrainzClientId: (id: string) => void;
@@ -958,6 +960,7 @@ export const usePlayerStore = create<PlayerState>()(
         listenBrainzScrobbleEnabled: false as boolean,
         listenBrainzConnected: false as boolean,
         listenBrainzUsername: '',
+        subsonicProviderScrobbleEnabled: false as boolean,
         geniusApiKey: '',
         musicBrainzEnabled: false as boolean,
         musicBrainzClientId: '',
@@ -1263,6 +1266,7 @@ export const usePlayerStore = create<PlayerState>()(
                 listenBrainzScrobbleEnabled: data.listenBrainzScrobbleEnabled ?? false,
                 listenBrainzConnected: data.listenBrainzConnected ?? false,
                 listenBrainzUsername: data.listenBrainzUsername || '',
+                subsonicProviderScrobbleEnabled: data.subsonicProviderScrobbleEnabled === true,
                 geniusApiKey: data.geniusApiKey || '',
                 musicBrainzEnabled: data.musicBrainzEnabled ?? false,
                 musicBrainzClientId: data.musicBrainzClientId || '',
@@ -1340,6 +1344,7 @@ export const usePlayerStore = create<PlayerState>()(
                 lastFmSharedSecret: state.lastFmSharedSecret,
                 lastFmScrobbleEnabled: state.lastFmScrobbleEnabled,
                 listenBrainzScrobbleEnabled: state.listenBrainzScrobbleEnabled,
+                subsonicProviderScrobbleEnabled: state.subsonicProviderScrobbleEnabled,
                 geniusApiKey: state.geniusApiKey,
                 musicBrainzEnabled: state.musicBrainzEnabled,
                 musicBrainzClientId: state.musicBrainzClientId,
@@ -2530,6 +2535,7 @@ export const usePlayerStore = create<PlayerState>()(
         setListenBrainzScrobbleEnabled: (enabled: boolean) => set({ listenBrainzScrobbleEnabled: enabled }),
         setListenBrainzConnected: (connected: boolean) => set({ listenBrainzConnected: connected }),
         setListenBrainzUsername: (username: string) => set({ listenBrainzUsername: username }),
+        setSubsonicProviderScrobbleEnabled: (enabled: boolean) => set({ subsonicProviderScrobbleEnabled: enabled }),
         setGeniusApiKey: (key: string) => set({ geniusApiKey: key }),
         setMusicBrainzEnabled: (enabled: boolean) => set({ musicBrainzEnabled: enabled }),
         setMusicBrainzClientId: (id: string) => set({ musicBrainzClientId: id }),
@@ -2613,6 +2619,7 @@ export const usePlayerStore = create<PlayerState>()(
         listenBrainzScrobbleEnabled: state.listenBrainzScrobbleEnabled,
         listenBrainzConnected: state.listenBrainzConnected,
         listenBrainzUsername: state.listenBrainzUsername,
+        subsonicProviderScrobbleEnabled: state.subsonicProviderScrobbleEnabled,
         geniusApiKey: state.geniusApiKey,
         musicBrainzEnabled: state.musicBrainzEnabled,
         musicBrainzClientId: state.musicBrainzClientId,

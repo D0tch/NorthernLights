@@ -13,6 +13,8 @@ jest.mock('../database', () => ({
   recordPlaybackForUser: jest.fn(),
   setTrackLovedForUser: jest.fn(),
   setTrackRatingForUser: jest.fn(),
+  getUserSetting: jest.fn(),
+  setUserSetting: jest.fn(),
   getSystemSetting: jest.fn(),
 }));
 jest.mock('../state', () => ({
@@ -29,24 +31,54 @@ jest.mock('../services/scopedToken.service', () => ({
   generateScopedToken: jest.fn(),
   verifyScopedToken: jest.fn(),
 }));
+jest.mock('../services/debugLogger.service', () => ({
+  writeDebugLog: jest.fn(),
+}));
+jest.mock('../services/lastfm.service', () => ({
+  scrobbleTracks: jest.fn(),
+  updateNowPlaying: jest.fn(),
+}));
+jest.mock('../services/listenbrainz.service', () => ({
+  scrobbleTracks: jest.fn(),
+  updateNowPlaying: jest.fn(),
+}));
 
 import {
   buildAlbumListPayload,
   buildSearchPayload,
+  buildSubsonicScrobbleEvents,
   buildStructuredLyrics,
   buildSubsonicUser,
   buildSubsonicXml,
+  isSubsonicProviderScrobbleBridgeEnabled,
+  isSubsonicSubmission,
   mapAlbum,
   mapArtist,
   mapTrackToSubsonic,
   normalizeSearchQuery,
   openSubsonicExtensionsPayload,
   parseSubsonicAuthParams,
+  queueProviderScrobbleReports,
+  sendProviderScrobbleReports,
   subsonicError,
   subsonicSuccess,
 } from './subsonic.routes';
 
+const databaseMock = jest.requireMock('../database') as { getUserSetting: jest.Mock };
+const lastFmMock = jest.requireMock('../services/lastfm.service') as { scrobbleTracks: jest.Mock; updateNowPlaying: jest.Mock };
+const listenBrainzMock = jest.requireMock('../services/listenbrainz.service') as { scrobbleTracks: jest.Mock; updateNowPlaying: jest.Mock };
+const debugLoggerMock = jest.requireMock('../services/debugLogger.service') as { writeDebugLog: jest.Mock };
+const flushPromises = async () => {
+  await Promise.resolve();
+  await Promise.resolve();
+  await Promise.resolve();
+};
+
 describe('subsonic route helpers', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   it('accepts API-key-only auth params', () => {
     expect(parseSubsonicAuthParams({ apiKey: 'aurora_sub_test' })).toEqual({ apiKey: 'aurora_sub_test' });
     expect(parseSubsonicAuthParams({ api_key: 'aurora_sub_test' })).toEqual({ apiKey: 'aurora_sub_test' });
@@ -133,6 +165,75 @@ describe('subsonic route helpers', () => {
       status: 'failed',
       error: { code: 44, message: 'Invalid key' },
     });
+  });
+
+  it('parses scrobble submissions and repeated id/time params', () => {
+    const playedAt = new Date('2026-06-12T10:11:12.000Z');
+    const encoded = Buffer.from('track/with+chars', 'utf8').toString('base64url');
+    const events = buildSubsonicScrobbleEvents(
+      [`song:v1:${encoded}`, 'song:legacy-track', 'raw-track', ''],
+      [String(playedAt.getTime()), '', 'not-a-time', '123'],
+    );
+
+    expect(events).toHaveLength(3);
+    expect(events[0]).toMatchObject({
+      rawId: `song:v1:${encoded}`,
+      trackId: 'track/with+chars',
+      timestamp: Math.floor(playedAt.getTime() / 1000),
+    });
+    expect(events[0].playedAt?.toISOString()).toBe('2026-06-12T10:11:12.000Z');
+    expect(events[1]).toMatchObject({ rawId: 'song:legacy-track', trackId: 'legacy-track' });
+    expect(events[2]).toMatchObject({ rawId: 'raw-track', trackId: 'raw-track' });
+    expect(events[2].playedAt).toBeUndefined();
+  });
+
+  it('distinguishes Subsonic scrobble submissions from now-playing notifications', () => {
+    expect(isSubsonicSubmission(undefined)).toBe(true);
+    expect(isSubsonicSubmission('true')).toBe(true);
+    expect(isSubsonicSubmission('1')).toBe(true);
+    expect(isSubsonicSubmission('false')).toBe(false);
+    expect(isSubsonicSubmission('0')).toBe(false);
+  });
+
+  it('keeps the Subsonic provider scrobble bridge opt-in per user', async () => {
+    databaseMock.getUserSetting.mockResolvedValueOnce(null);
+    await expect(isSubsonicProviderScrobbleBridgeEnabled('user-1')).resolves.toBe(false);
+
+    databaseMock.getUserSetting.mockResolvedValueOnce('true');
+    await expect(isSubsonicProviderScrobbleBridgeEnabled('user-1')).resolves.toBe(true);
+
+    expect(databaseMock.getUserSetting).toHaveBeenCalledWith('user-1', 'subsonicProviderScrobbleEnabled');
+  });
+
+  it('queues provider scrobble forwarding without waiting for the provider request', async () => {
+    databaseMock.getUserSetting.mockImplementation(async (_userId: string, key: string) => (
+      ['subsonicProviderScrobbleEnabled', 'lastFmConnected', 'lastFmScrobbleEnabled'].includes(key)
+    ));
+    let resolveProvider: (value: unknown) => void = () => {};
+    lastFmMock.scrobbleTracks.mockReturnValueOnce(new Promise((resolve) => { resolveProvider = resolve; }));
+
+    expect(queueProviderScrobbleReports('user-1', [{ artist: 'Artist', track: 'Title' } as any], true)).toBeUndefined();
+    await flushPromises();
+
+    expect(lastFmMock.scrobbleTracks).toHaveBeenCalledWith('user-1', [{ artist: 'Artist', track: 'Title' }]);
+    expect(listenBrainzMock.scrobbleTracks).not.toHaveBeenCalled();
+
+    resolveProvider({ status: 'ok' });
+    await flushPromises();
+  });
+
+  it('contains and logs provider bridge failures', async () => {
+    databaseMock.getUserSetting.mockImplementation(async (_userId: string, key: string) => (
+      ['subsonicProviderScrobbleEnabled', 'lastFmConnected', 'lastFmScrobbleEnabled'].includes(key)
+    ));
+    lastFmMock.scrobbleTracks.mockRejectedValueOnce(new Error('provider offline'));
+
+    await expect(sendProviderScrobbleReports('user-1', [{ artist: 'Artist', track: 'Title' } as any], true)).resolves.toBeUndefined();
+
+    expect(debugLoggerMock.writeDebugLog).toHaveBeenCalledWith(
+      'subsonic-api.log',
+      expect.stringContaining('provider_error provider=lastfm action=scrobble count=1 message=provider offline'),
+    );
   });
 
   it('serializes XML response metadata and nested errors', () => {

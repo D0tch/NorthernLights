@@ -4526,23 +4526,28 @@ export async function isInviteValid(token: string): Promise<boolean> {
 // USER PLAYBACK STATS (per-user telemetry)
 // ==========================================
 
-export async function recordPlaybackForUser(userId: string, trackId: string) {
-  const db = await initDB();
-  await db.query(`
+export const RECORD_PLAYBACK_STATS_SQL = `
     INSERT INTO user_playback_stats (user_id, track_id, play_count, last_played_at, rating)
-    VALUES ($1, $2, 1, NOW(), LEAST(1, 5))
+    VALUES ($1, $2, 1, $3, LEAST(1, 5))
     ON CONFLICT (user_id, track_id) DO UPDATE SET
       play_count = user_playback_stats.play_count + 1,
-      last_played_at = NOW(),
+      last_played_at = GREATEST(COALESCE(user_playback_stats.last_played_at, $3), $3),
       rating = LEAST(user_playback_stats.rating + 1, 5)
-  `, [userId, trackId]);
+  `;
 
-  await db.query(`
+const RECORD_PLAYBACK_BUCKET_SQL = `
     INSERT INTO user_track_play_buckets (user_id, track_id, year_month, play_count)
-    VALUES ($1, $2, date_trunc('month', NOW())::date, 1)
+    VALUES ($1, $2, date_trunc('month', $3::timestamptz)::date, 1)
     ON CONFLICT (user_id, track_id, year_month) DO UPDATE SET
       play_count = user_track_play_buckets.play_count + 1
-  `, [userId, trackId]);
+  `;
+
+export async function recordPlaybackForUser(userId: string, trackId: string, playedAt: Date = new Date()) {
+  const db = await initDB();
+  const effectivePlayedAt = Number.isNaN(playedAt.getTime()) ? new Date() : playedAt;
+  await db.query(RECORD_PLAYBACK_STATS_SQL, [userId, trackId, effectivePlayedAt]);
+
+  await db.query(RECORD_PLAYBACK_BUCKET_SQL, [userId, trackId, effectivePlayedAt]);
 
   // Removed legacy tracks table update to prevent write amplification bloat.
   // The frontend should rely on user_playback_stats for user-specific telemetry.
