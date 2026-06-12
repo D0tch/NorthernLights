@@ -19,13 +19,13 @@ import {
   undismissAutoArtist,
   getDismissedAutoArtists,
   getAutoAddCandidates,
+  isCompilationArtistName,
 } from '../database';
 import {
   isJambaseEnabled,
   testJambaseConnection,
   getCurrentMonthUsage,
   refreshArtistConcertsIfStale,
-  isCompilationArtistName,
   JambaseBudgetError,
   JambaseConfigError,
 } from '../services/jambase.service';

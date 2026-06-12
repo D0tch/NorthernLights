@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { ChildProcessPool } from '../workers/processPool';
 import * as mm from 'music-metadata';
-import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTracksWithSimulatedFeatures, getSimulatedFeatureTracks, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getPathsWithMeta, countTracksByArtHash, deleteTracksByPaths, purgeOrphanedEntities, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting, normalizeArtistNames, getPrimaryArtistName, normalizeArtistIdentityKey, setTrackCredits } from '../database';
+import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTracksWithSimulatedFeatures, getSimulatedFeatureTracks, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getPathsWithMeta, countTracksByArtHash, deleteTracksByPaths, purgeOrphanedEntities, recordUnparsedTrack, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting, normalizeArtistNames, getPrimaryArtistName, normalizeArtistIdentityKey, setTrackCredits, isCompilationArtistName } from '../database';
 import { cleanupOrphanArt } from '../services/artCache';
 import { genreMatrixService } from '../services/genreMatrix.service';
 import { loveTrack, unloveTrack } from '../services/lastfm.service';
@@ -404,17 +404,33 @@ async function processMetadataBatch(input: Array<Buffer | ScanItem>, concurrency
             let artistId = null;
             let albumId = null;
             let genreId = null;
-            const primaryArtistMbid = metadata.mbAlbumArtistId || metadata.mbArtistId || null;
-            const primaryArtistKey = normalizeArtistIdentityKey(albumArtistName);
+            // The track's PRIMARY credit is its performer. The album-artist
+            // label only stands in for the performer on normal albums; on a
+            // compilation it is "Various Artists", and crediting the track to
+            // it would fold every performer onto one VA row. Detect the
+            // compilation context and fall back to the real performer for the
+            // track's artist_id (the *album* still keys off albumArtistName, so
+            // the comp album groups correctly).
+            const isCompilationContext =
+              !!metadata.isCompilation || isCompilationArtistName(albumArtistName);
+            const trackPrimaryArtistName = isCompilationContext
+              ? (finalArtists[0] || (rawArtist && rawArtist.trim()) || albumArtistName)
+              : albumArtistName;
+            // On a comp the performer's id is the track-level mb_artist_id, not
+            // the album-artist id.
+            const primaryArtistMbid = isCompilationContext
+              ? (metadata.mbArtistId || null)
+              : (metadata.mbAlbumArtistId || metadata.mbArtistId || null);
+            const primaryArtistKey = normalizeArtistIdentityKey(trackPrimaryArtistName);
             // If the primary artist was derived from a compound credit
             // ("A, B & C"), the file's MB artist id was scanned against the
             // compound string and doesn't belong to the first individual.
             const { splitArtistNames } = await import('../database');
-            const primarySource = metadata.albumartist || rawArtist;
+            const primarySource = isCompilationContext ? rawArtist : (metadata.albumartist || rawArtist);
             const primaryFromCompound = splitArtistNames(primarySource).length > 1;
             const safePrimaryMbid = primaryFromCompound ? null : primaryArtistMbid;
-            try { artistId = await getOrCreateArtist(albumArtistName, safePrimaryMbid); } catch (e) {
-              console.warn(`[Scanner] Failed to get/create artist "${albumArtistName}" for ${nameStr}:`, e);
+            try { artistId = await getOrCreateArtist(trackPrimaryArtistName, safePrimaryMbid); } catch (e) {
+              console.warn(`[Scanner] Failed to get/create artist "${trackPrimaryArtistName}" for ${nameStr}:`, e);
             }
             for (const a of finalArtists) {
               const artistMbid = normalizeArtistIdentityKey(a) === primaryArtistKey ? safePrimaryMbid : null;

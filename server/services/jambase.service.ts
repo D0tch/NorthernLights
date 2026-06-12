@@ -7,6 +7,7 @@ import {
   replaceArtistEvents,
   getArtistConcertsCache,
   getArtistById,
+  isCompilationArtistName,
   type ConcertEventRow,
 } from '../database';
 
@@ -228,13 +229,6 @@ function normalizeEvent(raw: any, artistId: string): Omit<ConcertEventRow, 'fetc
     status: raw?.eventStatus || null,
     raw_json: raw,
   };
-}
-
-// "Various Artists" and its variants are compilation pseudo-entities, not
-// real touring artists. Never spend a Jambase call on them.
-const COMPILATION_NAMES = new Set(['various artists', 'various', 'va', 'compilation', 'compilations']);
-export function isCompilationArtistName(name: string | null | undefined): boolean {
-  return !!name && COMPILATION_NAMES.has(name.trim().toLowerCase());
 }
 
 // Resolve + fetch + write cache for a single artist. Idempotent — safe to call

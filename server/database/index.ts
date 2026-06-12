@@ -1652,6 +1652,27 @@ function cleanArtistNamePart(value: string): string {
     .trim();
 }
 
+// "Various Artists" and its inevitable siblings are compilation pseudo-entities,
+// not real performers. This is the single source of truth used to (a) flag
+// artists.is_va_pseudo so they're hidden from artist-facing surfaces, and
+// (b) keep a compilation track's primary artist_id pointed at its real
+// performer instead of folding every performer onto one "Various Artists" row.
+const COMPILATION_ARTIST_NAMES = new Set([
+  'various artists', 'various', 'va', 'v/a', 'compilation', 'compilations',
+]);
+export function isCompilationArtistName(name: string | null | undefined): boolean {
+  return !!name && COMPILATION_ARTIST_NAMES.has(name.trim().toLowerCase());
+}
+// Same membership test expressed as a SQL boolean against a `name` column, so
+// the set lives in exactly one place. Returns e.g.
+// `LOWER(BTRIM(name)) IN ('various artists', ...)`.
+function compilationArtistNameSql(nameExpr: string): string {
+  const list = [...COMPILATION_ARTIST_NAMES]
+    .map(n => `'${n.replace(/'/g, "''")}'`)
+    .join(', ');
+  return `LOWER(BTRIM(${nameExpr})) IN (${list})`;
+}
+
 function uniqueArtistNames(names: string[]): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -1841,13 +1862,14 @@ export async function getOrCreateArtist(name?: string | null, mbid?: string | nu
   }
 
   const res = await db.query(
-    `INSERT INTO artists (name, normalized_key, mbid)
-     VALUES ($1, $2, $3)
+    `INSERT INTO artists (name, normalized_key, mbid, is_va_pseudo)
+     VALUES ($1, $2, $3, $4)
      ON CONFLICT (name) DO UPDATE SET
        normalized_key = COALESCE(artists.normalized_key, EXCLUDED.normalized_key),
-       mbid = COALESCE(artists.mbid, EXCLUDED.mbid)
+       mbid = COALESCE(artists.mbid, EXCLUDED.mbid),
+       is_va_pseudo = EXCLUDED.is_va_pseudo
      RETURNING id`,
-    [safeName, normalizedKey || null, safeMbid]
+    [safeName, normalizedKey || null, safeMbid, isCompilationArtistName(safeName)]
   );
   const id = await resolveMergedArtist(db, (res.rows[0] as any).id as string);
   artistCache.set(cacheKey, id);
@@ -2011,34 +2033,22 @@ export async function updateAlbumFlags(albumId: string, opts: AlbumUpsertOpts): 
   }
 }
 
-// Recomputes artists.is_va_pseudo: TRUE when EVERY track for this artist
-// lives on a compilation album. Used to suppress "Various Artists" and
-// similar pseudo-entities from artist-facing surfaces without resorting
-// to the legacy name-list match.
+// Recomputes artists.is_va_pseudo: TRUE when the artist NAME is a "Various
+// Artists" compilation label. Used to suppress these pseudo-entities from
+// artist-facing surfaces (smart hub, live-music tab).
+//
+// This is intentionally name-based, NOT "all tracks live on a compilation".
+// The latter was a proxy that only held while compilation tracks were folded
+// onto a single VA row — once each compilation track is credited to its real
+// performer (see processMetadataBatch / migrateEntityIds), that heuristic
+// would wrongly hide a genuine artist whose songs you only own via a comp.
 export async function recomputeIsVaPseudo(artistId?: string | null): Promise<void> {
   const db = await initDB();
+  const predicate = compilationArtistNameSql('name');
   if (artistId) {
-    await db.query(
-      `UPDATE artists a SET is_va_pseudo = (
-         SELECT COUNT(*) > 0 AND BOOL_AND(COALESCE(al.is_compilation, FALSE))
-         FROM tracks t LEFT JOIN albums al ON al.id = t.album_id
-         WHERE t.artist_id = a.id
-       )
-       WHERE a.id = $1`,
-      [artistId]
-    );
+    await db.query(`UPDATE artists SET is_va_pseudo = (${predicate}) WHERE id = $1`, [artistId]);
   } else {
-    await db.query(
-      `UPDATE artists a SET is_va_pseudo = sub.flag
-       FROM (
-         SELECT t.artist_id AS id,
-                COUNT(*) > 0 AND BOOL_AND(COALESCE(al.is_compilation, FALSE)) AS flag
-         FROM tracks t LEFT JOIN albums al ON al.id = t.album_id
-         WHERE t.artist_id IS NOT NULL
-         GROUP BY t.artist_id
-       ) sub
-       WHERE a.id = sub.id`
-    );
+    await db.query(`UPDATE artists SET is_va_pseudo = (${predicate})`);
   }
 }
 
@@ -3449,16 +3459,32 @@ export async function migrateEntityIds() {
     rawArtistsArray = normalizeArtistNames(rawArtistsArray.length > 0 ? rawArtistsArray : null, rawArtist);
     const albumArtistName = getPrimaryArtistName(rawAlbumArtist, rawArtist, rawArtistsArray);
 
+    // The track's PRIMARY credit is its performer. The album-artist label only
+    // stands in for the performer on normal albums; on a compilation it is
+    // "Various Artists", and crediting the track to it would fold every
+    // performer onto one VA row. Detect the compilation context and fall back
+    // to the real performer for the track's artist_id (the *album* still keys
+    // off albumArtistName below, so the comp album groups correctly).
+    const isCompilationContext =
+      (row as any).is_compilation === true || isCompilationArtistName(albumArtistName);
+    const trackPrimaryArtistName = isCompilationContext
+      ? (rawArtistsArray[0] || (rawArtist && rawArtist.trim()) || albumArtistName)
+      : albumArtistName;
+
     // If the primary artist was derived from a compound credit ("A, B & C"),
     // the track's MB artist id was scanned against the compound string and
-    // doesn't belong to the first individual. Skip attaching it.
-    const primarySource = rawAlbumArtist || rawArtist;
+    // doesn't belong to the first individual. Skip attaching it. On a comp the
+    // performer's id is the track-level mb_artist_id, not the album-artist id.
+    const primarySource = isCompilationContext ? rawArtist : (rawAlbumArtist || rawArtist);
     const primaryDerivedFromCompound = splitArtistNames(primarySource).length > 1;
-    const safePrimaryMbid = primaryDerivedFromCompound ? null : primaryArtistMbid;
+    const resolvedPrimaryMbid = isCompilationContext
+      ? ((row as any).mb_artist_id || null)
+      : primaryArtistMbid;
+    const safePrimaryMbid = primaryDerivedFromCompound ? null : resolvedPrimaryMbid;
 
     // 2. Fetch or create canonical entities, ensuring valid strings
-    const primaryArtistKey = normalizeArtistIdentityKey(albumArtistName);
-    const artistId = await getOrCreateArtist(albumArtistName, safePrimaryMbid);
+    const primaryArtistKey = normalizeArtistIdentityKey(trackPrimaryArtistName);
+    const artistId = await getOrCreateArtist(trackPrimaryArtistName, safePrimaryMbid);
     const albumId = await getOrCreateAlbum(albumTitle, albumArtistName, {
       mbReleaseGroupId: (row as any).mb_release_group_id || null,
       year: (row as any).year || null,
