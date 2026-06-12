@@ -1,10 +1,11 @@
-import { initDB, getPlaylistTracks } from '../database';
+import { initDB, getPlaylistTracks, getSystemSetting } from '../database';
 import OpenAI from 'openai';
 import { getLlmConfig, extractJson } from './llm.service';
 import { withTransaction } from '../utils/db';
 import {
   buildPlaylistFromPools,
   computeArtistCentroids,
+  fetchCandidatePool,
   getArtistGenrePaths,
   getLibraryMainstreamVector,
   PoolName,
@@ -486,11 +487,23 @@ export async function computeArtistRadioCandidates(
     ORDER BY score DESC
     LIMIT $2
     `,
-    [userId, limit]
+    // Over-fetch so eligibility filtering can still fill the rail.
+    [userId, limit * 3]
   );
 
+  // Only surface artists that can actually produce a quality radio, so the
+  // rail never offers a card that then builds a thin mix.
+  const eligible: any[] = [];
+  for (const r of res.rows as any[]) {
+    if (eligible.length >= limit) break;
+    const { eligible: ok } = await evaluateArtistRadioEligibility(userId, r.artist_id).catch(
+      () => ({ eligible: false } as ArtistRadioEligibility)
+    );
+    if (ok) eligible.push(r);
+  }
+
   const candidates: ArtistRadioCandidate[] = await Promise.all(
-    res.rows.map(async (r: any) => ({
+    eligible.map(async (r: any) => ({
       artistId: r.artist_id,
       artistName: r.artist_name,
       imageUrl: r.image_url,
@@ -501,6 +514,137 @@ export async function computeArtistRadioCandidates(
   return candidates;
 }
 
+// ─── Artist Radio eligibility ──────────────────────────────
+// Whether a quality radio can actually be built for an artist, evaluated
+// cheaply enough to drive the Play-Radio button's enabled state. The bar
+// scales SUB-LINEARLY with library size: a tiny library qualifies with a
+// short radio; a huge one plateaus at the full length — never a fixed % of
+// the library.
+
+const RADIO_MIN_OWN_ANALYZED = 3; // Gate 1: artist must have a real presence
+const RADIO_LEN_MIN = 8;
+const RADIO_LEN_MAX = 30;
+
+// L = clamp(8, 30, round(a + b*sqrt(N))). Constants tuned so L≈12 @ 100,
+// ≈22 @ 2k, and plateaus at 30 by ~20k analysed tracks. Tunable.
+function adaptiveRadioLength(analyzedLibrarySize: number): number {
+  const raw = 9 + 0.29 * Math.sqrt(Math.max(0, analyzedLibrarySize));
+  return Math.max(RADIO_LEN_MIN, Math.min(RADIO_LEN_MAX, Math.round(raw)));
+}
+
+// Cache the analysed-library size briefly — it changes slowly and the
+// eligibility endpoint is hit on every artist view.
+let _analyzedLibSizeCache: { value: number; ts: number } | null = null;
+const ANALYZED_LIB_CACHE_MS = 10 * 60 * 1000;
+
+async function getAnalyzedLibrarySize(): Promise<number> {
+  if (_analyzedLibSizeCache && Date.now() - _analyzedLibSizeCache.ts < ANALYZED_LIB_CACHE_MS) {
+    return _analyzedLibSizeCache.value;
+  }
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT COUNT(*)::int AS n FROM track_features WHERE acoustic_vector_8d IS NOT NULL`
+  );
+  const value = Number((res.rows[0] as any)?.n ?? 0);
+  _analyzedLibSizeCache = { value, ts: Date.now() };
+  return value;
+}
+
+export interface ArtistRadioEligibility {
+  eligible: boolean;
+  reason?: string;
+  targetLength: number;
+  ownAnalyzed: number;
+  similarPool: number;
+}
+
+// Short-lived per-(user, artist) memoisation so repeat views and the
+// generate-after-check flow don't re-run the neighbour query.
+const _eligibilityCache = new Map<string, { value: ArtistRadioEligibility; ts: number }>();
+const ELIGIBILITY_CACHE_MS = 5 * 60 * 1000;
+
+export async function evaluateArtistRadioEligibility(
+  userId: string,
+  artistId: string
+): Promise<ArtistRadioEligibility> {
+  const cacheKey = `${userId}:${artistId}`;
+  const hit = _eligibilityCache.get(cacheKey);
+  if (hit && Date.now() - hit.ts < ELIGIBILITY_CACHE_MS) return hit.value;
+
+  const db = await initDB();
+  const remember = (value: ArtistRadioEligibility): ArtistRadioEligibility => {
+    _eligibilityCache.set(cacheKey, { value, ts: Date.now() });
+    return value;
+  };
+
+  const analyzedLibSize = await getAnalyzedLibrarySize();
+  const targetLength = adaptiveRadioLength(analyzedLibSize);
+
+  // Reject missing artist / VA pseudo-entity up front.
+  const artistRes = await db.query(
+    `SELECT COALESCE(is_va_pseudo, FALSE) AS is_va_pseudo FROM artists WHERE id = $1`,
+    [artistId]
+  );
+  if (artistRes.rowCount === 0) {
+    return remember({ eligible: false, reason: 'Artist not found', targetLength, ownAnalyzed: 0, similarPool: 0 });
+  }
+  if ((artistRes.rows[0] as any).is_va_pseudo) {
+    return remember({ eligible: false, reason: 'No radio for compilation artists', targetLength, ownAnalyzed: 0, similarPool: 0 });
+  }
+
+  // Gate 1: enough of the artist's OWN tracks are analysed.
+  const ownRes = await db.query(
+    `SELECT COUNT(*)::int AS n
+     FROM tracks t
+     JOIN track_features tf ON tf.track_id = t.id
+     WHERE t.artist_id::text = $1 AND tf.acoustic_vector_8d IS NOT NULL`,
+    [artistId]
+  );
+  const ownAnalyzed = Number((ownRes.rows[0] as any)?.n ?? 0);
+  if (ownAnalyzed < RADIO_MIN_OWN_ANALYZED) {
+    return remember({
+      eligible: false,
+      reason: 'Not enough tracks by this artist for a radio',
+      targetLength,
+      ownAnalyzed,
+      similarPool: 0,
+    });
+  }
+
+  // Gate 2: the library has enough acoustically-similar tracks to fill L.
+  // Reuse the same primitive generation uses (one HNSW-indexed query).
+  const centroids = await computeArtistCentroids(userId, artistId, 5);
+  if (!centroids || !centroids.acousticVectorStr) {
+    return remember({
+      eligible: false,
+      reason: 'Not enough similar music for a radio',
+      targetLength,
+      ownAnalyzed,
+      similarPool: 0,
+    });
+  }
+  const neighbors = await fetchCandidatePool({
+    name: 'core',
+    limit: targetLength,
+    vectorStr: centroids.acousticVectorStr,
+    embeddingCentroidStr: centroids.embeddingCentroidStr,
+    effnetWeight: 0.55,
+    userId,
+  });
+  const similarPool = neighbors.length;
+  if (similarPool < targetLength) {
+    return remember({
+      eligible: false,
+      reason: 'Not enough similar music for a radio',
+      targetLength,
+      ownAnalyzed,
+      similarPool,
+    });
+  }
+
+  return remember({ eligible: true, targetLength, ownAnalyzed, similarPool });
+}
+
 // ─── Artist Radio (generated on demand) ────────────────────
 // Multi-pool radio: a seed pool (artist's own most-played) plus core
 // (embedding K-NN around a centroid of the artist's top tracks), adjacent
@@ -508,7 +652,7 @@ export async function computeArtistRadioCandidates(
 // and discovery (never-played / dormant neighbors). Dedup by MB recording
 // id + normalized title; artist diversity enforced via the shared
 // candidatePool primitive.
-async function generateArtistRadioFresh(userId: string, artistId: string, limit: number) {
+async function generateArtistRadioFresh(userId: string, artistId: string, requestedLimit?: number) {
   const id = smartPlaylistId('artist-radio', userId, artistId);
   const db = await initDB();
 
@@ -527,7 +671,13 @@ async function generateArtistRadioFresh(userId: string, artistId: string, limit:
     throw new Error('Cannot generate radio for compilation pseudo-artist');
   }
 
-  const centroids = await computeArtistCentroids(userId, artistId, 5);
+  // Adaptive length: scales sub-linearly with library size unless a caller
+  // pins an explicit count.
+  const limit = requestedLimit ?? adaptiveRadioLength(await getAnalyzedLibrarySize());
+
+  // Sample the seed centroid from a wider window of the artist's top tracks so
+  // each press steers the pools in a slightly different direction (variety).
+  const centroids = await computeArtistCentroids(userId, artistId, 5, { sampleFrom: 12 });
 
   // Library-of-one fallback: artist has no analysed tracks (no acoustic
   // vector). Return their plain catalogue ordered by user play count.
@@ -638,6 +788,9 @@ async function generateArtistRadioFresh(userId: string, artistId: string, limit:
     artistSpread: 0.55,
     diversity: 0.50,
     discoveryBias: 0.45,
+    // Radio regenerates on every press — raise the per-pick jitter so the mix
+    // is meaningfully different each time rather than a deterministic rerun.
+    freshness: 1.8,
     relaxationPlan: [
       // Drop genre filters, widen K, relax artist floor.
       {
@@ -684,16 +837,27 @@ async function generateArtistRadioFresh(userId: string, artistId: string, limit:
   );
 }
 
-export async function generateArtistRadio(userId: string, artistId: string, limit = 30) {
+// Artist radio regenerates fresh on every play (request path passes
+// forceRefresh). The stale-while-revalidate branch is retained only for any
+// internal callers that want the cheap cached copy; `limit` defaults to the
+// adaptive length when omitted.
+export async function generateArtistRadio(
+  userId: string,
+  artistId: string,
+  opts?: { limit?: number; forceRefresh?: boolean }
+) {
+  if (opts?.forceRefresh) {
+    return generateArtistRadioFresh(userId, artistId, opts.limit);
+  }
   const id = smartPlaylistId('artist-radio', userId, artistId);
   const { cached, stale } = await getStaleOrFresh(id, TTL_MS['artist-radio']);
   if (cached) {
     if (stale) {
-      fireBackgroundRefresh(id, () => generateArtistRadioFresh(userId, artistId, limit));
+      fireBackgroundRefresh(id, () => generateArtistRadioFresh(userId, artistId, opts?.limit));
     }
     return cached;
   }
-  return generateArtistRadioFresh(userId, artistId, limit);
+  return generateArtistRadioFresh(userId, artistId, opts?.limit);
 }
 
 // ─── Daylist ────────────────────────────────────────────────

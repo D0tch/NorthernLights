@@ -6,6 +6,7 @@ import { getLlmPlaylistSettings, queueLlmHubRefreshForUser, runLlmHubRegeneratio
 import {
   computeSmartHubBundle,
   generateArtistRadio,
+  evaluateArtistRadioEligibility,
   computeOnRepeat,
   computeRepeatRewind,
   computeDaylist,
@@ -161,7 +162,8 @@ router.get('/daylist', async (req, res) => {
   }
 });
 
-// Generate (or fetch cached) artist radio for a specific artist.
+// Generate a fresh artist radio for a specific artist. Regenerates on every
+// press (forceRefresh) so each play yields a new mix.
 router.post('/artist-radio', async (req, res) => {
   try {
     const userId = req.user?.userId;
@@ -170,11 +172,29 @@ router.post('/artist-radio', async (req, res) => {
     if (!artistId || typeof artistId !== 'string') {
       return res.status(400).json({ error: 'artistId required' });
     }
-    const playlist = await generateArtistRadio(userId, artistId);
+    const playlist = await generateArtistRadio(userId, artistId, { forceRefresh: true });
     res.json({ playlist });
   } catch (error: any) {
     console.error('Artist radio error:', error);
     res.status(500).json({ error: error.message || 'Failed to generate artist radio' });
+  }
+});
+
+// Whether a quality radio can be built for an artist — drives the Play-Radio
+// button's enabled state on the client.
+router.get('/artist-radio-eligibility', async (req, res) => {
+  try {
+    const userId = req.user?.userId;
+    if (!userId) return res.status(401).json({ error: 'Not authenticated' });
+    const artistId = typeof req.query.artistId === 'string' ? req.query.artistId : '';
+    if (!artistId) {
+      return res.status(400).json({ error: 'artistId required' });
+    }
+    const { eligible, reason, targetLength } = await evaluateArtistRadioEligibility(userId, artistId);
+    res.json({ eligible, reason, targetLength });
+  } catch (error: any) {
+    console.error('Artist radio eligibility error:', error);
+    res.status(500).json({ error: error.message || 'Failed to evaluate radio eligibility' });
   }
 });
 

@@ -183,6 +183,7 @@ export interface BuildPlaylistOptions {
   artistSpread?: number;
   diversity?: number;
   discoveryBias?: number;
+  freshness?: number;
   allowSoftVetoRecovery?: boolean;
   relaxationPlan?: Array<{
     poolSpecs: PoolSpec[];
@@ -424,6 +425,10 @@ interface SelectOptions {
   poolTargets?: Map<PoolName, number>;
   maxTracksPerArtist?: number;
   protectArtistIds?: Set<string>;
+  // Multiplier on the per-pick random jitter. 1 = default. Raised by callers
+  // (e.g. artist-radio) that want a meaningfully different mix on every run
+  // rather than a deterministic re-selection.
+  freshness?: number;
 }
 
 export function selectDiverseTracks(rows: any[], count: number, opts: SelectOptions): {
@@ -500,7 +505,7 @@ export function selectDiverseTracks(rows: any[], count: number, opts: SelectOpti
       const meanD = pairwise.length > 0 ? pairwise.reduce((s, x) => s + x, 0) / pairwise.length : 0.30;
       const simPenalty = pairwise.length > 0 ? Math.max(0, 0.20 - meanD) * 2.2 : 0;
       const divBonus = pairwise.length > 0 ? Math.min(0.14, meanD * 0.45) : 0.04;
-      const randomBonus = Math.random() * opts.diversity * 0.18;
+      const randomBonus = Math.random() * opts.diversity * 0.18 * (opts.freshness ?? 1);
 
       const score =
         fitScore + artistPenalty + albumPenalty + rootPenalty + clusterPenalty + simPenalty + poolPenalty
@@ -644,6 +649,7 @@ export async function buildPlaylistFromPools(opts: BuildPlaylistOptions): Promis
       artistSpread,
       discoveryBias,
       diversity,
+      freshness: opts.freshness,
       poolTargets: attempt.targets,
     });
 
@@ -686,11 +692,22 @@ export async function buildPlaylistFromPools(opts: BuildPlaylistOptions): Promis
 // Pull the user's top-N tracks for an artist, parse their acoustic + embedding
 // vectors, and average them. Used as the seed centroid for artist-radio
 // (richer than picking a single seed track).
-export async function computeArtistCentroids(userId: string, artistId: string, topN = 5): Promise<{
+export async function computeArtistCentroids(
+  userId: string,
+  artistId: string,
+  topN = 5,
+  opts?: { sampleFrom?: number }
+): Promise<{
   acousticVectorStr: string | null;
   embeddingCentroidStr: string | null;
   sampleSize: number;
 } | null> {
+  // When `sampleFrom` is given, pull a wider candidate window (the artist's top
+  // `sampleFrom` analysed tracks) and randomly keep `topN` of them, weighted
+  // toward the most-played. This rotates the seed centroid slightly on every
+  // call so artist-radio yields a different mix each press; without it the
+  // behaviour is the deterministic strict top-N (used by the subsonic caller).
+  const fetchN = opts?.sampleFrom && opts.sampleFrom > topN ? opts.sampleFrom : topN;
   const res = await queryWithRetry(
     `
     SELECT
@@ -704,17 +721,26 @@ export async function computeArtistCentroids(userId: string, artistId: string, t
     ORDER BY COALESCE(ups.play_count, 0) DESC, t.id ASC
     LIMIT $3
     `,
-    [userId, artistId, topN]
+    [userId, artistId, fetchN]
   );
 
   if (res.rowCount === 0) return null;
+
+  // Sample `topN` rows from the fetched window, biasing toward earlier (more
+  // played) rows so the centroid still reflects the artist's core sound.
+  let rows = res.rows as any[];
+  if (opts?.sampleFrom && rows.length > topN) {
+    const pool = rows.map((row, i) => ({ row, key: Math.random() / (i + 1) }));
+    pool.sort((a, b) => b.key - a.key);
+    rows = pool.slice(0, topN).map((p) => p.row);
+  }
 
   const acoustic = new Array(8).fill(0);
   const embedding = new Array(1280).fill(0);
   let acousticCount = 0;
   let embeddingCount = 0;
 
-  for (const row of res.rows as any[]) {
+  for (const row of rows) {
     try {
       const av = JSON.parse(row.acoustic_text);
       if (Array.isArray(av) && av.length === 8 && av.every((x) => Number.isFinite(Number(x)))) {

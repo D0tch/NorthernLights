@@ -364,6 +364,13 @@ export const ArtistDetail: React.FC = () => {
     const [similarArtists, setSimilarArtists] = useState<SimilarArtist[]>([]);
     const [similarArtistsLoading, setSimilarArtistsLoading] = useState(false);
     const [radioLoading, setRadioLoading] = useState(false);
+    // Whether a quality radio can actually be built for this artist. Fetched
+    // async so the page renders immediately; the button stays disabled until
+    // we know, then enables (eligible) or shows the reason as a tooltip.
+    const [radioEligibility, setRadioEligibility] = useState<{ checking: boolean; eligible: boolean; reason?: string }>({
+        checking: true,
+        eligible: false,
+    });
     // Credit-driven role browse state. `rolesInLibrary` is sorted by
     // frequency (most credits first) so the chip row leads with the
     // role this artist holds most often in *this* library: producer for
@@ -401,6 +408,26 @@ export const ArtistDetail: React.FC = () => {
             setRadioLoading(false);
         }
     };
+
+    useEffect(() => {
+        if (!artistId) {
+            setRadioEligibility({ checking: false, eligible: false });
+            return;
+        }
+        let cancelled = false;
+        setRadioEligibility({ checking: true, eligible: false });
+        fetch(`/api/hub/artist-radio-eligibility?artistId=${encodeURIComponent(artistId)}`, { headers: getAuthHeader() })
+            .then(res => res.ok ? res.json() : null)
+            .then(data => {
+                if (cancelled) return;
+                if (data) setRadioEligibility({ checking: false, eligible: !!data.eligible, reason: data.reason });
+                else setRadioEligibility({ checking: false, eligible: false });
+            })
+            .catch(() => {
+                if (!cancelled) setRadioEligibility({ checking: false, eligible: false });
+            });
+        return () => { cancelled = true; };
+    }, [artistId]);
 
     useEffect(() => {
         if (!artistId) {
@@ -848,8 +875,13 @@ export const ArtistDetail: React.FC = () => {
                             <button
                                 type="button"
                                 onClick={handlePlayArtistRadio}
-                                disabled={!artistId || radioLoading}
-                                title={radioLoading ? 'Building radio…' : 'Play a mix inspired by this artist'}
+                                disabled={!artistId || radioLoading || radioEligibility.checking || !radioEligibility.eligible}
+                                title={
+                                    radioLoading ? 'Building radio…'
+                                    : radioEligibility.checking ? 'Checking radio…'
+                                    : !radioEligibility.eligible ? (radioEligibility.reason || 'Radio not available for this artist')
+                                    : 'Play a mix inspired by this artist'
+                                }
                                 aria-label={hasPopularInLibrary ? 'Play artist radio' : undefined}
                                 className={`${hasPopularInLibrary ? 'h-12 w-12 px-0 shrink-0' : 'w-full px-8 sm:w-auto'} flex items-center justify-center gap-2 py-3.5 bg-[var(--color-primary)] text-white font-bold text-sm tracking-widest uppercase rounded-full shadow-[0_4px_24px_rgba(16,185,129,0.22)] hover:bg-[var(--color-primary-dark)] hover:scale-[1.02] active:scale-[0.98] disabled:opacity-55 disabled:cursor-not-allowed transition-ui`}
                             >
