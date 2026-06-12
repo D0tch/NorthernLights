@@ -1121,15 +1121,25 @@ export async function getExistingPaths(): Promise<Set<string>> {
 
 // Path (base64) → { mtime, artHash } for incremental change detection during a
 // scan. mtime is epoch ms (null for rows predating the file_mtime column).
-export async function getPathsWithMeta(): Promise<Map<string, { mtime: number | null; artHash: string | null }>> {
+export async function getPathsWithMeta(): Promise<Map<string, { mtime: number | null; artHash: string | null; needsReparse: boolean }>> {
   const db = await initDB();
-  const res = await db.query('SELECT path, file_mtime, art_hash FROM tracks');
-  const map = new Map<string, { mtime: number | null; artHash: string | null }>();
+  // format IS NULL marks a row that never parsed successfully: every real parse
+  // records a container/codec, while the parse-failure fallback (and the
+  // empty-metadata path) leave it null. We key reparse on format rather than
+  // album_id because the migrateEntityIds backfill assigns "Unknown Album" to
+  // entity-less rows — which would otherwise mask them from the self-heal.
+  // Surfacing this lets the incremental walk re-attempt these even when the
+  // file mtime is unchanged, so a transient failure (a file scanned mid-copy,
+  // a cover sharp couldn't decode) self-heals on the next scan instead of
+  // staying stranded — undiscoverable — forever.
+  const res = await db.query('SELECT path, file_mtime, art_hash, format FROM tracks');
+  const map = new Map<string, { mtime: number | null; artHash: string | null; needsReparse: boolean }>();
   for (const r of res.rows) {
     if (!r.path) continue;
     map.set(r.path, {
       mtime: r.file_mtime != null ? Number(r.file_mtime) : null,
       artHash: r.art_hash ?? null,
+      needsReparse: r.format == null,
     });
   }
   return map;
@@ -1171,6 +1181,28 @@ export async function getPathsForDirectory(dirPath: string): Promise<Buffer[]> {
     [dirBuf]
   );
   return res.rows.map((r: any) => Buffer.from(r.path, 'base64'));
+}
+
+// Records a file whose metadata could not be parsed this pass WITHOUT
+// clobbering metadata a previous successful parse already stored. For a
+// brand-new path it inserts a minimal row (filename as title, NULL entity ids)
+// so the file is tracked and retried later — album_id IS NULL marks it for
+// reparse on the next sync walk. For an EXISTING row it only refreshes
+// file_mtime/file_size and leaves title/artist_id/album_id/duration intact: a
+// transient failure (a file scanned mid-copy, a worker that died, a cover sharp
+// couldn't decode) must never destroy good data or replace a real title with
+// the filename. Mirrors addTrack's id/path derivation so it targets the same row.
+export async function recordUnparsedTrack(track: { path: string; title: string; fileMtime: number | null; fileSize: number | null }): Promise<void> {
+  const db = await initDB();
+  const id = Buffer.from(track.path).toString('base64');
+  await db.query(
+    `INSERT INTO tracks (id, title, path, file_mtime, file_size)
+     VALUES ($1, $2, $3, $4, $5)
+     ON CONFLICT (id) DO UPDATE SET
+       file_mtime = COALESCE(EXCLUDED.file_mtime, tracks.file_mtime),
+       file_size  = COALESCE(EXCLUDED.file_size, tracks.file_size)`,
+    [id, sanitizeString(track.title) || path.basename(track.path), track.path, track.fileMtime, track.fileSize]
+  );
 }
 
 export async function addTrack(track: any) {

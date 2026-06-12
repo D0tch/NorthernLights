@@ -508,12 +508,12 @@ async function processMetadataBatch(input: Array<Buffer | ScanItem>, concurrency
           } else {
             console.warn(`Failed to parse metadata for ${nameStr}: ${result.error}`);
             errorCount++;
-            await addTrack({ path: dbPath, title: nameStr, bitrate: null, format: null, fileMtime: item.mtime ?? null, fileSize: item.size ?? null });
+            await recordUnparsedTrack({ path: dbPath, title: nameStr, fileMtime: item.mtime ?? null, fileSize: item.size ?? null });
           }
         } catch (err) {
           console.warn(`Failed metadata processing for ${nameStr}`, err);
           errorCount++;
-          await addTrack({ path: dbPath, title: nameStr, bitrate: null, format: null, fileMtime: item.mtime ?? null, fileSize: item.size ?? null });
+          await recordUnparsedTrack({ path: dbPath, title: nameStr, fileMtime: item.mtime ?? null, fileSize: item.size ?? null });
         } finally {
           activeMap.delete(i);
           scanStatus.activeFiles = Array.from(activeMap.values());
@@ -876,6 +876,11 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
     if (!meta) {
       itemsToProcess.push({ buf: f.buf, mtime: f.mtime, size: f.size, knownArtHash: null });
     } else if (meta.mtime != null && meta.mtime !== f.mtime) {
+      itemsToProcess.push({ buf: f.buf, mtime: f.mtime, size: f.size, knownArtHash: meta.artHash });
+    } else if (meta.needsReparse) {
+      // Never-parsed row (format IS NULL): re-attempt regardless of mtime so a
+      // transient failure (file scanned mid-copy, cover sharp couldn't decode)
+      // self-heals on the next walk.
       itemsToProcess.push({ buf: f.buf, mtime: f.mtime, size: f.size, knownArtHash: meta.artHash });
     }
   }

@@ -376,7 +376,21 @@ process.stdin.on('data', async (chunk: string) => {
       const metadata = await mm.parseFile(utf8Path, { skipCovers: !msg.processArt, duration: true });
       const rawUrls = extractUrlTags(metadata.native || {});
 
-      const artHash = msg.processArt ? await processArtwork(metadata, msg.knownArtHash) : undefined;
+      // Artwork encoding is isolated: a cover in a format sharp can't decode
+      // ("unsupported image format") must NOT sink the track's metadata. These
+      // are common in DJ-mix / compilation rips. On failure we treat the track
+      // as art-less (artHash '') and still emit the parsed tags, so the track
+      // gets a real title/artist/album/duration instead of the filename-only
+      // parse-failure fallback.
+      let artHash: string | undefined = undefined;
+      if (msg.processArt) {
+        try {
+          artHash = await processArtwork(metadata, msg.knownArtHash);
+        } catch (artErr: any) {
+          artHash = '';
+          process.stderr.write(`[scanTrack] art decode failed (${artErr?.message || artErr}), keeping metadata\n`);
+        }
+      }
 
       process.stdout.write(JSON.stringify({
         id: msg.id,
