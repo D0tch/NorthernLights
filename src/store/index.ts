@@ -664,7 +664,7 @@ export const usePlayerStore = create<PlayerState>()(
           const state = get();
           const { duration } = getPlaybackTimeSnapshot();
           if (!state._scrobbleEligible && state._scrobbleStartAt && duration > 30) {
-            const pct = Math.min(Math.max(state.playedThresholdPercent || 95, 1), 100) / 100;
+            const pct = Math.min(Math.max(state.playedThresholdPercent || 50, 1), 100) / 100;
             const threshold = Math.min(duration * pct, 240); // 4 minutes = 240s cap
             if (time >= threshold) {
               set({ _scrobbleEligible: true });
@@ -1009,7 +1009,10 @@ export const usePlayerStore = create<PlayerState>()(
         discoveryLevel: 50,
         genreStrictness: 50,
         artistAmnesiaLimit: 50,
-        playedThresholdPercent: 95,
+        // Standard scrobble threshold (Last.fm/ListenBrainz): ~half a track (or
+        // 4 min). 95% was effectively "finish the song", so casual listening
+        // recorded no plays and the history-driven Hub sections never populated.
+        playedThresholdPercent: 50,
         llmPlaylistDiversity: 50,
         llmVetoMode: 'hard' as LlmVetoMode,
         llmGenreCohesion: 50,
@@ -1238,7 +1241,7 @@ export const usePlayerStore = create<PlayerState>()(
                 discoveryLevel: data.discoveryLevel !== undefined ? data.discoveryLevel : 50,
                 genreStrictness: data.genreStrictness !== undefined ? data.genreStrictness : 50,
                 artistAmnesiaLimit: data.artistAmnesiaLimit !== undefined ? data.artistAmnesiaLimit : 50,
-                playedThresholdPercent: data.playedThresholdPercent !== undefined ? Number(data.playedThresholdPercent) : 95,
+                playedThresholdPercent: data.playedThresholdPercent !== undefined ? Number(data.playedThresholdPercent) : 50,
                 llmPlaylistDiversity: data.llmPlaylistDiversity !== undefined ? data.llmPlaylistDiversity : 50,
                 llmVetoMode: data.llmVetoMode === 'adaptive' ? 'adaptive' : 'hard',
                 llmGenreCohesion: data.llmGenreCohesion !== undefined ? data.llmGenreCohesion : (data.genreBlendWeight !== undefined ? data.genreBlendWeight : 50),
