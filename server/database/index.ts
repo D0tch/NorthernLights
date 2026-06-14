@@ -56,19 +56,6 @@ export async function initDB(): Promise<Pool> {
         console.log('[DB] Client removed from database pool');
       });
 
-      instance.on('acquire', (client) => {
-        if (!client) return;
-        
-        // Skip leak detection during long-running operations (e.g., MBDB import)
-        if (!isLeakDetectionActive()) return;
-        
-        const stack = new Error().stack;
-        (client as any)._leakTimeout = setTimeout(() => {
-          console.warn('[DB] CONNECTION LEAK DETECTED: Client held for > 2 minutes.');
-          if (stack) console.warn('[DB] Leak origin stack trace:', stack);
-        }, 2 * 60 * 1000);
-      });
-
       instance.on('release', (err, client) => {
         if (client && (client as any)._leakTimeout) {
           clearTimeout((client as any)._leakTimeout);
@@ -106,6 +93,38 @@ export async function initDB(): Promise<Pool> {
           );
         }
         return result;
+      };
+
+      // Connection-leak detection. The stack MUST be captured here, at the real
+      // connect() call site — the pool's 'acquire' event fires a tick later, so
+      // a stack taken there only shows pg-pool internals and can't name the
+      // caller. We wrap connect() (mirroring the query wrapper above): capture
+      // the caller stack synchronously, then arm a timer on the resolved client
+      // that warns if it isn't released within DB_LEAK_TIMEOUT_MS. The timer is
+      // cleared by the 'release'/'remove' handlers above. pool.query() checkouts
+      // don't go through here, but they're auto-released by pg and bounded by
+      // statement_timeout (30s), so they can never trip this threshold.
+      const leakMs = parseInt(process.env.DB_LEAK_TIMEOUT_MS || '120000', 10);
+      const originalConnect = instance.connect.bind(instance);
+      (instance as any).connect = (...args: any[]) => {
+        if (typeof args[0] === 'function') {
+          return (originalConnect as any)(...args); // callback form: pass through
+        }
+        const stack = new Error().stack;
+        return (originalConnect as any)().then((connected: any) => {
+          if (connected && isLeakDetectionActive()) {
+            connected._leakTimeout = setTimeout(() => {
+              console.warn(`[DB] CONNECTION LEAK DETECTED: client held for > ${Math.round(leakMs / 1000)}s.`);
+              console.warn('[DB] Acquired at:', stack);
+              console.warn('[DB] Pool stats:', {
+                total: instance.totalCount,
+                idle: instance.idleCount,
+                waiting: instance.waitingCount,
+              });
+            }, leakMs);
+          }
+          return connected;
+        });
       };
 
       // Test connection and initialize schema
