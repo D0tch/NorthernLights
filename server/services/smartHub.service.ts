@@ -164,6 +164,15 @@ async function persistSmart(
   const uniqueTrackIds = Array.from(new Set(trackIds.filter(Boolean)));
 
   await withTransaction(async (client) => {
+    // Bound the advisory-lock wait so a contended or stuck refresh can't pin a
+    // pooled connection. lock_timeout applies to pg_advisory_xact_lock (it waits
+    // via the standard lock manager), aborting with 55P03 if the lock isn't
+    // granted in time. SET LOCAL scopes this to the transaction so it reverts on
+    // COMMIT/ROLLBACK and never rides back into the pool on the released client.
+    // 10s is far above normal serialization (a refresh holds the lock for ms)
+    // yet well under the 30s statement_timeout and 2-min leak threshold.
+    await client.query(`SET LOCAL lock_timeout = '10s'`);
+
     // Serialize same-playlist smart refreshes. Without this, two concurrent
     // Hub requests can interleave track replacement for the same stable ID.
     await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [id]);
