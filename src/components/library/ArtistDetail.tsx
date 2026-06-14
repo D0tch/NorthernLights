@@ -16,6 +16,7 @@ import { formatTime } from '../../utils/formatTime';
 import { ExternalLink, Globe, Users, Mic2, Calendar, Sparkles, Music2, Clock, BookOpen, Play, Headphones, Link2, Disc3, Radio, Tag } from 'lucide-react';
 import { ContextMenuFrame, ContextMenuHeader, ContextMenuLink, ContextMenuList, ContextMenuPortal } from '../ContextMenu';
 import { useArtistConcerts, OnTourSticker, UpcomingShows } from './ArtistConcerts';
+import { useArtistMusicVideos, MusicVideos } from './ArtistMusicVideos';
 import { useIsCurrentCollection, useNowPlayingState } from '../../hooks/useNowPlaying';
 import { NowPlayingBadge } from '../now-playing/NowPlayingBadge';
 import { NowPlayingBars } from '../now-playing/NowPlayingBars';
@@ -354,6 +355,7 @@ export const ArtistDetail: React.FC = () => {
 
     const { imageUrl, artworkUrl, bio, disambiguation, area, type, lifeSpan, links, genres, communityTags, listeners, members, isLoading: artistLoading } = useArtistData(artistName, mbArtistId);
     const { onTour, events: upcomingEvents, loading: concertsLoading, stale: concertsStale } = useArtistConcerts(artistId);
+    const { videos: musicVideos, loading: musicVideosLoading, stale: musicVideosStale } = useArtistMusicVideos(artistId);
     const { tracks: externalTopTracks } = useArtistTopTracks(artistName, {
         enabled: !!artistName,
         limit: 30,
@@ -1092,6 +1094,12 @@ export const ArtistDetail: React.FC = () => {
                         )}
                     </section>
                 )}
+
+                <MusicVideos
+                    videos={musicVideos}
+                    loading={musicVideosLoading}
+                    stale={musicVideosStale}
+                />
 
                 <UpcomingShows
                     events={upcomingEvents}

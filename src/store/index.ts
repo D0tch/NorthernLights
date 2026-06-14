@@ -501,6 +501,13 @@ export interface PlayerState {
   jambaseMonthlyCap: number;
   jambaseHardStop: boolean;
 
+  // YouTube music videos (system-level, admin)
+  youtubeEnabled: boolean;
+  youtubeApiKey: string;
+  youtubeCacheTtlDays: number;
+  youtubeDailyQuotaCap: number;
+  youtubeHardStop: boolean;
+
   // Concerts (per-user)
   concertsEnabled: boolean;
   concertsLat: number | null;
@@ -981,6 +988,11 @@ export const usePlayerStore = create<PlayerState>()(
         jambaseCacheTtlDays: 7,
         jambaseMonthlyCap: 1000,
         jambaseHardStop: true as boolean,
+        youtubeEnabled: false as boolean,
+        youtubeApiKey: '',
+        youtubeCacheTtlDays: 14,
+        youtubeDailyQuotaCap: 9000,
+        youtubeHardStop: true as boolean,
         concertsEnabled: false as boolean,
         concertsLat: null as number | null,
         concertsLng: null as number | null,
@@ -1291,6 +1303,11 @@ export const usePlayerStore = create<PlayerState>()(
                 jambaseCacheTtlDays: typeof data.jambaseCacheTtlDays === 'number' ? data.jambaseCacheTtlDays : 7,
                 jambaseMonthlyCap: typeof data.jambaseMonthlyCap === 'number' ? data.jambaseMonthlyCap : 1000,
                 jambaseHardStop: data.jambaseHardStop ?? true,
+                youtubeEnabled: data.youtubeEnabled ?? false,
+                youtubeApiKey: data.youtubeApiKey || '',
+                youtubeCacheTtlDays: typeof data.youtubeCacheTtlDays === 'number' ? data.youtubeCacheTtlDays : 14,
+                youtubeDailyQuotaCap: typeof data.youtubeDailyQuotaCap === 'number' ? data.youtubeDailyQuotaCap : 9000,
+                youtubeHardStop: data.youtubeHardStop ?? true,
                 concertsEnabled: data.concertsEnabled ?? false,
                 concertsLat: typeof data.concertsLat === 'number' ? data.concertsLat : null,
                 concertsLng: typeof data.concertsLng === 'number' ? data.concertsLng : null,
@@ -1368,6 +1385,11 @@ export const usePlayerStore = create<PlayerState>()(
                 jambaseCacheTtlDays: state.jambaseCacheTtlDays,
                 jambaseMonthlyCap: state.jambaseMonthlyCap,
                 jambaseHardStop: state.jambaseHardStop,
+                youtubeEnabled: state.youtubeEnabled,
+                youtubeApiKey: state.youtubeApiKey,
+                youtubeCacheTtlDays: state.youtubeCacheTtlDays,
+                youtubeDailyQuotaCap: state.youtubeDailyQuotaCap,
+                youtubeHardStop: state.youtubeHardStop,
                 concertsEnabled: state.concertsEnabled,
                 concertsLat: state.concertsLat,
                 concertsLng: state.concertsLng,
