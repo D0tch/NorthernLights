@@ -148,12 +148,26 @@ function parseArtistLinks(artist: any): { url: string; type: string }[] {
   return [];
 }
 
+// Validate the host properly rather than substring-matching "youtube.com":
+// a bare `.includes('youtube.com')` would also accept hostile lookalikes like
+// `https://youtube.com.evil.test` or `https://evil.test/?x=youtube.com`.
+function isYouTubeHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return h === 'youtube.com' || h === 'youtu.be' || h.endsWith('.youtube.com');
+}
+
 function findYouTubeUrl(links: { url: string; type: string }[]): string | null {
-  const yt = links.find((l) => {
-    const u = (l?.url || '').toLowerCase();
-    return u.includes('youtube.com') || u.includes('youtu.be');
-  });
-  return yt?.url || null;
+  for (const l of links) {
+    const raw = (l?.url || '').trim();
+    if (!raw) continue;
+    try {
+      const u = new URL(raw.startsWith('http') ? raw : `https://${raw}`);
+      if (isYouTubeHost(u.hostname)) return u.toString();
+    } catch {
+      // Skip malformed URLs.
+    }
+  }
+  return null;
 }
 
 type ChannelRef =
