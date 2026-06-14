@@ -12,6 +12,7 @@ import {
   type MusicVideoRow,
 } from '../database';
 import { getSongDedupKey } from './candidatePool.service';
+import { videoTitleCandidates } from './youtubeTitle';
 
 const YT_BASE = 'https://www.googleapis.com/youtube/v3';
 const USER_AGENT = 'AuroraMediaServer/1.0';
@@ -213,23 +214,8 @@ async function resolveArtistChannelId(artist: any): Promise<{ channelId: string 
   return { channelId, reason: channelId ? null : 'Channel link did not resolve', ready: true };
 }
 
-// ─── Title cleaning + matching ──────────────────────────────────────────
-
-const SEPARATORS = /\s+[-–—:|]\s+/;
-// Bracket/paren groups that are video-type noise rather than part of the title.
-const NOISE_GROUP = /[\(\[]\s*[^\)\]]*\b(?:official|video|audio|lyrics?|visuali[sz]er|hd|hq|4k|mv|m\/v|clip|explicit|full)\b[^\)\]]*[\)\]]/gi;
-
-// Normalize a YouTube upload title toward the bare song title so it can be
-// matched against the library. We do NOT strip "feat." here — track titles in
-// the library often carry it, and getSongDedupKey applies the same
-// normalization to both sides.
-export function cleanYouTubeVideoTitle(title: string): string {
-  if (!title) return '';
-  let t = title.replace(NOISE_GROUP, ' ');
-  // Trailing dash-qualifiers, e.g. "Song - Official Video".
-  t = t.replace(/\s+[-–—]\s+(?:official\s+)?(?:music\s+)?(?:video|audio|lyrics?|visuali[sz]er|hd|4k|mv)\s*$/i, '');
-  return t.replace(/\s+/g, ' ').trim();
-}
+// ─── Title matching ─────────────────────────────────────────────────────
+// Title cleaning / candidate generation lives in ./youtubeTitle (pure + tested).
 
 // Title-only match key, scoped to one artist's catalogue (we already filter by
 // artist_id), so the artist component is intentionally dropped — collaborator
@@ -335,14 +321,8 @@ export async function refreshArtistVideos(artistId: string): Promise<{ count: nu
     // Match each upload to a library track; keep the best video per track.
     const bestByTrack = new Map<string, { video: RawVideo; track: any; score: number }>();
     for (const v of uploads) {
-      const cleaned = cleanYouTubeVideoTitle(v.title);
-      // Try the cleaned title, and the cleaned title with a leading "Artist - "
-      // prefix removed (channel uploads almost always carry that prefix).
-      const candidates = [cleaned];
-      if (SEPARATORS.test(cleaned)) candidates.push(cleaned.split(SEPARATORS).slice(1).join(' - '));
-
       let matched: any = null;
-      for (const c of candidates) {
+      for (const c of videoTitleCandidates(v.title)) {
         const t = trackByKey.get(titleKey(c));
         if (t) { matched = t; break; }
       }
@@ -355,8 +335,17 @@ export async function refreshArtistVideos(artistId: string): Promise<{ count: nu
       }
     }
 
+    // Dedupe by video_id: two library tracks sharing a title (e.g. original +
+    // remaster) can map to the same upload. Keep the first (lowest position) so
+    // the stored count matches the rows actually written (video_id is the PK).
+    const seenVideoIds = new Set<string>();
     const rows: Omit<MusicVideoRow, 'fetched_at'>[] = Array.from(bestByTrack.values())
       .sort((a, b) => a.video.position - b.video.position)
+      .filter(({ video }) => {
+        if (seenVideoIds.has(video.videoId)) return false;
+        seenVideoIds.add(video.videoId);
+        return true;
+      })
       .map(({ video, track }) => ({
         video_id: video.videoId,
         artist_id: artistId,

@@ -1,8 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { usePlayerStore } from '../../store/index';
 import { Video, Play, X, AlertTriangle } from 'lucide-react';
 import { HorizontalScrollRail } from '../HorizontalScrollRail';
+
+// Route external thumbnails through the server image proxy (same convention as
+// AlbumArt / AlbumCoverDisc) so the browser never hits ytimg.com directly.
+function proxyImageUrl(externalUrl: string): string {
+    return `/api/providers/external/proxy-image?url=${encodeURIComponent(externalUrl)}`;
+}
 
 export type MusicVideo = {
     video_id: string;
@@ -35,7 +41,7 @@ export function useArtistMusicVideos(artistId: string | undefined): {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        if (!artistId) return;
+        if (!artistId) { setLoading(false); return; }
         let cancelled = false;
         setLoading(true);
         (async () => {
@@ -84,7 +90,7 @@ const VideoCard: React.FC<{ video: MusicVideo; onOpen: (v: MusicVideo) => void }
             <div className="relative aspect-video w-full overflow-hidden rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface-variant)]">
                 {video.thumbnail_url ? (
                     <img
-                        src={video.thumbnail_url}
+                        src={proxyImageUrl(video.thumbnail_url)}
                         alt={video.title || ''}
                         loading="lazy"
                         decoding="async"
@@ -128,19 +134,41 @@ const VideoCard: React.FC<{ video: MusicVideo; onOpen: (v: MusicVideo) => void }
 const VideoModal: React.FC<{ video: MusicVideo; onClose: () => void }> = ({ video, onClose }) => {
     const pause = usePlayerStore(s => s.pause);
     const playbackState = usePlayerStore(s => s.playbackState);
+    const dialogRef = useRef<HTMLDivElement>(null);
+    const closeButtonRef = useRef<HTMLButtonElement>(null);
 
     useEffect(() => {
         // Don't talk over the video: pause local audio while the player is open.
+        // We intentionally do NOT auto-resume on close — the user closed the
+        // video and can resume playback themselves.
         if (playbackState === 'playing') pause();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
+    // Esc to close + focus trap + focus restore, matching ConfirmModal.
     useEffect(() => {
+        const previouslyFocused = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+        closeButtonRef.current?.focus();
+
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') { e.preventDefault(); onClose(); }
+            if (e.key === 'Escape') { e.preventDefault(); onClose(); return; }
+            if (e.key !== 'Tab' || !dialogRef.current) return;
+            const focusable = Array.from(
+                dialogRef.current.querySelectorAll<HTMLElement>(
+                    'button:not([disabled]), [href], iframe, [tabindex]:not([tabindex="-1"])'
+                )
+            );
+            if (focusable.length === 0) return;
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+            if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+            else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
         };
         document.addEventListener('keydown', onKey);
-        return () => document.removeEventListener('keydown', onKey);
+        return () => {
+            document.removeEventListener('keydown', onKey);
+            previouslyFocused?.focus();
+        };
     }, [onClose]);
 
     return createPortal(
@@ -152,8 +180,9 @@ const VideoModal: React.FC<{ video: MusicVideo; onClose: () => void }> = ({ vide
             aria-label={video.title || 'Music video'}
         >
             <div className="absolute inset-0 bg-black/80 backdrop-blur-sm" />
-            <div className="relative z-10 w-full max-w-4xl" onClick={e => e.stopPropagation()}>
+            <div ref={dialogRef} className="relative z-10 w-full max-w-4xl" onClick={e => e.stopPropagation()}>
                 <button
+                    ref={closeButtonRef}
                     type="button"
                     onClick={onClose}
                     aria-label="Close video"
@@ -164,7 +193,7 @@ const VideoModal: React.FC<{ video: MusicVideo; onClose: () => void }> = ({ vide
                 <div className="aspect-video w-full overflow-hidden rounded-xl bg-black shadow-2xl">
                     <iframe
                         className="h-full w-full"
-                        src={`https://www.youtube-nocookie.com/embed/${video.video_id}?autoplay=1&rel=0`}
+                        src={`https://www.youtube-nocookie.com/embed/${encodeURIComponent(video.video_id)}?autoplay=1&rel=0`}
                         title={video.title || 'Music video'}
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                         allowFullScreen

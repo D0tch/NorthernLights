@@ -136,6 +136,7 @@ function isAllowedProxyImageUrl(parsed: URL): boolean {
     'is3-ssl.mzstatic.com',
     'is4-ssl.mzstatic.com',
     'is5-ssl.mzstatic.com',
+    'ytimg.com', // YouTube video thumbnails (i.ytimg.com, i9.ytimg.com, …)
   ];
 
   const hostname = parsed.hostname.toLowerCase();

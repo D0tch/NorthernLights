@@ -5282,12 +5282,18 @@ export async function getMusicVideosForArtist(artistId: string, limit: number = 
   return res.rows as (MusicVideoRow & { track_artist: string | null; track_artists: string | null })[];
 }
 
+// The YouTube Data API quota resets at midnight US/Pacific, so key the counter
+// by the Pacific calendar date rather than UTC. en-CA formats as 'YYYY-MM-DD'.
+function pacificDay(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date());
+}
+
 // Atomic daily counter. Returns the new count if the call is allowed, or null
 // if the hard cap is reached. Single statement so concurrent callers can't
 // overshoot the cap by more than the in-flight increments that lost the race.
 export async function incrementYoutubeApiUsage(opts: { cap?: number | null; units?: number } = {}): Promise<number | null> {
   const db = await initDB();
-  const day = new Date().toISOString().slice(0, 10); // 'YYYY-MM-DD'
+  const day = pacificDay();
   const cap = typeof opts.cap === 'number' && opts.cap > 0 ? opts.cap : null;
   const units = typeof opts.units === 'number' && opts.units > 0 ? Math.floor(opts.units) : 1;
 
@@ -5319,7 +5325,7 @@ export async function incrementYoutubeApiUsage(opts: { cap?: number | null; unit
 
 export async function getYoutubeApiUsage(day?: string) {
   const db = await initDB();
-  const d = day || new Date().toISOString().slice(0, 10);
+  const d = day || pacificDay();
   const res = await db.query(
     'SELECT day, count, last_call_at FROM youtube_api_usage WHERE day = $1',
     [d]
