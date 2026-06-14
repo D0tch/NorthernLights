@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { createRateLimiter } from '../middleware/rateLimit';
 import { randomBytes } from 'crypto';
-import { getSystemSetting, setSystemSetting, getUserSetting, setUserSetting, getRepresentativeReleaseMbid } from '../database';
+import { getSystemSetting, setSystemSetting, getUserSetting, setUserSetting, getRepresentativeReleaseMbid, getArtistVideosCache } from '../database';
 import { caaGetReleaseImages, pickMediumImage, pickFrontImage } from '../services/metadata/providers/musicbrainz';
 import { lfmFetch, scrobbleTracks, updateNowPlaying, loveTrack, unloveTrack } from '../services/lastfm.service';
 import {
@@ -26,6 +26,15 @@ import {
   RateLimitError,
   ProviderError,
 } from '../services/metadata';
+import {
+  isYouTubeEnabled,
+  refreshArtistVideosIfStale,
+  testYouTubeConnection,
+  getMusicVideosForArtist,
+  getCurrentDayUsage as getYoutubeDayUsage,
+  YoutubeBudgetError,
+  YoutubeConfigError,
+} from '../services/youtube.service';
 
 const router = Router();
 
@@ -127,6 +136,7 @@ function isAllowedProxyImageUrl(parsed: URL): boolean {
     'is3-ssl.mzstatic.com',
     'is4-ssl.mzstatic.com',
     'is5-ssl.mzstatic.com',
+    'ytimg.com', // YouTube video thumbnails (i.ytimg.com, i9.ytimg.com, …)
   ];
 
   const hostname = parsed.hostname.toLowerCase();
@@ -1125,6 +1135,73 @@ router.post('/providers/external/refresh', requireAdmin, async (req, res) => {
   } catch (err: any) {
     console.error('[ExternalMeta] refresh error:', err.message);
     res.status(500).json({ error: 'Failed to clear cache' });
+  }
+});
+
+// ─── YouTube Music Videos ─────────────────────────────────────────────
+
+// Artist-page rail. Mirrors the concerts artist route: serve cached matches
+// always; refresh from YouTube only when enabled and the cache is stale.
+router.get('/providers/external/artist-videos/:artistId', requireAuth, async (req, res) => {
+  try {
+    const artistId = String(req.params.artistId);
+
+    if (!(await isYouTubeEnabled())) {
+      const videos = await getMusicVideosForArtist(artistId, 30);
+      return res.json({ videos, refreshed: false, stale: false, disabled: true, lastFetchedAt: null });
+    }
+
+    let refreshed = false;
+    let stale = false;
+    try {
+      const r = await refreshArtistVideosIfStale(artistId);
+      refreshed = r.refreshed;
+    } catch (err) {
+      if (err instanceof YoutubeBudgetError) {
+        stale = true;
+      } else if (err instanceof YoutubeConfigError) {
+        // No key — fall back to whatever cache exists.
+      } else {
+        // Don't fail the request; serve cache and signal staleness.
+        stale = true;
+      }
+    }
+
+    const videos = await getMusicVideosForArtist(artistId, 30);
+    const cache = await getArtistVideosCache(artistId);
+    res.json({
+      videos,
+      refreshed,
+      stale,
+      lastFetchedAt: cache?.fetched_at || null,
+    });
+  } catch (err: any) {
+    console.error('[YouTube] artist-videos error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/providers/youtube/status', requireAdmin, async (_req, res) => {
+  try {
+    const apiKey = await getSystemSetting('youtubeApiKey');
+    const enabled = await getSystemSetting('youtubeEnabled');
+    const usage = await getYoutubeDayUsage();
+    res.json({ hasKey: !!apiKey, enabled: !!enabled, usage });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.post('/providers/youtube/test', requireAdmin, async (_req, res) => {
+  try {
+    const result = await testYouTubeConnection();
+    if (result.ok) {
+      res.json({ status: 'ok', sample: result.sample });
+    } else {
+      res.status(400).json({ status: 'error', error: result.error });
+    }
+  } catch (err: any) {
+    res.status(502).json({ status: 'error', error: err.message || 'Network error' });
   }
 });
 

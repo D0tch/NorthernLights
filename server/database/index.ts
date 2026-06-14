@@ -828,6 +828,46 @@ export async function initDB(): Promise<Pool> {
         );
 
         -- ==========================================
+        -- YOUTUBE MUSIC VIDEOS (artist page rail)
+        -- Mirrors the concerts tables: matched videos + a per-artist fetch
+        -- marker + a daily API-unit counter (YouTube quota resets daily).
+        -- ==========================================
+
+        -- One row per YouTube video matched to a library track of the artist.
+        CREATE TABLE IF NOT EXISTS artist_music_videos (
+          video_id TEXT PRIMARY KEY,
+          artist_id UUID REFERENCES artists(id) ON DELETE CASCADE,
+          track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE,
+          title TEXT,
+          thumbnail_url TEXT,
+          published_at TIMESTAMPTZ,
+          position INTEGER,
+          fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS artist_music_videos_artist_id_idx ON artist_music_videos(artist_id);
+
+        -- Per-artist fetch marker so "checked, no matches" is distinct from
+        -- "never checked" — otherwise an artist with no channel/matches would
+        -- be re-fetched on every page visit.
+        CREATE TABLE IF NOT EXISTS artist_videos_cache (
+          artist_id UUID PRIMARY KEY REFERENCES artists(id) ON DELETE CASCADE,
+          youtube_channel_id TEXT,
+          videos_count INTEGER NOT NULL DEFAULT 0,
+          last_error TEXT,
+          fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        -- Daily API-unit counter. One row per calendar day (e.g. '2026-04-19').
+        -- YouTube Data API quota resets daily (Pacific midnight); a day key is
+        -- the right granularity. Lazy reset: first call of a new day inserts a
+        -- fresh row.
+        CREATE TABLE IF NOT EXISTS youtube_api_usage (
+          day TEXT PRIMARY KEY,
+          count INTEGER NOT NULL DEFAULT 0,
+          last_call_at TIMESTAMPTZ
+        );
+
+        -- ==========================================
         -- GIN TRIGRAM INDEXES FOR FILTER ILIKE QUERIES
         -- pg_trgm extension is already enabled above.
         -- These allow index-backed wildcard text search
@@ -5150,4 +5190,145 @@ export async function getConcertsApiUsage(yearMonth?: string) {
     [ym]
   );
   return res.rows[0] || { year_month: ym, count: 0, last_call_at: null };
+}
+
+// ─── YouTube music videos (artist page rail) ───────────────────────────
+// Mirrors the concerts cache helpers above.
+
+export type MusicVideoRow = {
+  video_id: string;
+  artist_id: string;
+  track_id: string | null;
+  title: string | null;
+  thumbnail_url: string | null;
+  published_at: string | null;
+  position: number | null;
+  fetched_at: string;
+};
+
+// Cache marker for "we fetched this artist's videos at time X, got N matches".
+// Distinct from artist_music_videos because an artist with zero matched videos
+// would have no rows, leaving us no way to tell "never fetched" from "checked,
+// empty".
+export async function getArtistVideosCache(artistId: string) {
+  const db = await initDB();
+  const res = await db.query(
+    'SELECT artist_id, youtube_channel_id, videos_count, last_error, fetched_at FROM artist_videos_cache WHERE artist_id = $1',
+    [artistId]
+  );
+  return res.rows[0] || null;
+}
+
+export async function upsertArtistVideosCache(artistId: string, opts: { channelId?: string | null; videosCount?: number; lastError?: string | null }) {
+  const db = await initDB();
+  await db.query(`
+    INSERT INTO artist_videos_cache (artist_id, youtube_channel_id, videos_count, last_error, fetched_at)
+    VALUES ($1, $2, $3, $4, NOW())
+    ON CONFLICT (artist_id) DO UPDATE SET
+      youtube_channel_id = COALESCE(EXCLUDED.youtube_channel_id, artist_videos_cache.youtube_channel_id),
+      videos_count = EXCLUDED.videos_count,
+      last_error = EXCLUDED.last_error,
+      fetched_at = NOW()
+  `, [artistId, opts.channelId ?? null, opts.videosCount ?? 0, opts.lastError ?? null]);
+}
+
+// Replace this artist's cached videos in a transaction so a partial failure
+// can't leave the cache half-rebuilt.
+export async function replaceArtistVideos(artistId: string, videos: Omit<MusicVideoRow, 'fetched_at'>[]) {
+  const db = await initDB();
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('DELETE FROM artist_music_videos WHERE artist_id = $1', [artistId]);
+    for (const v of videos) {
+      await client.query(`
+        INSERT INTO artist_music_videos (
+          video_id, artist_id, track_id, title, thumbnail_url, published_at, position
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7)
+        ON CONFLICT (video_id) DO UPDATE SET
+          artist_id = EXCLUDED.artist_id,
+          track_id = EXCLUDED.track_id,
+          title = EXCLUDED.title,
+          thumbnail_url = EXCLUDED.thumbnail_url,
+          published_at = EXCLUDED.published_at,
+          position = EXCLUDED.position,
+          fetched_at = NOW()
+      `, [
+        v.video_id, v.artist_id, v.track_id, v.title, v.thumbnail_url,
+        v.published_at, v.position,
+      ]);
+    }
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+// Matched videos for an artist, in channel-upload order. Joins the matched
+// track so the rail can credit the song's artists (e.g. "Kaskade, deadmau5").
+export async function getMusicVideosForArtist(artistId: string, limit: number = 30) {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT mv.*, t.artist AS track_artist, t.artists AS track_artists
+    FROM artist_music_videos mv
+    LEFT JOIN tracks t ON t.id = mv.track_id
+    WHERE mv.artist_id = $1
+    ORDER BY mv.position ASC NULLS LAST, mv.published_at DESC NULLS LAST
+    LIMIT $2
+  `, [artistId, limit]);
+  return res.rows as (MusicVideoRow & { track_artist: string | null; track_artists: string | null })[];
+}
+
+// The YouTube Data API quota resets at midnight US/Pacific, so key the counter
+// by the Pacific calendar date rather than UTC. en-CA formats as 'YYYY-MM-DD'.
+function pacificDay(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Los_Angeles' }).format(new Date());
+}
+
+// Atomic daily counter. Returns the new count if the call is allowed, or null
+// if the hard cap is reached. Single statement so concurrent callers can't
+// overshoot the cap by more than the in-flight increments that lost the race.
+export async function incrementYoutubeApiUsage(opts: { cap?: number | null; units?: number } = {}): Promise<number | null> {
+  const db = await initDB();
+  const day = pacificDay();
+  const cap = typeof opts.cap === 'number' && opts.cap > 0 ? opts.cap : null;
+  const units = typeof opts.units === 'number' && opts.units > 0 ? Math.floor(opts.units) : 1;
+
+  await db.query(`
+    INSERT INTO youtube_api_usage (day, count, last_call_at)
+    VALUES ($1, 0, NULL)
+    ON CONFLICT (day) DO NOTHING
+  `, [day]);
+
+  if (cap !== null) {
+    const res = await db.query(`
+      UPDATE youtube_api_usage
+      SET count = count + $3, last_call_at = NOW()
+      WHERE day = $1 AND count + $3 <= $2
+      RETURNING count
+    `, [day, cap, units]);
+    if (res.rows.length === 0) return null;
+    return (res.rows[0] as any).count as number;
+  } else {
+    const res = await db.query(`
+      UPDATE youtube_api_usage
+      SET count = count + $2, last_call_at = NOW()
+      WHERE day = $1
+      RETURNING count
+    `, [day, units]);
+    return (res.rows[0] as any).count as number;
+  }
+}
+
+export async function getYoutubeApiUsage(day?: string) {
+  const db = await initDB();
+  const d = day || pacificDay();
+  const res = await db.query(
+    'SELECT day, count, last_call_at FROM youtube_api_usage WHERE day = $1',
+    [d]
+  );
+  return res.rows[0] || { day: d, count: 0, last_call_at: null };
 }

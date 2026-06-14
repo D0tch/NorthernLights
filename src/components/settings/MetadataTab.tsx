@@ -2,10 +2,10 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useProviderConnectionTest } from '../../hooks/useProviderConnectionTest';
 import { useToast } from '../../hooks/useToast';
-import { Trash2, Sparkles, Image as ImageIcon, BookOpen, Disc3, FileText, User, Heart, Tags, Headphones, Star, Ticket, MapPin, Calendar, AlertTriangle, Users } from 'lucide-react';
+import { Trash2, Sparkles, Image as ImageIcon, BookOpen, Disc3, FileText, User, Heart, Tags, Headphones, Star, Ticket, MapPin, Calendar, AlertTriangle, Users, Video } from 'lucide-react';
 import { DependencyBadge, DependencyGroup, DependencyInfoBox } from '../DependencyBadge';
 
-type MetadataSubTab = 'overview' | 'lastfm' | 'genius' | 'musicbrainz' | 'jambase';
+type MetadataSubTab = 'overview' | 'lastfm' | 'genius' | 'musicbrainz' | 'jambase' | 'youtube';
 
 type JambaseStatusResp = {
   enabled: boolean;
@@ -15,6 +15,12 @@ type JambaseStatusResp = {
   cacheTtlDays: number;
   hardStop: boolean;
   monthlyCap: number;
+};
+
+type YoutubeStatusResp = {
+  enabled: boolean;
+  hasKey: boolean;
+  usage: { day: string; count: number; lastCallAt: string | null; cap: number; hardStopActive: boolean; stopped: boolean };
 };
 
 interface CreditsJobProgress {
@@ -147,6 +153,11 @@ export const MetadataTab: React.FC = () => {
     const jambaseCacheTtlDays = usePlayerStore(state => state.jambaseCacheTtlDays);
     const jambaseMonthlyCap = usePlayerStore(state => state.jambaseMonthlyCap);
     const jambaseHardStop = usePlayerStore(state => state.jambaseHardStop);
+    const youtubeEnabled = usePlayerStore(state => state.youtubeEnabled);
+    const youtubeApiKey = usePlayerStore(state => state.youtubeApiKey);
+    const youtubeCacheTtlDays = usePlayerStore(state => state.youtubeCacheTtlDays);
+    const youtubeDailyQuotaCap = usePlayerStore(state => state.youtubeDailyQuotaCap);
+    const youtubeHardStop = usePlayerStore(state => state.youtubeHardStop);
     const setSettings = usePlayerStore(state => state.setSettings);
     const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
     const { addToast } = useToast();
@@ -206,6 +217,27 @@ export const MetadataTab: React.FC = () => {
             refreshJambaseStatus();
         }
     }, [metadataTab, refreshJambaseStatus]);
+
+    // YouTube live status (server-fetched — whether a key is stored + daily usage).
+    const [youtubeStatus, setYoutubeStatus] = useState<YoutubeStatusResp | null>(null);
+    const [youtubeTestStatus, setYoutubeTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
+    const [youtubeTestMessage, setYoutubeTestMessage] = useState('');
+
+    const refreshYoutubeStatus = useCallback(async () => {
+        try {
+            const res = await fetch('/api/providers/youtube/status', { headers: getAuthHeader() });
+            if (res.ok) {
+                const data = await res.json() as YoutubeStatusResp;
+                setYoutubeStatus(data);
+            }
+        } catch {}
+    }, [getAuthHeader]);
+
+    useEffect(() => {
+        if (metadataTab === 'youtube') {
+            refreshYoutubeStatus();
+        }
+    }, [metadataTab, refreshYoutubeStatus]);
 
     // Effective redirect URI the server will use (override if set, else SERVER_URL default)
     const [mbEffectiveRedirectUri, setMbEffectiveRedirectUri] = useState<string>('');
@@ -274,6 +306,17 @@ export const MetadataTab: React.FC = () => {
                     : 'Integration currently disabled'}
         />
     );
+    const youtubeBadge = (
+        <DependencyBadge
+            label="YouTube Integration"
+            status={youtubeEnabled && youtubeApiKey ? 'available' : (youtubeEnabled ? 'partial' : 'unavailable')}
+            message={youtubeEnabled && youtubeApiKey
+                ? 'Ready for music videos on artist pages'
+                : youtubeEnabled
+                    ? 'Requires a YouTube Data API key'
+                    : 'Integration currently disabled'}
+        />
+    );
 
     return (
         <div className="settings-section mb-8">
@@ -316,6 +359,12 @@ export const MetadataTab: React.FC = () => {
                 >
                     Jambase
                 </button>
+                <button
+                    onClick={() => setMetadataTab('youtube')}
+                    className={`btn-tab ${metadataTab === 'youtube' ? 'active' : ''}`}
+                >
+                    YouTube
+                </button>
             </div>
 
             {metadataTab === 'overview' && (
@@ -326,6 +375,7 @@ export const MetadataTab: React.FC = () => {
                             {geniusBadge}
                             {musicBrainzBadge}
                             {jambaseBadge}
+                            {youtubeBadge}
                         </DependencyGroup>
                     </div>
 
@@ -985,6 +1035,184 @@ export const MetadataTab: React.FC = () => {
                                             />
                                         </div>
                                     </div>
+                                </div>
+                            </>
+                        )}
+                    </div>
+                </div>
+            )}
+
+            {metadataTab === 'youtube' && (
+                <div>
+                    <div className="mb-6 space-y-4">
+                        <DependencyGroup title="Provider Status">
+                            {youtubeBadge}
+                        </DependencyGroup>
+                    </div>
+
+                    <div className="mb-6">
+                        <div className="flex items-center gap-2 mb-3">
+                            <Sparkles className="w-4 h-4 text-[var(--color-primary)]" />
+                            <span className="text-sm font-medium text-[var(--color-text-primary)]">Features requiring YouTube</span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            <DependencyInfoBox
+                                title="Music Videos rail"
+                                description="A rail of official music videos on artist detail pages, matched to tracks already in your library"
+                                icon={<Video size={16} />}
+                            />
+                            <DependencyInfoBox
+                                title="Library-only matching"
+                                description="Only the artist's official-channel uploads that map to a track you own are shown — no unrelated clips"
+                                icon={<Headphones size={16} />}
+                            />
+                        </div>
+                    </div>
+
+                    <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 flex flex-col gap-4 shadow-sm">
+                        {/* Note about the key + quota */}
+                        <div className="bg-blue-500/5 dark:bg-blue-500/10 border border-blue-500/10 dark:border-blue-500/20 rounded-lg p-3 text-xs text-blue-700 dark:text-blue-200">
+                            <strong>Note:</strong> Create a <strong>YouTube Data API v3</strong> key in the Google Cloud console. The free quota is 10,000 units/day; matching one artist costs ~3 units. Videos are resolved from the artist&apos;s YouTube channel link (via MusicBrainz), so artists without one show no rail.
+                        </div>
+
+                        {/* Enable toggle */}
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <label className="text-sm font-medium text-[var(--color-text-primary)] block">{youtubeEnabled ? 'Integration Enabled' : 'Integration Disabled'}</label>
+                                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">When disabled, no calls are made and the Music Videos rail is hidden (cached matches still render).</p>
+                            </div>
+                            <button
+                                onClick={() => setSettings({ youtubeEnabled: !youtubeEnabled })}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${youtubeEnabled ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}
+                                aria-label="Toggle YouTube integration"
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${youtubeEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                            </button>
+                        </div>
+
+                        {youtubeEnabled && (
+                            <>
+                                {/* API key input + test */}
+                                <div className="flex flex-col gap-2 pt-3 border-t border-[var(--glass-border)]">
+                                    <label className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">API Key</label>
+                                    <div className="flex gap-2">
+                                        <input
+                                            type="password"
+                                            value={youtubeApiKey}
+                                            onChange={e => setSettings({ youtubeApiKey: e.target.value })}
+                                            placeholder="YouTube Data API v3 key"
+                                            className="flex-1 p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                        />
+                                        <button
+                                            type="button"
+                                            disabled={youtubeTestStatus === 'testing' || !youtubeApiKey}
+                                            onClick={async () => {
+                                                setYoutubeTestStatus('testing');
+                                                setYoutubeTestMessage('');
+                                                try {
+                                                    // Persist the key/toggle/limits before testing — admin may have just edited them.
+                                                    await fetch('/api/settings', {
+                                                        method: 'POST',
+                                                        headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                                                        body: JSON.stringify({ youtubeEnabled, youtubeApiKey, youtubeCacheTtlDays, youtubeDailyQuotaCap, youtubeHardStop }),
+                                                    });
+                                                    const res = await fetch('/api/providers/youtube/test', { method: 'POST', headers: getAuthHeader() });
+                                                    const data = await res.json();
+                                                    if (res.ok && data.status === 'ok') {
+                                                        setYoutubeTestStatus('success');
+                                                        setYoutubeTestMessage(data.sample ? `Connected (${data.sample})` : 'Connected');
+                                                    } else {
+                                                        setYoutubeTestStatus('error');
+                                                        setYoutubeTestMessage(data.error || `HTTP ${res.status}`);
+                                                    }
+                                                    refreshYoutubeStatus();
+                                                } catch (e: any) {
+                                                    setYoutubeTestStatus('error');
+                                                    setYoutubeTestMessage(e?.message || 'Network error');
+                                                }
+                                            }}
+                                            className="btn btn-ghost btn-sm whitespace-nowrap disabled:opacity-50"
+                                        >
+                                            {youtubeTestStatus === 'testing' ? 'Testing...' : 'Save & Test'}
+                                        </button>
+                                    </div>
+                                    {youtubeTestStatus === 'success' && <span className="text-green-500 font-semibold text-xs">✓ {youtubeTestMessage}</span>}
+                                    {youtubeTestStatus === 'error' && <span className="text-red-500 font-semibold text-xs">✗ {youtubeTestMessage}</span>}
+                                </div>
+
+                                {/* Daily usage */}
+                                <div className="flex flex-col gap-2 pt-3 border-t border-[var(--glass-border)]">
+                                    <div className="flex items-baseline justify-between">
+                                        <label className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Daily Quota Usage</label>
+                                        <span className="text-xs text-[var(--color-text-muted)]">{youtubeStatus?.usage.day || '—'}</span>
+                                    </div>
+                                    {(() => {
+                                        const usage = youtubeStatus?.usage;
+                                        const count = usage?.count ?? 0;
+                                        const cap = usage?.cap ?? youtubeDailyQuotaCap;
+                                        const pct = cap > 0 ? Math.min(100, (count / cap) * 100) : 0;
+                                        const stopped = usage?.stopped ?? false;
+                                        const tone = stopped || pct >= 95 ? 'bg-red-500' : pct >= 80 ? 'bg-amber-500' : 'bg-[var(--color-primary)]';
+                                        return (
+                                            <>
+                                                <div className="flex items-baseline justify-between">
+                                                    <span className="text-2xl font-bold text-[var(--color-text-primary)] tabular-nums">{count.toLocaleString()}</span>
+                                                    <span className="text-sm text-[var(--color-text-muted)] tabular-nums">/ {cap.toLocaleString()} units</span>
+                                                </div>
+                                                <div className="h-2 w-full rounded-full bg-[var(--color-bg)] overflow-hidden">
+                                                    <div className={`h-full ${tone} transition-all duration-300`} style={{ width: `${pct}%` }} />
+                                                </div>
+                                                {stopped && (
+                                                    <div className="flex items-start gap-2 mt-1 text-xs text-red-700 dark:text-red-300">
+                                                        <AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />
+                                                        <span>Daily cap reached. New API calls are paused; users are served from cache. Resets at midnight Pacific.</span>
+                                                    </div>
+                                                )}
+                                            </>
+                                        );
+                                    })()}
+                                </div>
+
+                                {/* Hard stop & cap */}
+                                <div className="flex flex-col gap-3 pt-3 border-t border-[var(--glass-border)]">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div className="flex-1">
+                                            <label className="text-sm font-medium text-[var(--color-text-primary)] block">Hard stop at limit</label>
+                                            <p className="text-xs text-[var(--color-text-muted)] mt-0.5">Pause API calls when the daily cap is hit (recommended) so you never trip Google&apos;s hard 10k/day quota error.</p>
+                                        </div>
+                                        <button
+                                            onClick={() => setSettings({ youtubeHardStop: !youtubeHardStop })}
+                                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${youtubeHardStop ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}
+                                            aria-label="Toggle hard stop"
+                                        >
+                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${youtubeHardStop ? 'translate-x-6' : 'translate-x-1'}`} />
+                                        </button>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+                                        <div>
+                                            <label className="block text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Daily quota cap (units)</label>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                value={youtubeDailyQuotaCap}
+                                                onChange={e => setSettings({ youtubeDailyQuotaCap: Math.max(1, parseInt(e.target.value, 10) || 0) })}
+                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Cache TTL (days)</label>
+                                            <input
+                                                type="number"
+                                                min={1}
+                                                max={90}
+                                                value={youtubeCacheTtlDays}
+                                                onChange={e => setSettings({ youtubeCacheTtlDays: Math.max(1, Math.min(90, parseInt(e.target.value, 10) || 0)) })}
+                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                            />
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-[var(--color-text-muted)]">Changes to the cap and TTL are saved with the global <strong>Save</strong> button or when you press <strong>Save &amp; Test</strong>.</p>
                                 </div>
                             </>
                         )}
