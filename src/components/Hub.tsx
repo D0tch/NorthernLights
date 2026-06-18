@@ -5,6 +5,7 @@ import { Play, Pin, PinOff, Disc3, Sparkles, Wand2, Radio, Repeat, Rewind, Sunri
 import type { TrackInfo } from '../utils/fileSystem';
 import type { Playlist } from '../store';
 import { useDominantColor } from '../hooks/useDominantColor';
+import { buildRolledCoverGradient } from '../utils/coverGradient';
 import { LiveConcertsHubSection } from './LiveConcertsHubSection';
 import { HorizontalScrollRail } from './HorizontalScrollRail';
 import { NowPlayingBadge } from './now-playing/NowPlayingBadge';
@@ -169,63 +170,6 @@ function getTileTextMotionClassName(phase: TileSwapPhase): string {
   if (phase === 'out') return 'hub-tile-text-out';
   if (phase === 'in') return 'hub-tile-text-in';
   return '';
-}
-
-function hashString(value: string): number {
-  let hash = 2166136261;
-  for (let i = 0; i < value.length; i++) {
-    hash ^= value.charCodeAt(i);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function asHexColor(color: string | undefined, fallback: string): string {
-  return color && /^#[0-9a-f]{6}$/i.test(color) ? color : fallback;
-}
-
-function hexToRgba(hex: string, alpha: number): string {
-  const normalized = asHexColor(hex, AURORA_FALLBACK_PALETTE[0]).slice(1);
-  const r = parseInt(normalized.slice(0, 2), 16);
-  const g = parseInt(normalized.slice(2, 4), 16);
-  const b = parseInt(normalized.slice(4, 6), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
-
-// Aurora-spectrum fallback palette for procedural cover gradients when an
-// album cover doesn't yield a usable dominant color. Mirrors the brand
-// spectrum (oxygen green → teal → sky blue → rose pink) defined in design.md.
-const AURORA_FALLBACK_PALETTE = ['#22c983', '#2dd4bf', '#0ea5e9', '#f43f5e'];
-
-function buildRolledCoverGradient(seed: string, palette: string[], fallbackColor: string): string {
-  const fallbackPalette = AURORA_FALLBACK_PALETTE;
-  const usablePalette = [...palette, fallbackColor]
-    .map((color, index) => asHexColor(color, fallbackPalette[index % fallbackPalette.length]))
-    .filter(Boolean);
-  const colors = Array.from(new Set(usablePalette));
-  while (colors.length < 4) colors.push(fallbackPalette[(colors.length + hashString(seed)) % fallbackPalette.length]);
-
-  const roll = hashString(`${seed}:${colors.join('|')}`);
-  const pick = (offset: number) => colors[(roll + offset) % colors.length];
-  const angle = roll % 360;
-  const x1 = 18 + (roll % 58);
-  const y1 = 14 + ((roll >> 4) % 62);
-  const x2 = 22 + ((roll >> 8) % 56);
-  const y2 = 20 + ((roll >> 12) % 58);
-  const conicX = 34 + ((roll >> 16) % 36);
-  const conicY = 28 + ((roll >> 20) % 42);
-
-  const c1 = pick(0);
-  const c2 = pick(1);
-  const c3 = pick(2);
-  const c4 = pick(3);
-
-  return [
-    `radial-gradient(circle at ${x1}% ${y1}%, ${hexToRgba(c1, 0.70)} 0%, ${hexToRgba(c1, 0.34)} 24%, transparent 58%)`,
-    `radial-gradient(circle at ${x2}% ${y2}%, ${hexToRgba(c2, 0.62)} 0%, ${hexToRgba(c2, 0.28)} 22%, transparent 56%)`,
-    `conic-gradient(from ${angle}deg at ${conicX}% ${conicY}%, ${hexToRgba(c3, 0.58)}, ${hexToRgba(c4, 0.48)}, ${hexToRgba(c2, 0.52)}, ${hexToRgba(c1, 0.58)})`,
-    `linear-gradient(${(angle + 90) % 360}deg, ${hexToRgba(c1, 0.46)}, ${hexToRgba(c4, 0.38)})`,
-  ].join(', ');
 }
 
 interface AnimatedTileSlotProps<T> {

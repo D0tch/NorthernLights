@@ -9,6 +9,9 @@ import { LoveButton } from './LoveButton';
 import { CastButton } from './cast/CastButton';
 import { IconNext, IconPause, IconPlay, IconPrev, IconRepeatAll, IconRepeatOne, IconShuffle } from './icons/PlayerIcons';
 import { useDominantColor } from '../hooks/useDominantColor';
+import { buildCoverMeshGradient } from '../utils/coverGradient';
+import { useTrackMusicVideo } from '../hooks/useTrackMusicVideo';
+import MobileNowPlayingVideo, { type VideoPhase } from './MobileNowPlayingVideo';
 
 interface MobileNowPlayingProps {
   onClose: () => void;
@@ -43,8 +46,19 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
   const [castDeviceName, setCastDeviceName] = useState(() => castManager.isConnected() ? castManager.getCastDeviceName() : '');
   const [showLyrics, setShowLyrics] = useState(false);
   const currentTrack = currentIndex !== null ? playlist[currentIndex] : null;
+  const trackIdentity = currentTrack?.queueEntryId || currentTrack?.id || currentTrack?.path || 'current-track';
   const colorSeedTracks = useMemo(() => currentTrack ? [currentTrack] : [], [currentTrack]);
-  const { bgColor } = useDominantColor(colorSeedTracks, { quality: 12 });
+  const { bgColor, colors } = useDominantColor(colorSeedTracks, { quality: 12 });
+  const meshGradient = useMemo(
+    () => buildCoverMeshGradient(trackIdentity, colors, bgColor),
+    [trackIdentity, colors, bgColor],
+  );
+
+  // Matched YouTube music video for the current track (mobile-only, gated).
+  const { videoId } = useTrackMusicVideo(currentTrack);
+  const [videoPhase, setVideoPhase] = useState<VideoPhase>('none');
+  // New track → drop back to the cover until its video (if any) buffers in.
+  useEffect(() => { setVideoPhase('none'); }, [trackIdentity]);
 
   useEffect(() => {
     const unsubscribe = castManager.addStateChangeListener((state) => {
@@ -60,7 +74,6 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
   }, []);
 
   const isPlaying = playbackState === 'playing';
-  const trackIdentity = currentTrack?.queueEntryId || currentTrack?.id || currentTrack?.path || 'current-track';
   const mobileNowStyle = {
     '--mobile-now-art-color': bgColor,
   } as CSSProperties;
@@ -85,8 +98,12 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
       data-playing={isPlaying}
       data-buffering={isBuffering}
       data-state={isOpen ? 'open' : 'closing'}
+      data-video={videoPhase}
       style={mobileNowStyle}
     >
+      {/* Vibrant cover-color mesh — the no-video background */}
+      <div className="mobile-now-playing-mesh" aria-hidden="true" style={{ background: meshGradient }} />
+
       {currentTrack.artUrl && (
         <img
           src={currentTrack.artUrl}
@@ -94,6 +111,13 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
           aria-hidden="true"
           className="mobile-now-playing-ambient"
         />
+      )}
+
+      {/* Full-screen, muted background music video (fades in when buffered) */}
+      {videoId && (
+        <div className="mobile-now-video" aria-hidden="true">
+          <MobileNowPlayingVideo key={trackIdentity} videoId={videoId} onPhaseChange={setVideoPhase} />
+        </div>
       )}
 
       {/* Safe area top spacer */}
@@ -110,7 +134,6 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
           <X size={18} />
         </button>
         <div className="mobile-now-playing-heading">
-          <span className="mobile-now-playing-grabber" aria-hidden="true" />
           <span>Now Playing</span>
         </div>
         {currentTrack ? (
