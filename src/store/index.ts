@@ -424,6 +424,7 @@ export interface PlayerState {
   repeat: "none" | "one" | "all";
   theme: 'light' | 'dark';
   reducedMotion: boolean;
+  mobileVideoBackgrounds: boolean;
   lastFmApiKey: string;
   lastFmSharedSecret: string;
   lastFmScrobbleEnabled: boolean;
@@ -607,6 +608,7 @@ export interface PlayerState {
   setCastConnected: (connected: boolean) => void;
   setTheme: (theme: 'light' | 'dark') => void;
   setReducedMotion: (enabled: boolean) => void;
+  setMobileVideoBackgrounds: (enabled: boolean) => void;
   setLastFmApiKey: (key: string) => void;
   setLastFmSharedSecret: (secret: string) => void;
   setLastFmScrobbleEnabled: (enabled: boolean) => void;
@@ -964,6 +966,7 @@ export const usePlayerStore = create<PlayerState>()(
         repeat: "none" as "none" | "one" | "all",
         theme: 'light' as 'light' | 'dark',
         reducedMotion: (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) || false,
+        mobileVideoBackgrounds: true,
         lastFmApiKey: '',
         lastFmSharedSecret: '',
         lastFmScrobbleEnabled: false as boolean,
@@ -1103,6 +1106,10 @@ export const usePlayerStore = create<PlayerState>()(
           } else {
             document.documentElement.classList.remove('reduced-motion');
           }
+        },
+
+        setMobileVideoBackgrounds: (enabled: boolean) => {
+          set({ mobileVideoBackgrounds: enabled });
         },
 
         setAuthToken: (token: string, mediaAccessToken: string | null = null, sseAccessToken: string | null = null) => set({
@@ -2642,6 +2649,7 @@ export const usePlayerStore = create<PlayerState>()(
         repeat: state.repeat,
         theme: state.theme,
         reducedMotion: state.reducedMotion,
+        mobileVideoBackgrounds: state.mobileVideoBackgrounds,
         lastFmApiKey: state.lastFmApiKey,
         lastFmScrobbleEnabled: state.lastFmScrobbleEnabled,
         lastFmConnected: state.lastFmConnected,

@@ -7,6 +7,8 @@ export const AppearanceTab: React.FC = () => {
     const setTheme = usePlayerStore(state => state.setTheme);
     const reducedMotion = usePlayerStore(state => state.reducedMotion);
     const setReducedMotion = usePlayerStore(state => state.setReducedMotion);
+    const mobileVideoBackgrounds = usePlayerStore(state => state.mobileVideoBackgrounds);
+    const setMobileVideoBackgrounds = usePlayerStore(state => state.setMobileVideoBackgrounds);
 
     return (
         <div className="settings-section mb-8">
@@ -49,6 +51,24 @@ export const AppearanceTab: React.FC = () => {
                     onClick={() => setReducedMotion(!reducedMotion)}
                     className="account-switch"
                     data-state={reducedMotion ? 'on' : 'off'}
+                >
+                    <span className="account-switch__thumb" />
+                </button>
+            </div>
+
+            <div className="appearance-toggle-row">
+                <div>
+                    <h5>Music video backgrounds</h5>
+                    <p>On mobile, play a track's matched music video (muted) behind the now-playing screen.</p>
+                </div>
+                <button
+                    type="button"
+                    role="switch"
+                    aria-checked={mobileVideoBackgrounds}
+                    aria-label="Music video backgrounds"
+                    onClick={() => setMobileVideoBackgrounds(!mobileVideoBackgrounds)}
+                    className="account-switch"
+                    data-state={mobileVideoBackgrounds ? 'on' : 'off'}
                 >
                     <span className="account-switch__thumb" />
                 </button>
