@@ -864,6 +864,8 @@ export async function initDB(): Promise<Pool> {
           fetched_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         CREATE INDEX IF NOT EXISTS artist_music_videos_artist_id_idx ON artist_music_videos(artist_id);
+        -- Look up the video matched to a specific track (mobile now-playing background).
+        CREATE INDEX IF NOT EXISTS artist_music_videos_track_id_idx ON artist_music_videos(track_id);
 
         -- Per-artist fetch marker so "checked, no matches" is distinct from
         -- "never checked" — otherwise an artist with no channel/matches would
@@ -5299,6 +5301,18 @@ export async function getMusicVideosForArtist(artistId: string, limit: number = 
     LIMIT $2
   `, [artistId, limit]);
   return res.rows as (MusicVideoRow & { track_artist: string | null; track_artists: string | null })[];
+}
+
+// The single video matched to a specific library track, if any. Quota-free:
+// a plain index read of already-cached matches (no YouTube API call). Used by
+// the mobile now-playing background video.
+export async function getMusicVideoByTrackId(trackId: string) {
+  const db = await initDB();
+  const res = await db.query(
+    `SELECT video_id, title, thumbnail_url FROM artist_music_videos WHERE track_id = $1 LIMIT 1`,
+    [trackId]
+  );
+  return res.rows[0] || null;
 }
 
 // The YouTube Data API quota resets at midnight US/Pacific, so key the counter
