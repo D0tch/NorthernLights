@@ -56,6 +56,18 @@ function useCrossfadeLayers(value: string | null | undefined) {
   return [layers, prune] as const;
 }
 
+// Relative luminance (0..1, sRGB) of a #rrggbb colour; null if not parseable
+// (e.g. the var(--color-primary) fallback when no art colour was extracted).
+function hexLuminance(hex: string): number | null {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (!m) return null;
+  const lin = (h: string) => {
+    const c = parseInt(h, 16) / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * lin(m[1]) + 0.7152 * lin(m[2]) + 0.0722 * lin(m[3]);
+}
+
 const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = true }) => {
   const playlist = usePlayerStore((s) => s.playlist);
   const currentIndex = usePlayerStore((s) => s.currentIndex);
@@ -79,6 +91,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
   const selectAudioOutput = usePlayerStore((s) => s.selectAudioOutput);
   const volume = usePlayerStore((s) => s.volume);
   const setVolume = usePlayerStore((s) => s.setVolume);
+  const theme = usePlayerStore((s) => s.theme);
 
   const [castConnected, setCastConnected] = useState(castManager.isConnected());
   const [castDeviceName, setCastDeviceName] = useState(() => castManager.isConnected() ? castManager.getCastDeviceName() : '');
@@ -98,6 +111,17 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
   // colour extraction finishes for the current track).
   const [meshLayers, pruneMesh] = useCrossfadeLayers(meshGradient);
   const [ambientLayers, pruneAmbient] = useCrossfadeLayers(currentTrack?.artUrl);
+
+  // Readability veil: near-white covers (or near-black in light mode) make the
+  // themed text wash out over the vibrant backdrop. Push the backdrop toward the
+  // theme background as the cover's luminance approaches the text colour. 0 for
+  // normal art so vibrancy is untouched; grows for extremes (capped).
+  const veilOpacity = useMemo(() => {
+    const lum = hexLuminance(bgColor);
+    if (lum == null) return 0;
+    const deficit = theme === 'dark' ? lum - 0.45 : 0.55 - lum;
+    return Math.max(0, Math.min(0.8, deficit * 1.9));
+  }, [bgColor, theme]);
 
   // Matched YouTube music video for the current track (mobile-only, gated).
   const { videoId } = useTrackMusicVideo(currentTrack);
@@ -121,6 +145,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
   const isPlaying = playbackState === 'playing';
   const mobileNowStyle = {
     '--mobile-now-art-color': bgColor,
+    '--mnp-veil-opacity': veilOpacity,
   } as CSSProperties;
 
   const handlePlayPause = () => {
@@ -177,6 +202,10 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
           ))}
         </div>
       )}
+
+      {/* Adaptive readability veil over the colour backdrop (opacity set from JS
+          by cover luminance). Sits above the mesh/ambient, below the video. */}
+      <div className="mobile-now-bg-veil" aria-hidden="true" />
 
       {/* Full-screen, muted background music video (fades in when buffered) */}
       {videoId && (

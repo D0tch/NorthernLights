@@ -5762,6 +5762,20 @@ a:focus-visible > .genre-card .genre-card__label {
   animation: mobile-now-layer-in var(--mnp-fade) var(--mnp-ease) both;
 }
 
+/* Adaptive readability veil. Sits above the mesh/ambient (z 0) but below the
+   video (z 1) and controls, pushing the colour backdrop toward the theme
+   background so themed text stays legible over near-white art (near-black in
+   light mode). Opacity is 0 for normal art — set from JS by cover luminance. */
+.mobile-now-bg-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background: var(--color-bg-primary);
+  opacity: var(--mnp-veil-opacity, 0);
+  transition: opacity var(--mnp-fade) var(--mnp-ease);
+}
+
 /* Full-screen background music video. Hidden until buffered, then cross-faded
    in. Sits above the cover/mesh, below the scrim and controls. */
 /* Video occupies the top portion of the screen, flush to the top edge. Its
@@ -5845,7 +5859,7 @@ a:focus-visible > .genre-card .genre-card__label {
   );
 }
 
-.mobile-now-playing-shell > :not(.mobile-now-playing-ambient):not(.mobile-now-playing-mesh):not(.mobile-now-video) {
+.mobile-now-playing-shell > :not(.mobile-now-playing-ambient):not(.mobile-now-playing-mesh):not(.mobile-now-video):not(.mobile-now-bg-veil) {
   position: relative;
   z-index: 3;
 }
