@@ -5656,10 +5656,31 @@ a:focus-visible > .genre-card .genre-card__label {
   animation: spin 0.8s linear infinite;
 }
 
+/* Registered so the cover colour can be *transitioned* — otherwise it snaps on
+   track change (base tint, scrim tint, art border, title shadow all jump) while
+   the mesh/ambient cross-fade smoothly. With this it morphs in step with them. */
+@property --mobile-now-art-color {
+  syntax: "<color>";
+  inherits: true;
+  initial-value: transparent;
+}
+
 .mobile-now-playing-shell {
   --mobile-now-art-color: var(--color-primary);
   /* Background video occupies the top portion; the scrim covers the rest. */
   --mnp-video-height: 75vh;
+  /* Single source of truth for the slow, cohesive backdrop cross-fades (video
+     reveal, mesh dim, ambient fade, cover fade, per-track color crossfade). A
+     gentle ease-in-out reads as a true slow drift; --ease-out is front-loaded
+     and pops. Delay vs. playback is intentional — smoothness over immediacy. */
+  --mnp-fade: 2500ms;
+  --mnp-ease: var(--ease-in-out);
+  /* Colour tinting the scrim behind the controls. The cover's colour normally,
+     but neutral (the page background) while a video plays — see the video rule
+     below. */
+  --mnp-scrim-tint: var(--mobile-now-art-color);
+  /* Morph the cover colour over the same window as the backdrop cross-fades. */
+  transition: --mobile-now-art-color var(--mnp-fade) var(--mnp-ease);
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -5686,34 +5707,59 @@ a:focus-visible > .genre-card .genre-card__label {
 }
 
 /* Vibrant multi-color mesh built from the cover's colors — the base layer and
-   the whole background when no video is shown. */
+   the whole background when no video is shown. The container owns the video-dim
+   (1 → 0.35); the stacked layers inside own the per-track color cross-fade. */
 .mobile-now-playing-mesh {
   position: absolute;
   inset: 0;
   z-index: 0;
   pointer-events: none;
   opacity: 1;
-  transition: opacity 700ms var(--ease-out);
+  transition: opacity var(--mnp-fade) var(--mnp-ease);
   will-change: opacity;
 }
 
+/* One layer per palette. Opacity-only → GPU-composited, cheap. */
+.mobile-now-playing-mesh-layer {
+  position: absolute;
+  inset: 0;
+}
+
+/* Blurred cover art washed behind the mesh — a soft bloom of the album's real
+   colors. The container owns the resting opacity and the video fade-out; the
+   stacked layers inside cross-fade the actual image from track to track (so it
+   morphs with the mesh instead of hard-cutting). */
 .mobile-now-playing-ambient {
   position: absolute;
   inset: -18%;
   z-index: 0;
   inline-size: 136%;
   block-size: 136%;
-  object-fit: cover;
   opacity: 0.36;
-  filter: blur(46px) saturate(1.3);
   transform: scale(1.05);
-  will-change: transform, opacity;
+  will-change: opacity;
   pointer-events: none;
-  transition: opacity 700ms var(--ease-out);
+  transition: opacity var(--mnp-fade) var(--mnp-ease);
 }
 
-.mobile-now-playing-shell[data-playing="true"] .mobile-now-playing-ambient {
-  animation: mobile-now-ambient-drift 18s var(--ease-in-out) infinite alternate;
+.mobile-now-playing-ambient-layer {
+  position: absolute;
+  inset: 0;
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+  /* Pre-blurred per layer so the cross-fade is plain opacity compositing of two
+     cached bitmaps — no per-frame re-rasterization of the blur. */
+  filter: blur(46px) saturate(1.3);
+}
+
+/* A layer added on a track change mounts on top at opacity 0 and fades in over
+   the previous one. The first layer (sheet open) skips this so the background
+   doesn't lag behind the opening sheet. Shared by the mesh and ambient layers. */
+.mobile-now-playing-mesh-layer--fade,
+.mobile-now-playing-ambient-layer--fade {
+  will-change: opacity;
+  animation: mobile-now-layer-in var(--mnp-fade) var(--mnp-ease) both;
 }
 
 /* Full-screen background music video. Hidden until buffered, then cross-faded
@@ -5730,7 +5776,7 @@ a:focus-visible > .genre-card .genre-card__label {
   overflow: hidden;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 700ms var(--ease-out);
+  transition: opacity var(--mnp-fade) var(--mnp-ease);
 }
 
 .mobile-now-video-player {
@@ -5764,47 +5810,37 @@ a:focus-visible > .genre-card .genre-card__label {
    the primary viewing area. */
 .mobile-now-playing-shell[data-video="visible"] .mobile-now-playing-ambient {
   opacity: 0;
-  animation: none;
 }
 
 .mobile-now-playing-shell[data-video="visible"] .mobile-now-playing-mesh {
   opacity: 0.35;
 }
 
-/* Screen-wide scrim, lighter at the top, heavier toward the bottom half where
-   the controls live. Keeps the vibrant background readable in the no-video
-   state. */
+/* While a video plays, drop the cover-colour tint from the scrim so the panel
+   behind the controls reads as a neutral page-background dark over the video. */
+.mobile-now-playing-shell[data-video="visible"] {
+  --mnp-scrim-tint: var(--color-bg-primary);
+}
+
+/* Single, PERMANENT scrim — deliberately not tied to video state. The dark
+   panel behind the controls must stay put across track changes, so the scrim
+   never fades in/out (and never cross-dissolves, which would dip through a
+   translucent midpoint); only the video/mesh/art behind it animate. Built on
+   --color-bg-primary so it adapts to light/dark (it's the near-black #030208 in
+   dark mode). FULLY transparent up top so the colour mesh shows through, tinting
+   through --mnp-scrim-tint and ramping to FULLY opaque by 63% — above the
+   video's 75vh (≈75%) bottom edge — to mask that edge and back the controls. */
 .mobile-now-playing-shell::after {
   content: "";
   position: absolute;
   inset: 0;
   z-index: 2;
   pointer-events: none;
-  transition: background 700ms var(--ease-out);
   background: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--color-bg-primary) 16%, transparent) 0%,
-    color-mix(in srgb, var(--color-bg-primary) 26%, transparent) 44%,
-    color-mix(in srgb, var(--color-bg-primary) 62%, transparent) 66%,
-    color-mix(in srgb, var(--color-bg-primary) 85%, transparent) 84%,
-    color-mix(in srgb, var(--color-bg-primary) 88%, transparent) 100%
-  );
-}
-
-/* Video state: clear at the top so the video shows, easing down to FULLY
-   opaque before the video's bottom edge (var(--mnp-video-height)) so that edge
-   is hidden and the controls sit on a solid panel. */
-.mobile-now-playing-shell[data-video="visible"]::after {
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--color-bg-primary) 10%, transparent) 0%,
-    color-mix(in srgb, var(--color-bg-primary) 18%, transparent) 10%,
-    color-mix(in srgb, var(--color-bg-primary) 31%, transparent) 22%,
-    color-mix(in srgb, var(--color-bg-primary) 42%, transparent) 32%,
-    color-mix(in srgb, var(--color-bg-primary) 50%, transparent) 41%,
-    color-mix(in srgb, var(--color-bg-primary) 65%, transparent) 50%,
-    color-mix(in srgb, var(--color-bg-primary) 86%, transparent) 59%,
-    var(--color-bg-primary) 66%,
+    transparent 0%,
+    color-mix(in srgb, color-mix(in srgb, var(--color-bg-primary) 46%, transparent) 50%, var(--mnp-scrim-tint)) 45%,
+    color-mix(in srgb, var(--color-bg-primary) 60%, var(--mnp-scrim-tint)) 63%,
     var(--color-bg-primary) 100%
   );
 }
@@ -5858,12 +5894,12 @@ a:focus-visible > .genre-card .genre-card__label {
   border: 1px solid color-mix(in srgb, var(--mobile-now-art-color) 28%, var(--glass-border));
   border-radius: clamp(1.25rem, 5vw, 1.75rem);
   background: var(--glass-bg);
-  box-shadow:
-    0 1.5rem 4rem color-mix(in srgb, var(--color-text-primary) 18%, transparent),
-    0 0 3.5rem color-mix(in srgb, var(--mobile-now-art-color) 18%, transparent);
+  box-shadow: 0 1.5rem 4rem color-mix(in srgb, var(--color-text-primary) 18%, transparent);
   transform-origin: center;
   animation: mobile-now-track-swap 260ms var(--ease-out) both;
   will-change: transform, opacity;
+  /* Foreground art stays snappy (600ms) so track switches feel responsive, even
+     though the backdrops behind it do the slow cinematic cross-fade. */
   transition: opacity 600ms var(--ease-out), transform 600ms var(--ease-out);
 }
 
@@ -6159,6 +6195,11 @@ a:focus-visible > .genre-card .genre-card__label {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  /* Collapse the slow backdrop cross-fades to effectively instant. */
+  .mobile-now-playing-shell {
+    --mnp-fade: 1ms;
+  }
+
   .mobile-now-playing-shell[data-state="open"],
   .mobile-now-playing-shell[data-state="closing"],
   .mobile-now-playing-header,
@@ -6169,7 +6210,6 @@ a:focus-visible > .genre-card .genre-card__label {
   .mobile-now-volume,
   .mobile-now-transport,
   .mobile-now-secondary-controls,
-  .mobile-now-playing-shell[data-playing="true"] .mobile-now-playing-ambient,
   .mobile-now-playing-shell[data-playing="true"] .mobile-player-play-btn-lg::after,
   .mobile-now-playing-shell[data-buffering="true"] .mobile-now-art {
     animation: none;
@@ -6236,15 +6276,16 @@ a:focus-visible > .genre-card .genre-card__label {
   }
 }
 
-@keyframes mobile-now-ambient-drift {
+/* A freshly-mounted backdrop layer (mesh or ambient art) fades in over the
+   previous one. Within the ambient container its resting opacity is scaled down,
+   so this 0 → 1 still cross-fades correctly. */
+@keyframes mobile-now-layer-in {
   from {
-    opacity: 0.18;
-    transform: translate3d(-1.2%, -0.6%, 0) scale(1.05);
+    opacity: 0;
   }
 
   to {
-    opacity: 0.24;
-    transform: translate3d(1.2%, 0.8%, 0) scale(1.08);
+    opacity: 1;
   }
 }
 

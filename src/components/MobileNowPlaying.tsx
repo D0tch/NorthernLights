@@ -1,5 +1,5 @@
 import { usePlayerStore } from '../store/index';
-import { useState, useEffect, useMemo, type CSSProperties } from 'react';
+import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
 import { X, Infinity as InfinityIcon, ListMusic, FileText, Speaker } from 'lucide-react';
 import ProgressBar from './ProgressBar';
 import { useSwipe } from '../hooks/useSwipe';
@@ -16,6 +16,44 @@ import MobileNowPlayingVideo, { type VideoPhase } from './MobileNowPlayingVideo'
 interface MobileNowPlayingProps {
   onClose: () => void;
   isOpen?: boolean;
+}
+
+type CrossfadeLayer = { key: number; value: string; animate: boolean };
+
+// Stacked-layer cross-fade: when `value` changes, fade a new layer in over the
+// previous one so a backdrop morphs from track to track instead of hard-cutting.
+// The first layer shows instantly; `prune(key)` drops the covered layers once
+// the incoming one is fully faded in.
+//
+// Invariant: layers[0] is always fully opaque (the initial instant layer, or a
+// layer whose fade-in has completed). We keep it as the base and fade the
+// newcomer in over it — never dropping it until a new layer has fully faded in
+// to replace it (via prune). That's what stops the background flashing to
+// transparent: a skip re-derives `value` twice (track id, then async colour
+// extraction), and the old code's blunt cap could drop the opaque base while the
+// incoming layer was barely faded in, leaving nothing opaque for a moment.
+function useCrossfadeLayers(value: string | null | undefined) {
+  const keyRef = useRef(0);
+  const lastRef = useRef(value);
+  const [layers, setLayers] = useState<CrossfadeLayer[]>(
+    () => (value ? [{ key: 0, value, animate: false }] : []),
+  );
+  useEffect(() => {
+    if (lastRef.current === value) return; // initial mount / no change
+    lastRef.current = value;
+    if (!value) { setLayers([]); return; }
+    keyRef.current += 1;
+    const key = keyRef.current;
+    setLayers((prev) => {
+      // First layer ever (e.g. art arrives after mount) is an instant, opaque base.
+      if (prev.length === 0) return [{ key, value, animate: false }];
+      // Keep the opaque base and fade the newcomer in over it, discarding any
+      // still-fading intermediate. Two layers max; the base never leaves a gap.
+      return [prev[0], { key, value, animate: true }];
+    });
+  }, [value]);
+  const prune = (key: number) => setLayers((prev) => prev.filter((l) => l.key >= key));
+  return [layers, prune] as const;
 }
 
 const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = true }) => {
@@ -53,6 +91,13 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
     () => buildCoverMeshGradient(trackIdentity, colors, bgColor),
     [trackIdentity, colors, bgColor],
   );
+
+  // Cross-fade the two colour backdrops from track to track instead of cutting:
+  // the procedural cover mesh, and the blurred cover art washed behind it. A new
+  // palette/image fades in over the previous one (the gradient also re-fades when
+  // colour extraction finishes for the current track).
+  const [meshLayers, pruneMesh] = useCrossfadeLayers(meshGradient);
+  const [ambientLayers, pruneAmbient] = useCrossfadeLayers(currentTrack?.artUrl);
 
   // Matched YouTube music video for the current track (mobile-only, gated).
   const { videoId } = useTrackMusicVideo(currentTrack);
@@ -101,16 +146,36 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
       data-video={videoPhase}
       style={mobileNowStyle}
     >
-      {/* Vibrant cover-color mesh — the no-video background */}
-      <div className="mobile-now-playing-mesh" aria-hidden="true" style={{ background: meshGradient }} />
+      {/* Vibrant cover-color mesh — the no-video background. Stacked layers
+          cross-fade the palette from track to track. */}
+      <div className="mobile-now-playing-mesh" aria-hidden="true">
+        {meshLayers.map((layer) => (
+          <div
+            key={layer.key}
+            className={`mobile-now-playing-mesh-layer${layer.animate ? ' mobile-now-playing-mesh-layer--fade' : ''}`}
+            style={{ background: layer.value }}
+            // Once a faded-in layer is fully opaque, drop everything beneath it —
+            // the mesh has translucent regions, so a lingering older layer would
+            // bleed through. At rest only the current palette remains.
+            onAnimationEnd={() => pruneMesh(layer.key)}
+          />
+        ))}
+      </div>
 
-      {currentTrack.artUrl && (
-        <img
-          src={currentTrack.artUrl}
-          alt=""
-          aria-hidden="true"
-          className="mobile-now-playing-ambient"
-        />
+      {/* Blurred cover art washed behind the mesh — stacked layers morph the
+          album's real colours from track to track instead of hard-cutting. */}
+      {ambientLayers.length > 0 && (
+        <div className="mobile-now-playing-ambient" aria-hidden="true">
+          {ambientLayers.map((layer) => (
+            <img
+              key={layer.key}
+              src={layer.value}
+              alt=""
+              className={`mobile-now-playing-ambient-layer${layer.animate ? ' mobile-now-playing-ambient-layer--fade' : ''}`}
+              onAnimationEnd={() => pruneAmbient(layer.key)}
+            />
+          ))}
+        </div>
       )}
 
       {/* Full-screen, muted background music video (fades in when buffered) */}
