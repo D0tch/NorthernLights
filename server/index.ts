@@ -122,12 +122,39 @@ app.use(compression({
     return compression.filter(req, res);
   },
 }));
+// Content-Security-Policy, shipped Report-Only first (per roadmap). It does not
+// block anything yet — violations are reported to the console so we can confirm
+// the allowlist before promoting to an enforcing `Content-Security-Policy`.
+// Origins accounted for:
+//   - script/connect gstatic: Google Cast sender SDK (cast_sender.js)
+//   - frame youtube: Music Videos rail (YouTube IFrame embeds)
+//   - style/font Google Fonts; inline <script>/<style> bootstrap in index.html
+//   - img https:/data:/blob: cover art (local + external providers) and canvases
+//   - media/worker blob: HLS via hls.js (MSE) + the service worker
+//   - the ogl WebGL aurora renders to a canvas and needs no extra directives
+const CSP_REPORT_ONLY = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.youtube.com",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' https://fonts.gstatic.com",
+  "img-src 'self' data: blob: https:",
+  "media-src 'self' blob: data:",
+  "connect-src 'self' https://www.gstatic.com",
+  "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
+  "worker-src 'self' blob:",
+  "object-src 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "frame-ancestors 'self'",
+].join('; ');
+
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  res.setHeader('Content-Security-Policy-Report-Only', CSP_REPORT_ONLY);
   if (isProduction && req.secure) {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
   }
