@@ -127,7 +127,10 @@ app.use(compression({
 // index.html's Cast bootstrap plus the optional window.__CAST_APP_ID injection,
 // so script-src drops 'unsafe-inline' in favour of sha256 hashes computed from the
 // exact served HTML at startup (see the dist block below). External script hosts:
-//   - gstatic: Google Cast sender SDK (cast_sender.js)
+//   - www.gstatic.com (scheme-less, NOT https://): the Cast SDK lazy-loads its
+//     framework over http:// on insecure origins (http://localhost / LAN IP). A
+//     scheme-less host matches the page's scheme, so it allows http+https on an
+//     http origin but stays https-only on a real HTTPS deployment.
 //   - youtube + s.ytimg.com: YouTube IFrame API loader + its widget script
 //     (served from either host depending on YouTube's rollout)
 // Other directives:
@@ -147,12 +150,12 @@ const sha256Base64 = (s: string) => crypto.createHash('sha256').update(s, 'utf8'
 // to run as inline scripts.
 const buildCsp = (inlineScriptSources: string[]) => [
   "default-src 'self'",
-  `script-src ${["'self'", ...inlineScriptSources, 'https://www.gstatic.com', 'https://www.youtube.com', 'https://s.ytimg.com'].join(' ')}`,
+  `script-src ${["'self'", ...inlineScriptSources, 'www.gstatic.com', 'https://www.youtube.com', 'https://s.ytimg.com'].join(' ')}`,
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
   "media-src 'self' blob: data:",
-  "connect-src 'self' https://www.gstatic.com https://nominatim.openstreetmap.org",
+  "connect-src 'self' www.gstatic.com https://nominatim.openstreetmap.org",
   "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
   "worker-src 'self' blob:",
   "object-src 'none'",
