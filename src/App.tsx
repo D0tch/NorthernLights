@@ -9,7 +9,7 @@ import MainContent, { InviteRegister } from './components/MainContent';
 import CastHealthToasts from './components/cast/CastHealthToasts';
 import KeyboardHint from './components/KeyboardHint';
 import { usePlayerStore } from './store/index';
-import { RefreshCw } from 'lucide-react';
+import { RefreshCw, WifiOff } from 'lucide-react';
 import { ToastContainer } from './components/ToastContainer';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { useSSE } from './hooks/useSSE';
@@ -448,8 +448,12 @@ const App: React.FC = () => {
     );
   }
 
-  // If database is not connected, show the control panel immediately
-  if (dbConnected === false && !isDatabaseStarting) {
+  // If the server reports the database is down (or is unreachable while we're
+  // ONLINE), show the recovery control panel. When the browser is offline this
+  // same dbConnected===false can just mean the health fetch couldn't leave the
+  // device — that's not a DB outage, so fall through to the cached app instead
+  // of trapping the user on the recovery screen.
+  if (dbConnected === false && !isDatabaseStarting && isOnline) {
     return (
       <React.Suspense fallback={<FullPageFallback label="Loading database tools..." />}>
         <DatabaseControl
@@ -460,11 +464,13 @@ const App: React.FC = () => {
   }
 
   // Loading / Initializing gate
-  // Shows if: 
+  // Shows if:
   // 1. We are explicitly starting the database
   // 2. We don't know the connection status yet
   // 3. We are connected but don't know the setup status yet
-  if (isDatabaseStarting || dbConnected === null || (dbConnected === true && needsSetup === null)) {
+  // Online-only: offline we can't verify health/setup at all, so spinning here
+  // would hang forever. Fall through to the cached app (or login) instead.
+  if ((isDatabaseStarting || dbConnected === null || (dbConnected === true && needsSetup === null)) && isOnline) {
       const showStartingLabel = isDatabaseStarting;
       const showConnectingLabel = dbConnected === null;
       const showSetupLabel = dbConnected === true && needsSetup === null;
@@ -562,6 +568,17 @@ const App: React.FC = () => {
             isScannerVisible={isScannerVisibleLocally}
             onToggleScanner={toggleScanner}
           />
+
+          {!isOnline && (
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-center justify-center gap-2 px-4 py-1.5 text-xs sm:text-sm font-medium text-amber-950 bg-amber-400/90 dark:text-amber-100 dark:bg-amber-500/20 border-b border-amber-500/30"
+            >
+              <WifiOff className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              <span>You're offline — playing from cache. Library updates and search are paused.</span>
+            </div>
+          )}
 
           <MainContent />
 
