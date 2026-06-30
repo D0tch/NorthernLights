@@ -143,8 +143,9 @@ export const CastButton: React.FC<CastButtonProps> = ({
           type="button"
           className="aurora-cast-stop"
           onClick={() => castManager.disconnect()}
+          aria-label={deviceName ? `Stop casting to ${deviceName}` : 'Stop casting'}
         >
-          Stop
+          Stop casting
         </button>
       )}
 

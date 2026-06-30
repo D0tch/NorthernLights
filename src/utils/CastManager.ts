@@ -1001,6 +1001,13 @@ export class CastManager {
                         case cast.framework.SessionState.SESSION_START_FAILED:
                             this.logCast('warn', 'SESSION_START_FAILED', `errorCode=${event.errorCode || 'unknown'} reason=${event.reason || 'unknown'}`);
                             this.clearUserSessionIntentTimer();
+                            // Dismissing the device picker reports errorCode CANCEL — benign, stay
+                            // silent. Surface a concise recovery message only for real failures, and
+                            // only when the programmatic requestSession() path isn't already going to
+                            // toast (it owns the message while userSessionRequestPending is set).
+                            if (event.errorCode && event.errorCode !== chrome.cast.ErrorCode.CANCEL && !this.userSessionRequestPending) {
+                                toast.error('Couldn’t start casting. Check the device is on and on the same network, then try again.');
+                            }
                             this.resetSessionAttemptState('session-start-failed', {
                                 healthPhase: 'idle',
                                 healthMessage: '',
