@@ -13,6 +13,10 @@ export default defineConfig({
         name: 'NorthernLights',
         short_name: 'NorthernLights',
         description: 'A modern web-based music player with local file playback, metadata editing, and playlist management.',
+        // Stable app identity, independent of start_url. Set to match the implicit
+        // id (the resolved start_url) so already-installed PWAs aren't treated as a
+        // new app on update. Changing start_url later won't reshuffle the identity.
+        id: '/?source=pwa',
         start_url: '/?source=pwa',
         scope: '/',
         lang: 'en',
