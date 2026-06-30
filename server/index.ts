@@ -136,7 +136,10 @@ app.use(compression({
 // Other directives:
 //   - frame youtube/youtube-nocookie: Music Videos rail embeds
 //   - connect nominatim.openstreetmap.org: Live Music location lookup (client fetch);
-//     connect gstatic: Cast SDK. style/font: Google Fonts.
+//     connect gstatic: Cast SDK. The service worker is served by us so it inherits
+//     this CSP, and its Workbox runtime-caching fetch()es Google Fonts — so the font
+//     hosts must be in connect-src too, not just style-src/font-src (which only cover
+//     the <link>). style/font: Google Fonts.
 //   - img https:/data:/blob: cover art (local + Cover Art Archive + providers), canvases
 //   - media/worker blob: HLS via hls.js (MSE) + the service worker
 //   - the ogl WebGL aurora renders to a canvas and needs no extra directives.
@@ -155,7 +158,7 @@ const buildCsp = (inlineScriptSources: string[]) => [
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
   "media-src 'self' blob: data:",
-  "connect-src 'self' www.gstatic.com https://nominatim.openstreetmap.org",
+  "connect-src 'self' www.gstatic.com https://nominatim.openstreetmap.org https://fonts.googleapis.com https://fonts.gstatic.com",
   "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
   "worker-src 'self' blob:",
   "object-src 'none'",
