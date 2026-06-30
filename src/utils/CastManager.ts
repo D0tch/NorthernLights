@@ -1919,6 +1919,15 @@ export class CastManager {
             console.error('[Cast] Cannot load queue: missing start item media');
             return;
         }
+        // A queue built without playable URLs (empty contentId) would otherwise
+        // be sent to the device, silently fail to load, and leave the previous
+        // queue playing. Surface it instead of casting nothing.
+        if (!startItem.media.contentId) {
+            console.error('[Cast] Cannot load queue: start item has no content URL (unhydrated track?)');
+            this.logCast('error', 'Queue load aborted: empty content URL', `startIndex=${normalizedStartIndex} title=${tracks[normalizedStartIndex]?.title || 'unknown'}`);
+            toast.error('Cannot cast this queue — track URLs are missing. Try reloading.');
+            return;
+        }
 
         const startTrack = tracks[normalizedStartIndex] || tracks[0];
         const startTrackUrl = applyCastStreamingQualityToHlsUrl(

@@ -2315,17 +2315,29 @@ export const usePlayerStore = create<PlayerState>()(
 
             if (castManager.isConnected()) {
               await castManager.ensureQueuePlayback(
-                playlist.map((item) => ({
-                  queueEntryId: item.queueEntryId,
-                  url: item.url || '',
-                  rawUrl: item.rawUrl || '',
-                  title: item.title || 'Unknown Title',
-                  artist: item.artist || ((item.artists as string[])?.join(', ')) || 'Unknown Artist',
-                  artUrl: item.artUrl,
-                  album: item.album,
-                  format: item.format,
-                  duration: item.duration,
-                })),
+                playlist.map((item) => {
+                  // Rebuild stream/art URLs from the CURRENT token, exactly like
+                  // the local `playable` above. The cast path previously used
+                  // item.url verbatim, so a queue built without hydration (e.g.
+                  // artist radio when the in-memory library is empty) or with a
+                  // since-rotated token cast empty/stale URLs — the device then
+                  // couldn't load the new queue and kept playing the old one,
+                  // while local playback self-healed. Keep them symmetric.
+                  const rebuilt = item.path && freshToken
+                    ? { ...item, ...buildTrackUrls(item.id, item.path, freshToken, freshQuality, (item as any).artHash) }
+                    : item;
+                  return {
+                    queueEntryId: item.queueEntryId,
+                    url: rebuilt.url || '',
+                    rawUrl: rebuilt.rawUrl || '',
+                    title: item.title || 'Unknown Title',
+                    artist: item.artist || ((item.artists as string[])?.join(', ')) || 'Unknown Artist',
+                    artUrl: rebuilt.artUrl,
+                    album: item.album,
+                    format: item.format,
+                    duration: item.duration,
+                  };
+                }),
                 index,
                 repeat
               );
