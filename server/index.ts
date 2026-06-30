@@ -12,6 +12,7 @@ import compression from 'compression';
 import fs from 'fs';
 import path from 'path';
 import dns from 'dns';
+import crypto from 'crypto';
 import { spawn } from 'child_process';
 
 // Force IPv4 locally to prevent Last.fm IPv6 blackholing hangs
@@ -122,22 +123,31 @@ app.use(compression({
     return compression.filter(req, res);
   },
 }));
-// Content-Security-Policy (enforcing). Promoted from Report-Only after auditing
-// every external origin the client loads. Origins accounted for:
-//   - script gstatic: Google Cast sender SDK (cast_sender.js)
-//   - script youtube + s.ytimg.com: YouTube IFrame API loader + its widget script
-//     (YouTube serves www-widgetapi.js from either host depending on rollout)
+// Content-Security-Policy (enforcing). The only inline scripts we serve are
+// index.html's Cast bootstrap plus the optional window.__CAST_APP_ID injection,
+// so script-src drops 'unsafe-inline' in favour of sha256 hashes computed from the
+// exact served HTML at startup (see the dist block below). External script hosts:
+//   - gstatic: Google Cast sender SDK (cast_sender.js)
+//   - youtube + s.ytimg.com: YouTube IFrame API loader + its widget script
+//     (served from either host depending on YouTube's rollout)
+// Other directives:
 //   - frame youtube/youtube-nocookie: Music Videos rail embeds
-//   - connect nominatim.openstreetmap.org: Live Music location lookup (client fetch)
-//   - connect gstatic: Cast SDK; style/font: Google Fonts
+//   - connect nominatim.openstreetmap.org: Live Music location lookup (client fetch);
+//     connect gstatic: Cast SDK. style/font: Google Fonts.
 //   - img https:/data:/blob: cover art (local + Cover Art Archive + providers), canvases
 //   - media/worker blob: HLS via hls.js (MSE) + the service worker
-//   - 'unsafe-inline' (script/style): index.html Cast bootstrap, the PWA register
-//     shim, and React inline styles. Tightening to hashes/nonces is a follow-up.
 //   - the ogl WebGL aurora renders to a canvas and needs no extra directives.
-const CSP = [
+// style-src KEEPS 'unsafe-inline': React sets dynamic inline style="" attributes
+// (theming CSS vars, cover-art colours, the aurora) that can't be hashed, and
+// style-src-attr isn't reliable cross-browser. Style injection is low-risk versus
+// the script injection these hashes lock down.
+const sha256Base64 = (s: string) => crypto.createHash('sha256').update(s, 'utf8').digest('base64');
+
+// inlineScriptSources are sha256 hashes (or a keyword like 'unsafe-inline') allowed
+// to run as inline scripts.
+const buildCsp = (inlineScriptSources: string[]) => [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.youtube.com https://s.ytimg.com",
+  `script-src ${["'self'", ...inlineScriptSources, 'https://www.gstatic.com', 'https://www.youtube.com', 'https://s.ytimg.com'].join(' ')}`,
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
@@ -151,13 +161,31 @@ const CSP = [
   "frame-ancestors 'self'",
 ].join('; ');
 
+// sha256 of every inline <script> (one without a src attribute) in the served HTML,
+// so exactly those scripts are allowed and any injected inline script is blocked.
+const inlineScriptHashes = (html: string): string[] => {
+  const hashes: string[] = [];
+  const re = /<script\b([^>]*)>([\s\S]*?)<\/script>/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(html)) !== null) {
+    if (/\bsrc\s*=/i.test(m[1] || '')) continue; // external script — host-allowlisted, not inline
+    hashes.push(`'sha256-${sha256Base64(m[2])}'`);
+  }
+  return hashes;
+};
+
+// Default retains 'unsafe-inline' as a safe fallback (dev with no dist build, or an
+// index.html read failure). Production tightens this to the script hashes in the
+// dist block below, once the exact served HTML is known.
+let cspHeader = buildCsp(["'unsafe-inline'"]);
+
 app.use((req, res, next) => {
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('X-Frame-Options', 'SAMEORIGIN');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-  res.setHeader('Content-Security-Policy', CSP);
+  res.setHeader('Content-Security-Policy', cspHeader);
   if (isProduction && req.secure) {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
   }
@@ -196,6 +224,11 @@ if (fs.existsSync(distPath)) {
     } else {
       cachedIndexHtml = rawHtml;
     }
+    // Now that we know the exact HTML we serve, lock script-src to its inline
+    // scripts (Cast bootstrap + optional app-ID injection) and drop 'unsafe-inline'.
+    const hashes = inlineScriptHashes(cachedIndexHtml);
+    cspHeader = buildCsp(hashes);
+    console.log(`[Server] CSP script-src locked to ${hashes.length} inline hash(es)`);
   } catch (e) {
     console.warn('[Server] Failed to pre-cache index.html, will read on each request');
   }
