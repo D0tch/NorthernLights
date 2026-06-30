@@ -122,24 +122,27 @@ app.use(compression({
     return compression.filter(req, res);
   },
 }));
-// Content-Security-Policy, shipped Report-Only first (per roadmap). It does not
-// block anything yet — violations are reported to the console so we can confirm
-// the allowlist before promoting to an enforcing `Content-Security-Policy`.
-// Origins accounted for:
-//   - script/connect gstatic: Google Cast sender SDK (cast_sender.js)
-//   - frame youtube: Music Videos rail (YouTube IFrame embeds)
-//   - style/font Google Fonts; inline <script>/<style> bootstrap in index.html
-//   - img https:/data:/blob: cover art (local + external providers) and canvases
+// Content-Security-Policy (enforcing). Promoted from Report-Only after auditing
+// every external origin the client loads. Origins accounted for:
+//   - script gstatic: Google Cast sender SDK (cast_sender.js)
+//   - script youtube + s.ytimg.com: YouTube IFrame API loader + its widget script
+//     (YouTube serves www-widgetapi.js from either host depending on rollout)
+//   - frame youtube/youtube-nocookie: Music Videos rail embeds
+//   - connect nominatim.openstreetmap.org: Live Music location lookup (client fetch)
+//   - connect gstatic: Cast SDK; style/font: Google Fonts
+//   - img https:/data:/blob: cover art (local + Cover Art Archive + providers), canvases
 //   - media/worker blob: HLS via hls.js (MSE) + the service worker
-//   - the ogl WebGL aurora renders to a canvas and needs no extra directives
-const CSP_REPORT_ONLY = [
+//   - 'unsafe-inline' (script/style): index.html Cast bootstrap, the PWA register
+//     shim, and React inline styles. Tightening to hashes/nonces is a follow-up.
+//   - the ogl WebGL aurora renders to a canvas and needs no extra directives.
+const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.youtube.com",
+  "script-src 'self' 'unsafe-inline' https://www.gstatic.com https://www.youtube.com https://s.ytimg.com",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
   "media-src 'self' blob: data:",
-  "connect-src 'self' https://www.gstatic.com",
+  "connect-src 'self' https://www.gstatic.com https://nominatim.openstreetmap.org",
   "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
   "worker-src 'self' blob:",
   "object-src 'none'",
@@ -154,7 +157,7 @@ app.use((req, res, next) => {
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
   res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
-  res.setHeader('Content-Security-Policy-Report-Only', CSP_REPORT_ONLY);
+  res.setHeader('Content-Security-Policy', CSP);
   if (isProduction && req.secure) {
     res.setHeader('Strict-Transport-Security', 'max-age=15552000; includeSubDomains');
   }
