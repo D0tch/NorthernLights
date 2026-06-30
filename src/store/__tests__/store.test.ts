@@ -5,16 +5,6 @@ describe('Music Store Logic', () => {
   beforeEach(() => {
     usePlayerStore.setState({ library: [], playlist: [] });
   });
-  it('removes track from library state', async () => {
-    const mockTracks: TrackInfo[] = [
-      { id: 'foo', path: '/foo.mp3', title: 'a' },
-      { id: 'bar', path: '/bar.mp3', title: 'b' }
-    ];
-    usePlayerStore.setState({ library: mockTracks });
-    await usePlayerStore.getState().deleteTrackFromLibrary('foo');
-    expect(usePlayerStore.getState().library).toEqual([{ id: 'bar', path: '/bar.mp3', title: 'b' }]);
-  });
-
   it('adds tracks to library', () => {
     usePlayerStore.setState({ library: [] });
     usePlayerStore.getState().addTracksToLibrary([{ id: 'baz', path: '/baz.mp3', title: 'c' }]);

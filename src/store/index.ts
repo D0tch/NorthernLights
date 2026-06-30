@@ -569,7 +569,6 @@ export interface PlayerState {
   ) => void;
 
   // Library Actions
-  deleteTrackFromLibrary: (trackId: string) => Promise<void>;
   toggleTrackLove: (track: TrackInfo) => Promise<void>;
 
   // Play Queue Actions
@@ -1986,34 +1985,6 @@ export const usePlayerStore = create<PlayerState>()(
             console.error('Failed to update loved track', error);
             throw error;
           }
-        },
-
-        deleteTrackFromLibrary: async (trackId: string) => {
-          // This would ideally hit a DELETE /api/library/:id endpoint
-          // For now we just remove from UI state
-          set((state: PlayerState): Partial<PlayerState> => {
-            const newLibrary = state.library.filter(t => t.id !== trackId);
-            // If the deleted track was the currently playing one in the playlist, stop it.
-            let newIndex = state.currentIndex;
-            if (state.currentIndex !== null) {
-              const currentTrackId = state.playlist[state.currentIndex]?.id;
-              if (currentTrackId === trackId) {
-                playbackManager.stop();
-                newIndex = null;
-              }
-            }
-            // Remove it from the playlist array as well
-            const newPlaylist = state.playlist.filter(t => t.id !== trackId);
-            // Adjust the newIndex depending on items removed before it
-            if (newIndex !== null && newPlaylist.length !== state.playlist.length) {
-              const deletedPlaylistIdx = state.playlist.findIndex(t => t.id === trackId);
-              if (deletedPlaylistIdx < newIndex) {
-                newIndex = newIndex - 1;
-              }
-            }
-
-            return { library: newLibrary, playlist: newPlaylist, currentIndex: newIndex };
-          });
         },
 
         addLibraryFolder: async (folderPath: string) => {
