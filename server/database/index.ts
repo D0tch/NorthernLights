@@ -1084,7 +1084,7 @@ function parseObjectArrayField<T extends object>(value: any): T[] {
 }
 
 function mapTrackRow(row: any) {
-  return {
+  const mapped: any = {
     ...row,
     albumArtist: row.album_artist,
     trackNumber: row.track_number,
@@ -1113,6 +1113,11 @@ function mapTrackRow(row: any) {
     isLoved: row.is_loved === true,
     artHash: row.art_hash ?? undefined,
   };
+  // decoded_path is a server-internal index column (raw path bytes for
+  // directory-prefix lookups). Never serialize it — as bytea it would balloon
+  // into a { type:'Buffer', data:[...] } array on every mapped-track payload.
+  delete mapped.decoded_path;
+  return mapped;
 }
 
 export async function getAllTracks(userId: string | null = null) {
@@ -1128,7 +1133,15 @@ export async function getAllTracks(userId: string | null = null) {
           ON ult.track_id = t.id AND ult.user_id = $1
       `, [userId])
     : await db.query('SELECT t.*, FALSE AS is_loved FROM tracks t');
-  return res.rows.map(mapTrackRow);
+  // Full-library / admin-tool load doesn't need embedded file URLs — no full-
+  // `library` consumer reads them. Drop the raw column dup (leaked by ...row) and
+  // the parsed array; ~25% of this payload. (Per-entity endpoints keep rawUrls.)
+  return res.rows.map((row) => {
+    const t = mapTrackRow(row);
+    delete t.raw_urls;
+    delete t.rawUrls;
+    return t;
+  });
 }
 
 // Server-side global search, replacing the client-side scan over the in-memory
