@@ -199,10 +199,22 @@ export async function initDB(): Promise<Pool> {
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS art_hash TEXT;
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS file_mtime BIGINT;
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS file_size BIGINT;
+          -- Raw (base64-decoded) path bytes, materialized + indexed so directory
+          -- prefix lookups (getPathsForDirectory / removeTracksByDirectory) do an
+          -- index range scan instead of decoding every row at query time. Byte-
+          -- identical to the decode(path,'base64') those queries computed inline.
+          ALTER TABLE tracks ADD COLUMN IF NOT EXISTS decoded_path BYTEA;
         EXCEPTION
           WHEN OTHERS THEN null;
         END $$;
         CREATE INDEX IF NOT EXISTS tracks_art_hash_idx ON tracks(art_hash);
+
+        -- Backfill decoded_path for pre-existing rows. Idempotent: matches 0 rows
+        -- once populated (addTrack sets it on every insert). Safe on all rows —
+        -- getPathsForDirectory already decode()s every path, so any non-base64 row
+        -- would have broken that long ago.
+        UPDATE tracks SET decoded_path = decode(path, 'base64') WHERE decoded_path IS NULL AND path IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS tracks_decoded_path_idx ON tracks(decoded_path);
 
         CREATE TABLE IF NOT EXISTS track_features (
           track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE PRIMARY KEY,
@@ -1232,14 +1244,16 @@ export async function getArtHashForPath(b64Path: string): Promise<string | null>
 export async function getPathsForDirectory(dirPath: string): Promise<Buffer[]> {
   const db = await initDB();
   const dirBuf = Buffer.from(dirPath, 'utf8');
+  // Index range scan on decoded_path (raw path bytes): the directory itself, or
+  // anything under "<dir>/". 0x2F is '/', 0x30 the next byte, so [dir||'/', dir||0x30)
+  // is exactly the subtree. Byte-identical to the old substring+boundary match,
+  // but index-backed instead of decoding every row.
+  const lower = Buffer.concat([dirBuf, Buffer.from([0x2f])]); // dir + '/'
+  const upper = Buffer.concat([dirBuf, Buffer.from([0x30])]); // dir + (0x2F + 1)
   const res = await db.query(
-    `SELECT path FROM (
-       SELECT path, decode(path, 'base64') AS p FROM tracks WHERE path IS NOT NULL
-     ) s
-     WHERE substring(s.p FROM 1 FOR octet_length($1::bytea)) = $1::bytea
-       AND (octet_length(s.p) = octet_length($1::bytea)
-            OR get_byte(s.p, octet_length($1::bytea)) = 47)`, // 47 = '/'
-    [dirBuf]
+    `SELECT path FROM tracks
+     WHERE decoded_path = $1 OR (decoded_path >= $2 AND decoded_path < $3)`,
+    [dirBuf, lower, upper]
   );
   return res.rows.map((r: any) => Buffer.from(r.path, 'base64'));
 }
@@ -1257,11 +1271,12 @@ export async function recordUnparsedTrack(track: { path: string; title: string; 
   const db = await initDB();
   const id = Buffer.from(track.path).toString('base64');
   await db.query(
-    `INSERT INTO tracks (id, title, path, file_mtime, file_size)
-     VALUES ($1, $2, $3, $4, $5)
+    `INSERT INTO tracks (id, title, path, file_mtime, file_size, decoded_path)
+     VALUES ($1, $2, $3, $4, $5, decode($3, 'base64'))
      ON CONFLICT (id) DO UPDATE SET
        file_mtime = COALESCE(EXCLUDED.file_mtime, tracks.file_mtime),
-       file_size  = COALESCE(EXCLUDED.file_size, tracks.file_size)`,
+       file_size  = COALESCE(EXCLUDED.file_size, tracks.file_size),
+       decoded_path = COALESCE(tracks.decoded_path, EXCLUDED.decoded_path)`,
     [id, sanitizeString(track.title) || path.basename(track.path), track.path, track.fileMtime, track.fileSize]
   );
 }
@@ -1274,8 +1289,8 @@ export async function addTrack(track: any) {
   const sanitizeArray = (arr: any) => Array.isArray(arr) ? arr.map(sanitizeString) : arr;
 
   await db.query(`
-    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls, art_hash, file_mtime, file_size)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32)
+    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls, art_hash, file_mtime, file_size, decoded_path)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, decode($14, 'base64'))
     ON CONFLICT (id) DO UPDATE SET
       title = EXCLUDED.title,
       artist = EXCLUDED.artist,
@@ -1309,7 +1324,8 @@ export async function addTrack(track: any) {
       -- fields) never wipes an already-encoded cover.
       art_hash = COALESCE(EXCLUDED.art_hash, tracks.art_hash),
       file_mtime = COALESCE(EXCLUDED.file_mtime, tracks.file_mtime),
-      file_size = COALESCE(EXCLUDED.file_size, tracks.file_size)
+      file_size = COALESCE(EXCLUDED.file_size, tracks.file_size),
+      decoded_path = EXCLUDED.decoded_path
     WHERE
       tracks.title IS DISTINCT FROM EXCLUDED.title OR
       tracks.artist IS DISTINCT FROM EXCLUDED.artist OR
@@ -1339,6 +1355,7 @@ export async function addTrack(track: any) {
       tracks.mb_release_group_id IS DISTINCT FROM EXCLUDED.mb_release_group_id OR
       tracks.mb_work_id IS DISTINCT FROM EXCLUDED.mb_work_id OR
       tracks.raw_urls IS DISTINCT FROM EXCLUDED.raw_urls OR
+      tracks.decoded_path IS DISTINCT FROM EXCLUDED.decoded_path OR
       -- Trigger the upsert when only the artwork or the file mtime changed, so
       -- a re-tag (identical text metadata, new cover) still records the update.
       (EXCLUDED.art_hash IS NOT NULL AND tracks.art_hash IS DISTINCT FROM EXCLUDED.art_hash) OR
@@ -1545,21 +1562,16 @@ export async function removeDirectory(dirPath: string) {
 export async function removeTracksByDirectory(dirPath: string) {
   const db = await initDB();
 
-  // Match the directory at the byte level inside Postgres (paths are stored as
-  // base64 of the raw UTF-8 bytes) and delete in a single statement, instead of
-  // SELECT-ing every track, decoding each in a JS loop, then chunked-deleting.
-  // See getPathsForDirectory for the matching rationale.
+  // Delete every track under the directory via an index range scan on
+  // decoded_path (the directory itself, or anything under "<dir>/"). Byte-
+  // identical to getPathsForDirectory's match; see it for the range rationale.
   const dirBuf = Buffer.from(dirPath, 'utf8');
+  const lower = Buffer.concat([dirBuf, Buffer.from([0x2f])]); // dir + '/'
+  const upper = Buffer.concat([dirBuf, Buffer.from([0x30])]); // dir + (0x2F + 1)
   await db.query(
-    `DELETE FROM tracks WHERE id IN (
-       SELECT id FROM (
-         SELECT id, decode(path, 'base64') AS p FROM tracks WHERE path IS NOT NULL
-       ) s
-       WHERE substring(s.p FROM 1 FOR octet_length($1::bytea)) = $1::bytea
-         AND (octet_length(s.p) = octet_length($1::bytea)
-              OR get_byte(s.p, octet_length($1::bytea)) = 47)
-     )`, // 47 = '/'
-    [dirBuf]
+    `DELETE FROM tracks
+     WHERE decoded_path = $1 OR (decoded_path >= $2 AND decoded_path < $3)`,
+    [dirBuf, lower, upper]
   );
 }
 
