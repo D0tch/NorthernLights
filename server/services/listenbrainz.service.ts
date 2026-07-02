@@ -98,3 +98,54 @@ export async function updateNowPlaying(userId: string, track: LbTrack): Promise<
   };
   return submit(userId, body);
 }
+
+const LB_HISTORY_PAGE_SIZE = 200; // well under LB's max of 1000
+const LB_HISTORY_MAX_PAGES = 10;  // cap: ≤2000 listens per period fetch
+
+/**
+ * Fetch a user's listens in (fromTs, toTs] (UNIX seconds) as flat listen rows,
+ * mirroring lastfm.getScrobblesInRange's contract. LB returns listens newest
+ * first, so we walk max_ts backwards page by page. Resilient — returns [] when
+ * not connected and whatever was gathered on error/timeout. Recording MBIDs
+ * come from LB's mapping when available (strongest key for local matching).
+ */
+export async function getListensInRange(userId: string, fromTs: number, toTs: number): Promise<Array<{ artist: string; track: string; mbid?: string }>> {
+  const username = (await getUserSetting(userId, 'listenBrainzUsername')) || '';
+  if (!username) return [];
+  const token = await getUserToken(userId); // optional for public reads, but avoids stricter rate limits
+
+  const out: Array<{ artist: string; track: string; mbid?: string }> = [];
+  const deadline = Date.now() + 30000; // overall budget; page cap is the primary bound
+  let maxTs = toTs;
+  try {
+    for (let page = 0; page < LB_HISTORY_MAX_PAGES; page++) {
+      if (Date.now() > deadline) break;
+      const url = `${LB_API_URL}/user/${encodeURIComponent(username)}/listens`
+        + `?min_ts=${Math.max(0, fromTs - 1)}&max_ts=${maxTs}&count=${LB_HISTORY_PAGE_SIZE}`;
+      const res = await fetch(url, {
+        headers: token ? { 'Authorization': `Token ${token}` } : {},
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) break;
+      const json: any = await res.json();
+      const listens = json?.payload?.listens;
+      if (!Array.isArray(listens) || listens.length === 0) break;
+      let oldest = maxTs;
+      for (const l of listens) {
+        const md = l?.track_metadata || {};
+        const artist = md?.artist_name || '';
+        const track = md?.track_name || '';
+        const mbid = String(md?.mbid_mapping?.recording_mbid || md?.additional_info?.recording_mbid || '').trim() || undefined;
+        if (artist && track) out.push({ artist, track, mbid });
+        const at = Number(l?.listened_at || 0);
+        if (at && at < oldest) oldest = at;
+      }
+      if (listens.length < LB_HISTORY_PAGE_SIZE) break;
+      maxTs = oldest - 1; // next page: strictly older than the oldest seen
+      if (maxTs <= fromTs) break;
+    }
+  } catch (e) {
+    console.error('[ListenBrainz] getListensInRange failed', (e as Error).message);
+  }
+  return out;
+}

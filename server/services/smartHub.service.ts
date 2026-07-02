@@ -1,4 +1,4 @@
-import { initDB, getPlaylistTracks, getSystemSetting } from '../database';
+import { initDB, getPlaylistTracks, getSystemSetting, getUserSetting, setUserSetting } from '../database';
 import OpenAI from 'openai';
 import { getLlmConfig, extractJson } from './llm.service';
 import { withTransaction } from '../utils/db';
@@ -8,9 +8,12 @@ import {
   fetchCandidatePool,
   getArtistGenrePaths,
   getLibraryMainstreamVector,
+  getSongDedupKey,
   PoolName,
   PoolSpec,
 } from './candidatePool.service';
+import { getScrobblesInRange } from './lastfm.service';
+import { getListensInRange } from './listenbrainz.service';
 
 // ============================================================
 // Smart Hub: On Repeat, Repeat Rewind, Jump Back In, Artist
@@ -1394,26 +1397,100 @@ function enumerateCompletedWrappedPeriods(now: Date, earliest: Date): WrappedPer
   return out;
 }
 
+// Blend a user's external scrobbles (Last.fm + ListenBrainz) into the in-app
+// play counts for a period so a recap reflects real listening even for tracks
+// played elsewhere. External history is matched to local library tracks by song
+// key (MB recording id → normalized artist+title); scrobbles that don't resolve
+// to a library track can't sit in a playlist of local tracks and are dropped.
+// Runs once per period (snapshots are frozen) and is fully resilient — if both
+// providers are unreachable the recap is simply the in-app ranking.
 async function computeWrappedPeriodFresh(userId: string, p: WrappedPeriod) {
   const id = smartPlaylistId('wrapped', userId, p.suffix);
   const db = await initDB();
+
+  // 1) In-app plays for the period — one row per track, all with ≥1 play. The
+  //    ≥2 floor is applied to the blended total below, not here.
   const res = await db.query(
     `
-    SELECT t.id, SUM(b.play_count) AS plays
+    SELECT t.id, t.mb_recording_id, t.artist, t.title, SUM(b.play_count)::int AS plays
     FROM user_track_play_buckets b
     JOIN tracks t ON t.id = b.track_id
     WHERE b.user_id = $1
       AND b.year_month >= $2::date
       AND b.year_month < $3::date
     GROUP BY t.id
-    HAVING SUM(b.play_count) >= 2
-    ORDER BY plays DESC
-    LIMIT $4
     `,
-    [userId, p.startYm, p.endYmExclusive, p.limit]
+    [userId, p.startYm, p.endYmExclusive]
   );
-  if (res.rowCount! < WRAPPED_MIN_TRACKS) return null;
-  const trackIds = res.rows.map((r: any) => r.id);
+
+  // Collapse to one entry per song, summing plays across duplicate local files
+  // and keeping the best-played file as the representative track id.
+  interface WrappedEntry { trackId: string; key: string; inApp: number; external: number; repPlays: number; }
+  const byKey = new Map<string, WrappedEntry>();
+  for (const r of res.rows as any[]) {
+    const key = getSongDedupKey({ title: r.title, artist: r.artist, mb_recording_id: r.mb_recording_id });
+    const plays = Number(r.plays) || 0;
+    const e = byKey.get(key);
+    if (!e) {
+      byKey.set(key, { trackId: r.id, key, inApp: plays, external: 0, repPlays: plays });
+    } else {
+      e.inApp += plays;
+      if (plays > e.repPlays) { e.repPlays = plays; e.trackId = r.id; }
+    }
+  }
+
+  // 2) External scrobbles for the same window, aggregated by song key. Both
+  //    providers run in parallel and self-heal to [] on failure.
+  const fromTs = Math.floor(new Date(p.startYm).getTime() / 1000);
+  const toTs = Math.floor(new Date(p.endYmExclusive).getTime() / 1000) - 1;
+  const [lfm, lb] = await Promise.all([
+    getScrobblesInRange(userId, fromTs, toTs).catch(() => []),
+    getListensInRange(userId, fromTs, toTs).catch(() => []),
+  ]);
+  const externalByKey = new Map<string, number>();
+  for (const l of [...lfm, ...lb]) {
+    const key = getSongDedupKey({ title: l.track, artist: l.artist, mb_recording_id: l.mbid });
+    externalByKey.set(key, (externalByKey.get(key) || 0) + 1);
+  }
+
+  // 3) Attach external counts. Keys already played in-app get boosted directly;
+  //    external-only songs are resolved to a library track by MB recording id
+  //    (a targeted, indexed lookup — no full-library scan). External-only songs
+  //    without an MBID can't be resolved cheaply and are left out.
+  const unresolvedMbIds: string[] = [];
+  for (const [key, count] of externalByKey) {
+    const e = byKey.get(key);
+    if (e) { e.external += count; continue; }
+    if (key.startsWith('mb:')) unresolvedMbIds.push(key.slice(3));
+  }
+  if (unresolvedMbIds.length > 0) {
+    const lib = await db.query(
+      `
+      SELECT DISTINCT ON (lower(trim(mb_recording_id))) id, lower(trim(mb_recording_id)) AS k
+      FROM tracks
+      WHERE mb_recording_id IS NOT NULL AND lower(trim(mb_recording_id)) = ANY($1)
+      ORDER BY lower(trim(mb_recording_id)), id
+      `,
+      [unresolvedMbIds]
+    );
+    for (const row of lib.rows as any[]) {
+      const key = `mb:${row.k}`;
+      const count = externalByKey.get(key) || 0;
+      if (count > 0 && !byKey.has(key)) {
+        byKey.set(key, { trackId: row.id, key, inApp: 0, external: count, repPlays: 0 });
+      }
+    }
+  }
+
+  // 4) Rank by blended total, apply the ≥2 floor, cap at the period limit.
+  const ranked = Array.from(byKey.values())
+    .map((e) => ({ trackId: e.trackId, key: e.key, total: e.inApp + e.external }))
+    .filter((e) => e.total >= 2)
+    .sort((a, b) => b.total - a.total || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .slice(0, p.limit);
+
+  if (ranked.length < WRAPPED_MIN_TRACKS) return null;
+  const trackIds = ranked.map((e) => e.trackId);
   return persistSmart(
     id, 'wrapped', p.title,
     `${trackIds.length} tracks that defined your ${p.descLabel}.`,
@@ -1421,12 +1498,31 @@ async function computeWrappedPeriodFresh(userId: string, p: WrappedPeriod) {
   );
 }
 
+// Returns a frozen Wrapped snapshot if already generated, else null. NEVER
+// generates — all generation is backgrounded (computeWrappedPeriodFresh pages
+// external history for seconds and must stay off the Hub request path).
+async function getCachedWrapped(userId: string, p: WrappedPeriod) {
+  const id = smartPlaylistId('wrapped', userId, p.suffix);
+  const { cached } = await getStaleOrFresh(id, Number.MAX_SAFE_INTEGER);
+  return cached;
+}
+
+// Generates a period if missing; frozen once generated. Called only from the
+// background generation job.
 async function ensureWrappedPeriod(userId: string, p: WrappedPeriod) {
   const id = smartPlaylistId('wrapped', userId, p.suffix);
-  // Completed periods are frozen — if already generated, return as-is (never stale).
   const { cached } = await getStaleOrFresh(id, Number.MAX_SAFE_INTEGER);
   if (cached) return cached;
   return computeWrappedPeriodFresh(userId, p);
+}
+
+// Suffixes we've already tried to generate. A completed period whose data
+// doesn't qualify (too few plays) never will — its months are in the past and
+// immutable — so we record the attempt to avoid re-querying it (and re-hitting
+// Last.fm/ListenBrainz) on every Hub load.
+async function getWrappedAttempted(userId: string): Promise<Set<string>> {
+  const raw = await getUserSetting(userId, 'wrappedAttemptedSuffixes');
+  return new Set(Array.isArray(raw) ? raw.filter((x: unknown) => typeof x === 'string') : []);
 }
 
 export async function computeWrapped(userId: string): Promise<{ wrappedYear: any; wrappedSeason: any }> {
@@ -1442,20 +1538,37 @@ export async function computeWrapped(userId: string): Promise<{ wrappedYear: any
   const newestYear = periods.find((p) => p.isYear) ?? null;
   const newestSeason = periods.find((p) => !p.isYear) ?? null;
 
+  // Hot path: return only what's already frozen — never generate here.
   const [wrappedYear, wrappedSeason] = await Promise.all([
-    newestYear ? ensureWrappedPeriod(userId, newestYear).catch((e) => { console.error('[SmartHub] wrappedYear failed', e); return null; }) : Promise.resolve(null),
-    newestSeason ? ensureWrappedPeriod(userId, newestSeason).catch((e) => { console.error('[SmartHub] wrappedSeason failed', e); return null; }) : Promise.resolve(null),
+    newestYear ? getCachedWrapped(userId, newestYear).catch(() => null) : Promise.resolve(null),
+    newestSeason ? getCachedWrapped(userId, newestSeason).catch(() => null) : Promise.resolve(null),
   ]);
 
-  // Backfill older completed periods in the background so the Playlists archive
-  // fills in without blocking the Hub request.
-  const rest = periods.filter((p) => p !== newestYear && p !== newestSeason);
-  if (rest.length) {
-    fireBackgroundRefresh(`wrapped_backfill_${userId}`, async () => {
-      for (const p of rest) {
-        try { await ensureWrappedPeriod(userId, p); }
-        catch (e) { console.error('[SmartHub] wrapped backfill failed', p.suffix, e); }
+  // Generate any not-yet-built periods in the background (newest first, so the
+  // headline year+season land before the archive). A newly-completed period's
+  // card therefore appears on the next Hub load, not this one. fireBackgroundRefresh
+  // dedups by key; once every period is generated-or-attempted this is a no-op.
+  const attempted = await getWrappedAttempted(userId);
+  const existing = new Set(
+    (await db.query(`SELECT id FROM playlists WHERE id LIKE $1`, [`smart_wrapped_${userId}_%`]))
+      .rows.map((r: any) => r.id)
+  );
+  const missing = periods.filter(
+    (p) => !existing.has(smartPlaylistId('wrapped', userId, p.suffix)) && !attempted.has(p.suffix)
+  );
+  if (missing.length) {
+    fireBackgroundRefresh(`wrapped_gen_${userId}`, async () => {
+      const done = await getWrappedAttempted(userId);
+      for (const p of missing) {
+        try {
+          await ensureWrappedPeriod(userId, p);
+          done.add(p.suffix); // clean outcome (generated or didn't qualify) — don't retry
+        } catch (e) {
+          // Transient (e.g. DB hiccup) — leave un-attempted so a later load retries.
+          console.error('[SmartHub] wrapped generation failed', p.suffix, e);
+        }
       }
+      await setUserSetting(userId, 'wrappedAttemptedSuffixes', Array.from(done));
     });
   }
   return { wrappedYear, wrappedSeason };
