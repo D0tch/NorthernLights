@@ -213,6 +213,14 @@ export interface QueueSource {
   id: string;
 }
 
+/** Minimal album identity for the Hub "jump back into browsing" fallback. */
+export interface LastOpenedAlbum {
+  id: string;
+  title: string;
+  artist?: string;
+  artUrl?: string;
+}
+
 export interface Playlist {
   id: string;
   title: string;
@@ -404,6 +412,10 @@ export interface PlayerState {
   resumeStalenessDays: number;
   // Timestamp of the last real playback activity (track start), for the gate above.
   lastPlaybackActivityAt: number | null;
+  // Most recently opened album, surfaced on the Hub as a "jump back into
+  // browsing" fallback when there's no fresh resumable queue.
+  lastOpenedAlbum: LastOpenedAlbum | null;
+  setLastOpenedAlbum: (album: LastOpenedAlbum | null) => void;
 
   // Scanning State
   isScanning: boolean;
@@ -933,6 +945,7 @@ export const usePlayerStore = create<PlayerState>()(
         queueSource: null as QueueSource | null,
         resumeStalenessDays: 0,
         lastPlaybackActivityAt: null as number | null,
+        lastOpenedAlbum: null as LastOpenedAlbum | null,
 
         isScanning: false as boolean,
         scanPhase: 'idle' as 'idle' | 'walk' | 'metadata' | 'analysis',
@@ -2120,6 +2133,8 @@ export const usePlayerStore = create<PlayerState>()(
           }
         },
 
+        setLastOpenedAlbum: (album: LastOpenedAlbum | null) => set({ lastOpenedAlbum: album }),
+
         addTrackToPlaylist: (track: TrackInfo, options?: QueueMutationOptions) => set((state: PlayerState) => {
           const snapshot = options?.undo ? state.playlist.map((item) => ({ ...item })) : null;
           const snapshotIndex = state.currentIndex;
@@ -2689,6 +2704,7 @@ export const usePlayerStore = create<PlayerState>()(
         queueSource: state.queueSource,
         resumeStalenessDays: state.resumeStalenessDays,
         lastPlaybackActivityAt: state.lastPlaybackActivityAt,
+        lastOpenedAlbum: state.lastOpenedAlbum,
         playbackState: state.playbackState,
       }),
       onRehydrateStorage: () => (state) => {

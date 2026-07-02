@@ -523,6 +523,7 @@ export const AlbumDetail: React.FC = () => {
     const albums = usePlayerStore(state => state.albums);
     const artists = usePlayerStore(state => state.artists);
     const setPlaylist = usePlayerStore(state => state.setPlaylist);
+    const setLastOpenedAlbum = usePlayerStore(state => state.setLastOpenedAlbum);
     const openContextMenu = usePlayerStore(state => state.openContextMenu);
     const getAuthHeader = usePlayerStore(state => state.getAuthHeader);
     const currentUser = usePlayerStore(state => state.currentUser);
@@ -545,6 +546,20 @@ export const AlbumDetail: React.FC = () => {
     const trackListRef = useRef<HTMLDivElement>(null);
 
     const albumInfo = useMemo(() => albums.find(a => a.id === albumId), [albums, albumId]);
+
+    // Record this album as the "last opened" so the Hub can offer a "jump back
+    // into browsing" fallback when there's no fresh resumable queue.
+    useEffect(() => {
+        if (!albumId) return;
+        const title = heroState?.title || albumInfo?.title || albumInfo?.name;
+        if (!title) return;
+        setLastOpenedAlbum({
+            id: albumId,
+            title,
+            artist: heroState?.artist || albumInfo?.artist_name,
+            artUrl: heroState?.artUrl || albumTracks[0]?.artUrl,
+        });
+    }, [albumId, heroState, albumInfo, albumTracks, setLastOpenedAlbum]);
 
     // Fetch sibling editions whenever the visible album changes. Editions
     // are albums that share this album's release_group_id; the canonical

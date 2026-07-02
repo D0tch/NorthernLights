@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { usePlayerStore } from '../store';
 import { Play, Pin, PinOff, Disc3, Sparkles, Wand2, Radio, Repeat, Rewind, Sunrise, Sun, Moon, Sunset, User2, ListMusic, Loader2 } from 'lucide-react';
 import type { TrackInfo } from '../utils/fileSystem';
-import type { Playlist } from '../store';
+import type { Playlist, LastOpenedAlbum } from '../store';
 import { useDominantColor } from '../hooks/useDominantColor';
 import { buildRolledCoverGradient } from '../utils/coverGradient';
 import { LiveConcertsHubSection } from './LiveConcertsHubSection';
@@ -763,6 +763,8 @@ interface HubHeaderProps {
   playbackState: 'playing' | 'paused' | 'stopped';
   onResume: (index: number) => void;
   onNavigateToSource: (track: TrackInfo) => void;
+  lastOpenedAlbum?: LastOpenedAlbum | null;
+  onOpenLastAlbum?: () => void;
   onRefresh?: () => void;
   isRefreshing: boolean;
 }
@@ -773,11 +775,19 @@ const HubHeader: React.FC<HubHeaderProps> = ({
   playbackState,
   onResume,
   onNavigateToSource,
+  lastOpenedAlbum,
+  onOpenLastAlbum,
   onRefresh,
   isRefreshing,
 }) => {
   const isCurrentlyPlaying = playbackState === 'playing' || playbackState === 'paused';
   const showResumeRow = resumeContext !== null;
+  // No fresh resumable queue → offer the last album the user was browsing.
+  const showFallback = !showResumeRow && !!lastOpenedAlbum;
+  const headerActive = showResumeRow || showFallback;
+  const ambientArt = showResumeRow
+    ? resumeContext?.track.artUrl
+    : (showFallback ? lastOpenedAlbum?.artUrl : undefined);
 
   const handleResumeClick = useCallback(
     (e: React.MouseEvent | React.KeyboardEvent) => {
@@ -792,11 +802,11 @@ const HubHeader: React.FC<HubHeaderProps> = ({
   }, [resumeContext, onNavigateToSource]);
 
   return (
-    <header className={`hub-header ${showResumeRow ? 'hub-header--active' : 'hub-header--idle'}`}>
+    <header className={`hub-header ${headerActive ? 'hub-header--active' : 'hub-header--idle'}`}>
       <div className="hub-header-atmosphere" aria-hidden="true">
-        {showResumeRow && resumeContext?.track.artUrl && (
+        {headerActive && ambientArt && (
           <img
-            src={resumeContext.track.artUrl}
+            src={ambientArt}
             alt=""
             className="hub-header-ambient-art"
           />
@@ -838,8 +848,60 @@ const HubHeader: React.FC<HubHeaderProps> = ({
             onNavigate={handleRowClick}
           />
         )}
+        {showFallback && lastOpenedAlbum && onOpenLastAlbum && (
+          <HubLastAlbumRow album={lastOpenedAlbum} onOpen={onOpenLastAlbum} />
+        )}
       </div>
     </header>
+  );
+};
+
+interface HubLastAlbumRowProps {
+  album: LastOpenedAlbum;
+  onOpen: () => void;
+}
+
+const HubLastAlbumRow: React.FC<HubLastAlbumRowProps> = ({ album, onOpen }) => {
+  const handleRowKey = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      onOpen();
+    }
+  };
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={handleRowKey}
+      className="hub-resume-row group"
+    >
+      <div className="hub-resume-art">
+        {album.artUrl ? (
+          <img
+            src={album.artUrl}
+            alt=""
+            className="absolute inset-0 h-full w-full object-cover"
+          />
+        ) : (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <Disc3 className="w-7 h-7 text-[var(--color-text-muted)] opacity-40" />
+          </div>
+        )}
+      </div>
+
+      <div className="hub-resume-copy">
+        <div className="hub-resume-status">
+          <span className="hub-resume-label">jump back in</span>
+        </div>
+        <div className="hub-resume-title">
+          <span>{album.title}</span>
+          {album.artist && <span className="hub-resume-artist">{album.artist}</span>}
+        </div>
+        <div className="hub-resume-meta">back to the album you were browsing</div>
+      </div>
+    </div>
   );
 };
 
@@ -973,6 +1035,7 @@ export const Hub: React.FC = () => {
   const llmModelName = usePlayerStore((s) => s.llmModelName);
   const llmConfigured = Boolean(llmBaseUrl && llmModelName);
   const resumeContext = useResumeContext();
+  const lastOpenedAlbum = usePlayerStore((s) => s.lastOpenedAlbum);
   const playbackStateValue = useNowPlayingState();
   const wordmark = useMemo(() => getTimeAwareWordmark(), []);
   const navigate = useNavigate();
@@ -1328,6 +1391,17 @@ export const Hub: React.FC = () => {
         resumeContext={resumeContext}
         playbackState={playbackStateValue}
         onResume={(index) => { void playAtIndex(index); }}
+        lastOpenedAlbum={lastOpenedAlbum}
+        onOpenLastAlbum={lastOpenedAlbum ? () => {
+          const hero: AlbumHeroState = {
+            kind: 'album',
+            title: lastOpenedAlbum.title,
+            artist: lastOpenedAlbum.artist,
+            artUrl: lastOpenedAlbum.artUrl,
+            backLabel: 'Back to Hub',
+          };
+          navigate(`/library/album/${lastOpenedAlbum.id}`, { state: hero });
+        } : undefined}
         onNavigateToSource={(track) => {
           if (track.albumId) {
             const hero: AlbumHeroState = {
