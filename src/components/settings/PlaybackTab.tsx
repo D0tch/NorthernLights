@@ -45,6 +45,7 @@ export const PlaybackTab: React.FC = () => {
     const setSettings = usePlayerStore(state => state.setSettings);
     const streamingQuality = usePlayerStore(state => state.streamingQuality);
     const prebufferPolicy = usePlayerStore(state => state.prebufferPolicy);
+    const resumeStalenessDays = usePlayerStore(state => state.resumeStalenessDays);
     const playbackDebugLogging = usePlayerStore(state => state.playbackDebugLogging);
     const playbackTelemetry = usePlayerStore(state => state.playbackTelemetry);
     const sleepTimerEndsAt = usePlayerStore(state => state.sleepTimerEndsAt);
@@ -180,6 +181,26 @@ export const PlaybackTab: React.FC = () => {
                                 : prebufferPolicy === 'aggressive'
                                 ? 'Currently prepares the immediate next track like Conservative, reserved for deeper prebuffering once proven safe.'
                                 : 'Keeps the current stable behavior: server prewarm plus local prepared audio for the immediate next queued track.'
+                            }
+                        </p>
+                    </div>
+
+                    <div className="mb-6">
+                        <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Resume where you left off</label>
+                        <select
+                            value={resumeStalenessDays}
+                            onChange={e => setSettings({ resumeStalenessDays: Number(e.target.value) })}
+                            className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
+                        >
+                            <option value={0}>Always — keep my place indefinitely</option>
+                            <option value={7}>Up to 7 days</option>
+                            <option value={14}>Up to 14 days</option>
+                            <option value={30}>Up to 30 days</option>
+                        </select>
+                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5">
+                            {resumeStalenessDays === 0
+                                ? 'The Hub always offers to pick up your last queue, no matter how long ago you listened.'
+                                : `The Hub stops offering to resume once it's been more than ${resumeStalenessDays} days since you last played something.`
                             }
                         </p>
                     </div>

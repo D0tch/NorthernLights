@@ -399,6 +399,11 @@ export interface PlayerState {
   // Which collection the current queue was started from (for "playing from"
   // navigation). null for ad-hoc/search queues or queues predating this field.
   queueSource: QueueSource | null;
+  // Resume-freshness preference: days of inactivity after which "resume where
+  // you left off" stops offering the stale queue. 0 = Always (never expire).
+  resumeStalenessDays: number;
+  // Timestamp of the last real playback activity (track start), for the gate above.
+  lastPlaybackActivityAt: number | null;
 
   // Scanning State
   isScanning: boolean;
@@ -926,6 +931,8 @@ export const usePlayerStore = create<PlayerState>()(
         setAlbumQueryResultIds: (ids: string[] | null) => { set({ albumFilters: { ...get().albumFilters, queryResultIds: ids } }); },
         playlist: [] as TrackInfo[],
         queueSource: null as QueueSource | null,
+        resumeStalenessDays: 0,
+        lastPlaybackActivityAt: null as number | null,
 
         isScanning: false as boolean,
         scanPhase: 'idle' as 'idle' | 'walk' | 'metadata' | 'analysis',
@@ -2334,7 +2341,7 @@ export const usePlayerStore = create<PlayerState>()(
             }
             // A newer playAtIndex call has taken over — discard this result
             if (generation !== playGeneration) return;
-            set({ currentIndex: index, isBuffering: false, _scrobbleStartAt: Date.now(), _scrobbleEligible: false });
+            set({ currentIndex: index, isBuffering: false, lastPlaybackActivityAt: Date.now(), _scrobbleStartAt: Date.now(), _scrobbleEligible: false });
             persistContinuitySnapshot(true);
 
             // Push to the rolling session history immediately so Infinity-mode
@@ -2680,6 +2687,8 @@ export const usePlayerStore = create<PlayerState>()(
         }) : [],
         currentIndex: state.currentIndex,
         queueSource: state.queueSource,
+        resumeStalenessDays: state.resumeStalenessDays,
+        lastPlaybackActivityAt: state.lastPlaybackActivityAt,
         playbackState: state.playbackState,
       }),
       onRehydrateStorage: () => (state) => {
