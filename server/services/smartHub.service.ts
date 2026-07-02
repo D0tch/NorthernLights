@@ -24,7 +24,8 @@ type SmartKind =
   | 'daylist'
   | 'artist-radio'
   | 'seasonal-rewind'
-  | 'year-rewind';
+  | 'year-rewind'
+  | 'wrapped';
 
 // ─── Global content filters ────────────────────────────────
 // "Various Artists" is a compilation pseudo-entity, never an artist we'd
@@ -67,6 +68,9 @@ const TTL_MS: Record<SmartKind, number> = {
   'artist-radio': 12 * 60 * 60 * 1000,
   'seasonal-rewind': 7 * 24 * 60 * 60 * 1000,
   'year-rewind': 7 * 24 * 60 * 60 * 1000,
+  // Wrapped snapshots are frozen once a period completes; ensureWrappedPeriod
+  // treats them as never-stale, so this value is effectively unused.
+  'wrapped': 365 * 24 * 60 * 60 * 1000,
 };
 
 function smartPlaylistId(kind: SmartKind, userId: string, suffix?: string): string {
@@ -1320,6 +1324,143 @@ export async function computeYearRewind(userId: string, limit = 50) {
   return computeYearRewindFresh(userId, limit);
 }
 
+// ─── Wrapped (year + season recaps) ─────────────────────────
+// Frozen, completed-period snapshots from user_track_play_buckets. Unlike the
+// rewinds (a single rotating "active" capsule), Wrapped accumulates ONE playlist
+// per completed year and season, year-scoped so history never collides.
+// computeWrapped returns the newest completed year + season for the Hub's
+// "Uniquely yours" rail and backfills older periods in the background; the full
+// archive surfaces via the Playlists "Wrapped" rail. No Christmas exclusion —
+// a Wrapped is a factual recap, so seasonal music you actually played belongs.
+type WrappedSeason = 'winter' | 'spring' | 'summer' | 'autumn';
+const WRAPPED_SEASON_LABEL: Record<WrappedSeason, string> = {
+  winter: 'Winter', spring: 'Spring', summer: 'Summer', autumn: 'Autumn',
+};
+const WRAPPED_MIN_TRACKS = 10;
+
+interface WrappedPeriod {
+  isYear: boolean;
+  suffix: string;         // id suffix: `${year}` or `${year}_${season}`
+  title: string;          // "2025 Wrapped" | "Summer 2024"
+  descLabel: string;      // "2025" | "summer of 2024"
+  startYm: string;        // 'YYYY-MM-01'
+  endYmExclusive: string; // 'YYYY-MM-01' (first month AFTER the period)
+  limit: number;
+  sortKey: number;        // period end (ms), for newest-first ordering
+}
+
+function wrappedYm(y: number, m: number): string {
+  return `${y}-${String(m).padStart(2, '0')}-01`;
+}
+
+function wrappedSeasonRange(y: number, s: WrappedSeason): { startYm: string; endYmExclusive: string } {
+  switch (s) {
+    case 'winter': return { startYm: wrappedYm(y - 1, 12), endYmExclusive: wrappedYm(y, 3) }; // Dec(y-1)–Feb(y)
+    case 'spring': return { startYm: wrappedYm(y, 3), endYmExclusive: wrappedYm(y, 6) };
+    case 'summer': return { startYm: wrappedYm(y, 6), endYmExclusive: wrappedYm(y, 9) };
+    case 'autumn': return { startYm: wrappedYm(y, 9), endYmExclusive: wrappedYm(y, 12) };
+  }
+}
+
+// Every completed year+season period that could hold data, newest-first. A
+// period is "complete" once its last month is strictly before the current month.
+function enumerateCompletedWrappedPeriods(now: Date, earliest: Date): WrappedPeriod[] {
+  const nowMonthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const earliestMonthStart = new Date(earliest.getFullYear(), earliest.getMonth(), 1).getTime();
+  const out: WrappedPeriod[] = [];
+
+  const consider = (p: Omit<WrappedPeriod, 'sortKey'>) => {
+    const endMs = new Date(p.endYmExclusive).getTime();
+    if (endMs <= nowMonthStart && endMs > earliestMonthStart) {
+      out.push({ ...p, sortKey: endMs });
+    }
+  };
+
+  for (let y = now.getFullYear(); y >= earliest.getFullYear(); y--) {
+    consider({
+      isYear: true, suffix: String(y), title: `${y} Wrapped`, descLabel: String(y),
+      startYm: wrappedYm(y, 1), endYmExclusive: wrappedYm(y + 1, 1), limit: 50,
+    });
+    for (const s of ['winter', 'spring', 'summer', 'autumn'] as WrappedSeason[]) {
+      const r = wrappedSeasonRange(y, s);
+      consider({
+        isYear: false, suffix: `${y}_${s}`, title: `${WRAPPED_SEASON_LABEL[s]} ${y}`,
+        descLabel: `${WRAPPED_SEASON_LABEL[s].toLowerCase()} of ${y}`,
+        startYm: r.startYm, endYmExclusive: r.endYmExclusive, limit: 30,
+      });
+    }
+  }
+  out.sort((a, b) => b.sortKey - a.sortKey);
+  return out;
+}
+
+async function computeWrappedPeriodFresh(userId: string, p: WrappedPeriod) {
+  const id = smartPlaylistId('wrapped', userId, p.suffix);
+  const db = await initDB();
+  const res = await db.query(
+    `
+    SELECT t.id, SUM(b.play_count) AS plays
+    FROM user_track_play_buckets b
+    JOIN tracks t ON t.id = b.track_id
+    WHERE b.user_id = $1
+      AND b.year_month >= $2::date
+      AND b.year_month < $3::date
+    GROUP BY t.id
+    HAVING SUM(b.play_count) >= 2
+    ORDER BY plays DESC
+    LIMIT $4
+    `,
+    [userId, p.startYm, p.endYmExclusive, p.limit]
+  );
+  if (res.rowCount! < WRAPPED_MIN_TRACKS) return null;
+  const trackIds = res.rows.map((r: any) => r.id);
+  return persistSmart(
+    id, 'wrapped', p.title,
+    `${trackIds.length} tracks that defined your ${p.descLabel}.`,
+    userId, trackIds
+  );
+}
+
+async function ensureWrappedPeriod(userId: string, p: WrappedPeriod) {
+  const id = smartPlaylistId('wrapped', userId, p.suffix);
+  // Completed periods are frozen — if already generated, return as-is (never stale).
+  const { cached } = await getStaleOrFresh(id, Number.MAX_SAFE_INTEGER);
+  if (cached) return cached;
+  return computeWrappedPeriodFresh(userId, p);
+}
+
+export async function computeWrapped(userId: string): Promise<{ wrappedYear: any; wrappedSeason: any }> {
+  const db = await initDB();
+  const minRes = await db.query(
+    `SELECT MIN(year_month) AS minm FROM user_track_play_buckets WHERE user_id = $1`,
+    [userId]
+  );
+  const minm = (minRes.rows[0] as any)?.minm;
+  if (!minm) return { wrappedYear: null, wrappedSeason: null };
+
+  const periods = enumerateCompletedWrappedPeriods(new Date(), new Date(minm));
+  const newestYear = periods.find((p) => p.isYear) ?? null;
+  const newestSeason = periods.find((p) => !p.isYear) ?? null;
+
+  const [wrappedYear, wrappedSeason] = await Promise.all([
+    newestYear ? ensureWrappedPeriod(userId, newestYear).catch((e) => { console.error('[SmartHub] wrappedYear failed', e); return null; }) : Promise.resolve(null),
+    newestSeason ? ensureWrappedPeriod(userId, newestSeason).catch((e) => { console.error('[SmartHub] wrappedSeason failed', e); return null; }) : Promise.resolve(null),
+  ]);
+
+  // Backfill older completed periods in the background so the Playlists archive
+  // fills in without blocking the Hub request.
+  const rest = periods.filter((p) => p !== newestYear && p !== newestSeason);
+  if (rest.length) {
+    fireBackgroundRefresh(`wrapped_backfill_${userId}`, async () => {
+      for (const p of rest) {
+        try { await ensureWrappedPeriod(userId, p); }
+        catch (e) { console.error('[SmartHub] wrapped backfill failed', p.suffix, e); }
+      }
+    });
+  }
+  return { wrappedYear, wrappedSeason };
+}
+
 // ─── Pre-warm queue ────────────────────────────────────────
 // Called from the main Hub view. Skipped entirely for inactive users
 // to avoid spending CPU/LLM tokens on lurkers.
@@ -1395,6 +1536,8 @@ export async function computeSmartHubBundle(userId: string) {
       artistRadios: [],
       seasonalRewind: null,
       yearRewind: null,
+      wrappedYear: null,
+      wrappedSeason: null,
     };
   }
 
@@ -1405,6 +1548,7 @@ export async function computeSmartHubBundle(userId: string) {
   const cfg = rawConfig && typeof rawConfig === 'object' ? rawConfig as Record<string, unknown> : {};
   const jumpBackInEnabled = cfg.smartJumpBackIn !== false;
   const uniquelyYoursEnabled = cfg.uniquelyYours !== false;
+  const wrappedEnabled = cfg.wrapped !== false;
 
   const [
     jumpBackIn,
@@ -1414,6 +1558,7 @@ export async function computeSmartHubBundle(userId: string) {
     artistRadios,
     seasonalRewind,
     yearRewind,
+    wrapped,
   ] = await Promise.all([
     jumpBackInEnabled ? computeJumpBackIn(userId).catch((e) => {
       console.error('[SmartHub] jumpBackIn failed', e);
@@ -1443,6 +1588,10 @@ export async function computeSmartHubBundle(userId: string) {
       console.error('[SmartHub] yearRewind failed', e);
       return null;
     }),
+    wrappedEnabled ? computeWrapped(userId).catch((e) => {
+      console.error('[SmartHub] wrapped failed', e);
+      return { wrappedYear: null, wrappedSeason: null };
+    }) : Promise.resolve({ wrappedYear: null, wrappedSeason: null }),
   ]);
 
   return {
@@ -1453,5 +1602,7 @@ export async function computeSmartHubBundle(userId: string) {
     artistRadios,
     seasonalRewind,
     yearRewind,
+    wrappedYear: wrapped.wrappedYear,
+    wrappedSeason: wrapped.wrappedSeason,
   };
 }
