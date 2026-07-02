@@ -19,6 +19,7 @@ async function getUserToken(userId: string): Promise<string> {
 export async function validateToken(token: string): Promise<{ valid: boolean; username?: string; message?: string }> {
   const res = await fetch(`${LB_API_URL}/validate-token`, {
     headers: { 'Authorization': `Token ${token}` },
+    signal: AbortSignal.timeout(10000),
   });
   if (!res.ok) {
     return { valid: false, message: `ListenBrainz returned ${res.status}` };
@@ -59,6 +60,7 @@ async function submit(userId: string, body: Record<string, any>): Promise<any> {
       'Authorization': `Token ${token}`,
     },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(10000),
   });
   const text = await res.text();
   let json: any = {};

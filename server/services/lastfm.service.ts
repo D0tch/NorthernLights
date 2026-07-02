@@ -84,11 +84,12 @@ export async function lfmFetch(
 
   const res = await fetch(LFM_API_URL, {
     method: 'POST',
-    headers: { 
+    headers: {
       'Content-Type': 'application/x-www-form-urlencoded',
       'User-Agent': 'AuroraMediaServer/1.0'
     },
     body: body.toString(),
+    signal: AbortSignal.timeout(10000),
   });
 
   const raw = await res.text();

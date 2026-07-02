@@ -143,6 +143,16 @@ function isAllowedProxyImageUrl(parsed: URL): boolean {
   return allowedHosts.some((host) => hostname === host || hostname.endsWith(`.${host}`));
 }
 
+// Scrobbling / now-playing are best-effort. A provider or transport failure
+// (e.g. the origin can't reach the provider API — UND_ERR_SOCKET, timeout, 5xx)
+// must not surface as a gateway 502 or block playback telemetry. Log with the
+// underlying cause and soft-fail with 200 so the client — and any CDN in front —
+// see a clean response instead of a scary error page.
+function scrobbleSoftFail(res: import('express').Response, tag: string, err: any) {
+  console.error(`${tag} error:`, err?.message, '| cause:', err?.cause?.code || err?.cause?.message || 'n/a');
+  res.status(200).json({ ok: false, error: err?.message || 'request failed' });
+}
+
 function finishLastFmCallback(
   res: import('express').Response,
   returnBase: string,
@@ -757,8 +767,7 @@ router.post('/providers/lastfm/scrobble', async (req, res) => {
     const result = await scrobbleTracks(userId, tracks);
     res.json(result);
   } catch (err: any) {
-    console.error('[Last.fm] scrobble error:', err.message);
-    res.status(502).json({ error: err.message });
+    scrobbleSoftFail(res, '[Last.fm] scrobble', err);
   }
 });
 
@@ -778,8 +787,7 @@ router.post('/providers/lastfm/now-playing', async (req, res) => {
     const result = await updateNowPlaying(userId, { artist, track, album, albumArtist, duration, trackNumber, mbid });
     res.json(result);
   } catch (err: any) {
-    console.error('[Last.fm] now-playing error:', err.message);
-    res.status(502).json({ error: err.message });
+    scrobbleSoftFail(res, '[Last.fm] now-playing', err);
   }
 });
 
@@ -921,8 +929,7 @@ router.post('/providers/listenbrainz/scrobble', async (req, res) => {
     const result = await lbScrobbleTracks(userId, tracks);
     res.json(result);
   } catch (err: any) {
-    console.error('[ListenBrainz] scrobble error:', err.message);
-    res.status(502).json({ error: err.message });
+    scrobbleSoftFail(res, '[ListenBrainz] scrobble', err);
   }
 });
 
@@ -942,8 +949,7 @@ router.post('/providers/listenbrainz/now-playing', async (req, res) => {
     const result = await lbUpdateNowPlaying(userId, { artist, track, album, duration, trackNumber, mbid });
     res.json(result);
   } catch (err: any) {
-    console.error('[ListenBrainz] now-playing error:', err.message);
-    res.status(502).json({ error: err.message });
+    scrobbleSoftFail(res, '[ListenBrainz] now-playing', err);
   }
 });
 
