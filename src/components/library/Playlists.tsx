@@ -288,6 +288,19 @@ const PlaylistRail: React.FC<{ title: string; subtitle?: string; children: React
   </section>
 );
 
+// Order Wrapped recaps newest → oldest. Key = year*100 + period-end month, so
+// a full-year "2025 Wrapped" (Dec) leads its seasons: "Autumn 2025" (Nov),
+// "Summer 2025" (Aug)… Titles are "<Year> Wrapped" or "<Season> <Year>".
+const WRAPPED_SEASON_END_MONTH: Record<string, number> = { winter: 2, spring: 5, summer: 8, autumn: 11 };
+const wrappedSortKey = (p: Playlist): number => {
+  const title = (p.title || '').trim();
+  const year = /^(\d{4})\s+Wrapped$/i.exec(title);
+  if (year) return Number(year[1]) * 100 + 12;
+  const season = /^(Winter|Spring|Summer|Autumn)\s+(\d{4})$/i.exec(title);
+  if (season) return Number(season[2]) * 100 + (WRAPPED_SEASON_END_MONTH[season[1].toLowerCase()] ?? 0);
+  return 0;
+};
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export const Playlists: React.FC = () => {
@@ -353,14 +366,22 @@ export const Playlists: React.FC = () => {
     [...arr].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
 
   // Partition own playlists by nature: manual (hand-built), AI (LLM-generated),
-  // radios (artist-radio smart playlists), and the remaining system/smart ones
-  // (daylist, on-repeat, rewinds…). These four buckets are disjoint and cover
-  // every own playlist.
+  // radios (artist-radio smart playlists), Wrapped year/season recaps, and the
+  // remaining system/smart ones (daylist, on-repeat, rewinds…). These buckets
+  // are disjoint and cover every own playlist.
   const isRadio = (p: Playlist) => p.generationSource === 'artist-radio';
+  const isWrapped = (p: Playlist) => p.generationSource === 'wrapped';
   const userPlaylists = pinnedFirst(ownPlaylists.filter((p) => !p.isLlmGenerated && !p.isSystem));
   const llmPlaylists = pinnedFirst(ownPlaylists.filter((p) => p.isLlmGenerated));
   const radioPlaylists = pinnedFirst(ownPlaylists.filter((p) => p.isSystem && isRadio(p)));
-  const curatedPlaylists = pinnedFirst(ownPlaylists.filter((p) => p.isSystem && !isRadio(p)));
+  const curatedPlaylists = pinnedFirst(ownPlaylists.filter((p) => p.isSystem && !isRadio(p) && !isWrapped(p)));
+  // Wrapped recaps sort newest → oldest by period end: a full-year recap
+  // completes in December, so it leads its year's seasons.
+  const wrappedPlaylists = pinnedFirst(
+    [...ownPlaylists.filter((p) => p.isSystem && isWrapped(p))].sort(
+      (a, b) => wrappedSortKey(b) - wrappedSortKey(a)
+    )
+  );
 
   const buildHero = (pl: Playlist): PlaylistHeroState => ({
     kind: 'playlist',
@@ -499,6 +520,7 @@ export const Playlists: React.FC = () => {
         <div className="space-y-8">
           {renderRail('Your playlists', userPlaylists)}
           {renderRail('AI playlists', llmPlaylists)}
+          {renderRail('Wrapped', wrappedPlaylists)}
           {renderRail('Radios', radioPlaylists)}
           {renderRail('Curated for you', curatedPlaylists)}
           {renderRail('By other listeners', discoverPlaylists, {

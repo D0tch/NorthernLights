@@ -3797,7 +3797,7 @@ export async function createPlaylist(
   isLlmGenerated: boolean = false,
   userId: string | null = null,
   isSystem: boolean = false,
-  generationSource?: 'manual' | 'hub' | 'custom' | 'system' | 'on-repeat' | 'repeat-rewind' | 'daylist' | 'artist-radio' | 'seasonal-rewind' | 'year-rewind'
+  generationSource?: 'manual' | 'hub' | 'custom' | 'system' | 'on-repeat' | 'repeat-rewind' | 'daylist' | 'artist-radio' | 'seasonal-rewind' | 'year-rewind' | 'wrapped'
 ) {
   const db = await initDB();
   const source = generationSource ?? (isSystem ? 'system' : isLlmGenerated ? 'hub' : 'manual');

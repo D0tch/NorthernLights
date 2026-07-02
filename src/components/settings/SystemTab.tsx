@@ -56,6 +56,11 @@ const smartSectionOptions = [
         title: 'Uniquely Yours',
         description: 'The "uniquely yours" rail: On Repeat, Repeat Rewind, Daylist, and Artist Radio.',
     },
+    {
+        key: 'wrapped',
+        title: 'Wrapped',
+        description: 'Frozen year and season recaps of your top tracks, surfaced on the Hub and archived in the Playlists "Wrapped" rail.',
+    },
 ] as const;
 
 const defaultSystemPlaylistConfig = Object.fromEntries(

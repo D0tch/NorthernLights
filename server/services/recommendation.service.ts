@@ -207,6 +207,7 @@ const defaultSystemPlaylistConfig = {
   // normalizeSystemPlaylistConfig round-trips them instead of dropping them.
   smartJumpBackIn: true,
   uniquelyYours: true,
+  wrapped: true,
 };
 
 function normalizeSystemPlaylistConfig(value: unknown): Record<keyof typeof defaultSystemPlaylistConfig, boolean> {

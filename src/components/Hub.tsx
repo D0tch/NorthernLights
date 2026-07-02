@@ -53,6 +53,11 @@ interface SmartBundle {
   repeatRewind: HubCollection | null;
   daylist: HubCollection | null;
   artistRadios: ArtistRadioCandidate[];
+  // Newest completed Wrapped snapshots (most recent finished year + season).
+  // Surfaced as "uniquely yours" cards; older ones live in the Playlists
+  // "Wrapped" rail. Frozen server-side once the period ends.
+  wrappedYear: HubCollection | null;
+  wrappedSeason: HubCollection | null;
   // Generated server-side; not rendered on the Hub today. The Time capsules
   // section is queued for redesign — see TASKS.md "Hub Distill Follow-Up".
   // Kept on the type so the data path is intact when the feature returns.
@@ -93,6 +98,8 @@ function getSmartBundleSignature(bundle: SmartBundle | null): string {
     getCollectionSignature(bundle.repeatRewind),
     getCollectionSignature(bundle.seasonalRewind),
     getCollectionSignature(bundle.yearRewind),
+    getCollectionSignature(bundle.wrappedYear),
+    getCollectionSignature(bundle.wrappedSeason),
     radios,
   ].join('||');
 }
@@ -554,7 +561,8 @@ type UniqueCardKind =
   | 'genre-most-played'
   | 'genre-rediscovery'
   | 'decade'
-  | 'decade-genre';
+  | 'decade-genre'
+  | 'wrapped';
 
 function getDaylistCover(): { gradient: string; Icon: React.FC<any> } {
   const h = new Date().getHours();
@@ -575,6 +583,12 @@ function getSystemDecadeCoverLabel(title: string): string {
   return title
     .replace(/\s+Mix$/i, '')
     .trim();
+}
+
+// "2025 Wrapped" → "2025" (badge already says "wrapped"); seasons like
+// "Summer 2024" pass through unchanged.
+function getWrappedCoverLabel(title: string): string {
+  return title.replace(/\s+Wrapped$/i, '').trim();
 }
 
 interface UniqueCardProps {
@@ -608,7 +622,8 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
     kind === 'genre-most-played' ||
     kind === 'genre-rediscovery' ||
     kind === 'decade' ||
-    kind === 'decade-genre';
+    kind === 'decade-genre' ||
+    kind === 'wrapped';
   const { artUrls } = useDominantColor(shouldUseMosaic ? tracks : []);
   const mosaicCovers = artUrls.slice(0, 4);
   const mosaicGridClass =
@@ -694,6 +709,9 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
   } else if (kind === 'decade') {
     coverContent = renderMosaicCover('var(--gradient-cover-decade)', Disc3, getSystemDecadeCoverLabel(title));
     badgeLabel = 'decade';
+  } else if (kind === 'wrapped') {
+    coverContent = renderMosaicCover('var(--gradient-cover-wrapped)', Sparkles, getWrappedCoverLabel(title));
+    badgeLabel = 'wrapped';
   } else {
     coverContent = renderMosaicCover('var(--gradient-cover-decade-genre)', Disc3, getSystemDecadeCoverLabel(title));
     badgeLabel = 'decade';
@@ -1085,6 +1103,8 @@ export const Hub: React.FC = () => {
         })),
         seasonalRewind: orNull(resolve(data.seasonalRewind)),
         yearRewind: orNull(resolve(data.yearRewind)),
+        wrappedYear: orNull(resolve(data.wrappedYear)),
+        wrappedSeason: orNull(resolve(data.wrappedSeason)),
       };
       const nextSignature = getSmartBundleSignature(nextBundle);
       const didChange = smartBundleSignatureRef.current !== nextSignature;
@@ -1546,7 +1566,7 @@ export const Hub: React.FC = () => {
 
       {showSmartSkeletons ? (
         <UniqueYoursSectionSkeleton />
-      ) : visibleSmartBundle && (visibleSmartBundle.daylist || visibleSmartBundle.onRepeat || visibleSmartBundle.repeatRewind || visibleSmartBundle.artistRadios.length > 0) && (
+      ) : visibleSmartBundle && (visibleSmartBundle.wrappedYear || visibleSmartBundle.wrappedSeason || visibleSmartBundle.daylist || visibleSmartBundle.onRepeat || visibleSmartBundle.repeatRewind || visibleSmartBundle.artistRadios.length > 0) && (
         <section>
           <h2 className="text-xl sm:text-2xl font-bold text-[var(--color-text-primary)] mb-5 lowercase">
             uniquely yours
@@ -1555,6 +1575,46 @@ export const Hub: React.FC = () => {
             ariaLabel="uniquely yours"
             viewportClassName="flex overflow-x-auto snap-x snap-mandatory gap-3 hub-scroll-mobile hub-scroll-unique pb-1 sm:gap-5 sm:pb-2"
           >
+            {visibleSmartBundle.wrappedYear && (
+              <AnimatedTileSlot
+                value={visibleSmartBundle.wrappedYear}
+                signature={getCollectionSignature(visibleSmartBundle.wrappedYear)}
+              >
+                {(displayWrapped, phase) => (
+                  <UniqueCard
+                    kind="wrapped"
+                    title={displayWrapped.title || 'Wrapped'}
+                    subtitle={displayWrapped.description || undefined}
+                    tracks={displayWrapped.tracks}
+                    onClick={() => handleOpenSmartPlaylist(displayWrapped)}
+                    onPlay={() => handlePlayCollection(displayWrapped.tracks)}
+                    loading={openingSmartPlaylistId === displayWrapped.id}
+                    coverMotionClassName={getTileMotionClassName(phase)}
+                    textMotionClassName={getTileTextMotionClassName(phase)}
+                  />
+                )}
+              </AnimatedTileSlot>
+            )}
+            {visibleSmartBundle.wrappedSeason && (
+              <AnimatedTileSlot
+                value={visibleSmartBundle.wrappedSeason}
+                signature={getCollectionSignature(visibleSmartBundle.wrappedSeason)}
+              >
+                {(displayWrapped, phase) => (
+                  <UniqueCard
+                    kind="wrapped"
+                    title={displayWrapped.title || 'Wrapped'}
+                    subtitle={displayWrapped.description || undefined}
+                    tracks={displayWrapped.tracks}
+                    onClick={() => handleOpenSmartPlaylist(displayWrapped)}
+                    onPlay={() => handlePlayCollection(displayWrapped.tracks)}
+                    loading={openingSmartPlaylistId === displayWrapped.id}
+                    coverMotionClassName={getTileMotionClassName(phase)}
+                    textMotionClassName={getTileTextMotionClassName(phase)}
+                  />
+                )}
+              </AnimatedTileSlot>
+            )}
             {visibleSmartBundle.daylist && (
               <AnimatedTileSlot
                 value={visibleSmartBundle.daylist}

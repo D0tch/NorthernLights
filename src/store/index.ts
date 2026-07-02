@@ -227,7 +227,7 @@ export interface Playlist {
   description: string | null;
   isLlmGenerated: boolean;
   isSystem?: boolean;
-  generationSource?: 'manual' | 'hub' | 'custom' | 'system' | 'on-repeat' | 'repeat-rewind' | 'daylist' | 'artist-radio' | 'seasonal-rewind' | 'year-rewind';
+  generationSource?: 'manual' | 'hub' | 'custom' | 'system' | 'on-repeat' | 'repeat-rewind' | 'daylist' | 'artist-radio' | 'seasonal-rewind' | 'year-rewind' | 'wrapped';
   pinned?: boolean;
   createdAt?: number;
   /** Owner's user id (present on server-fetched playlists). */

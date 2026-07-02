@@ -64,6 +64,7 @@
   --gradient-cover-genre-rediscovery: linear-gradient(135deg, #26363a, #3e4a3e);
   --gradient-cover-decade:            linear-gradient(135deg, #2f343f, #4a4a46);
   --gradient-cover-decade-genre:      linear-gradient(135deg, #2f343f, #4f463c);
+  --gradient-cover-wrapped:           linear-gradient(135deg, #4c1d95, #9333ea, #f59e0b);
 
   /* Hub cover gradients — JumpTile fallbacks (when art is unavailable) */
   --gradient-jump-tile-album:    linear-gradient(135deg, #92400e, #d97706, #f59e0b);
