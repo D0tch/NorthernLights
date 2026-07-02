@@ -1083,6 +1083,19 @@ function parseObjectArrayField<T extends object>(value: any): T[] {
   }
 }
 
+// snake_case DB columns that mapTrackRow's `...row` spread leaks alongside a
+// camelCase (or parsed) twin. No client or server consumer reads the snake form
+// — mapTrackToSubsonic accepts either casing — so we strip them from every
+// mapped track. ~a third of each track payload. Base columns with no twin
+// (id/title/artist/album/genre/duration/year/path/bitrate/format/rating/
+// file_mtime/isrc/genius_song_id) are intentionally NOT listed and are kept.
+const SNAKE_DUP_COLUMNS = [
+  'album_artist', 'track_number', 'disc_number', 'release_type', 'is_compilation',
+  'play_count', 'last_played_at', 'file_size', 'artist_id', 'album_id', 'genre_id',
+  'mb_recording_id', 'mb_track_id', 'mb_album_id', 'mb_artist_id', 'mb_album_artist_id',
+  'mb_release_group_id', 'mb_work_id', 'art_hash', 'playlist_added_at', 'is_loved', 'raw_urls',
+];
+
 function mapTrackRow(row: any) {
   const mapped: any = {
     ...row,
@@ -1117,6 +1130,7 @@ function mapTrackRow(row: any) {
   // directory-prefix lookups). Never serialize it — as bytea it would balloon
   // into a { type:'Buffer', data:[...] } array on every mapped-track payload.
   delete mapped.decoded_path;
+  for (const k of SNAKE_DUP_COLUMNS) delete mapped[k];
   return mapped;
 }
 
@@ -1134,11 +1148,10 @@ export async function getAllTracks(userId: string | null = null) {
       `, [userId])
     : await db.query('SELECT t.*, FALSE AS is_loved FROM tracks t');
   // Full-library / admin-tool load doesn't need embedded file URLs — no full-
-  // `library` consumer reads them. Drop the raw column dup (leaked by ...row) and
-  // the parsed array; ~25% of this payload. (Per-entity endpoints keep rawUrls.)
+  // `library` consumer reads them. mapTrackRow already strips the raw `raw_urls`
+  // dup; also drop the parsed array here. (Per-entity endpoints keep rawUrls.)
   return res.rows.map((row) => {
     const t = mapTrackRow(row);
-    delete t.raw_urls;
     delete t.rawUrls;
     return t;
   });

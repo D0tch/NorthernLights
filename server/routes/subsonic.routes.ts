@@ -563,19 +563,27 @@ export function mapTrackToSubsonic(track: any, userId?: string) {
   const suffix = suffixFor(track);
   const duration = Number.isFinite(Number(track.duration)) ? Math.max(0, Math.round(Number(track.duration))) : 0;
   const bitRate = Number.isFinite(Number(track.bitrate)) ? Math.round(Number(track.bitrate) / 1000) : undefined;
+  // Accept both raw DB rows (snake_case, e.g. getAlbum/getSong/search) and
+  // mapTrackRow output (camelCase, e.g. getPlaylist via getPlaylistTracks).
+  const albumId = track.albumId ?? track.album_id;
+  const artistId = track.artistId ?? track.artist_id;
+  const trackNumber = track.trackNumber ?? track.track_number;
+  const discNumber = track.discNumber ?? track.disc_number;
+  const fileSize = track.fileSize ?? track.file_size;
+  const isLoved = track.isLoved ?? track.is_loved;
   return {
     id: subsonicSongId(track.id),
-    parent: track.album_id ? subsonicAlbumId(track.album_id) : undefined,
+    parent: albumId ? subsonicAlbumId(albumId) : undefined,
     isDir: false,
     title: track.title || path.basename(String(track.path || track.id)),
     album: track.album || undefined,
     artist: track.artist || undefined,
-    track: track.track_number || undefined,
-    discNumber: track.disc_number || undefined,
+    track: trackNumber || undefined,
+    discNumber: discNumber || undefined,
     year: track.year || undefined,
     genre: track.genre || undefined,
     coverArt: subsonicSongId(track.id),
-    size: track.file_size != null ? Number(track.file_size) : (track.size != null ? Number(track.size) : undefined),
+    size: fileSize != null ? Number(fileSize) : (track.size != null ? Number(track.size) : undefined),
     contentType: MIME_TYPES[suffix] || 'audio/mpeg',
     suffix,
     duration,
@@ -585,11 +593,11 @@ export function mapTrackToSubsonic(track: any, userId?: string) {
     // tracks has no created_at; use the source file's mtime (epoch ms) as the
     // library "created" timestamp. toIso() handles the epoch-ms form.
     created: toIso(track.created_at ?? track.file_mtime),
-    albumId: track.album_id ? subsonicAlbumId(track.album_id) : undefined,
-    artistId: track.artist_id ? subsonicArtistId(track.artist_id) : undefined,
+    albumId: albumId ? subsonicAlbumId(albumId) : undefined,
+    artistId: artistId ? subsonicArtistId(artistId) : undefined,
     type: 'music',
     userRating: track.user_rating ?? track.rating ?? undefined,
-    starred: track.is_loved ? toIso(track.loved_at) || new Date().toISOString() : undefined,
+    starred: isLoved ? toIso(track.loved_at) || new Date().toISOString() : undefined,
   };
 }
 
