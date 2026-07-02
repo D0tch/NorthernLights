@@ -1084,6 +1084,14 @@ router.get('/providers/external/proxy-image', async (req, res) => {
     } catch {
       return res.status(400).json({ error: 'Invalid URL' });
     }
+    // Some providers (notably the Cover Art Archive API) return http:// image
+    // URLs. Upgrade to https before the allowlist check and fetch: every allowed
+    // host serves https, and we never want to pull cover art over plaintext. This
+    // is why the disc/medium art (raw CAA API URLs) 403'd while the front cover
+    // (built as an https URL) worked.
+    if (parsed.protocol === 'http:') {
+      parsed.protocol = 'https:';
+    }
     if (!isAllowedProxyImageUrl(parsed)) {
       return res.status(403).json({ error: 'Domain not allowed' });
     }
