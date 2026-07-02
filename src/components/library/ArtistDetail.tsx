@@ -403,7 +403,7 @@ export const ArtistDetail: React.FC = () => {
             // it would leave raw, art-less tracks in the queue until a reload
             // rebuilt them from the persisted snapshot.
             const tracks = hydrateTracks(playlist?.tracks || []);
-            if (tracks.length > 0) setPlaylist(tracks, 0);
+            if (tracks.length > 0) setPlaylist(tracks, 0, artistId ? { kind: 'radio', id: artistId } : null);
         } catch (e) {
             console.error('[Artist Radio] Failed to start radio', e);
         } finally {
@@ -709,8 +709,10 @@ export const ArtistDetail: React.FC = () => {
     );
     const handlePlayPopularTracks = useCallback((startIndex = 0) => {
         if (popularTrackQueue.length === 0) return;
-        setPlaylist(popularTrackQueue, startIndex);
-    }, [popularTrackQueue, setPlaylist]);
+        // "Popular in your library" is the Last.fm top-tracks list — treat it as the
+        // artist itself so the now-playing title links back to the artist page.
+        setPlaylist(popularTrackQueue, startIndex, artistId ? { kind: 'artist-top', id: artistId } : null);
+    }, [popularTrackQueue, setPlaylist, artistId]);
 
     // Merged, deduplicated tags: communityTags take priority; plain genres fill in unique gaps
     const mergedTags = useMemo(() => {

@@ -206,6 +206,13 @@ const hydratePlaylistTracks = (
     }));
 };
 
+/** Where the current play queue was started from, for "playing from" navigation. */
+export type QueueSourceKind = 'album' | 'playlist' | 'artist' | 'artist-top' | 'radio';
+export interface QueueSource {
+  kind: QueueSourceKind;
+  id: string;
+}
+
 export interface Playlist {
   id: string;
   title: string;
@@ -389,6 +396,9 @@ export interface PlayerState {
 
   // Playlist State (Current Play Queue)
   playlist: TrackInfo[];
+  // Which collection the current queue was started from (for "playing from"
+  // navigation). null for ad-hoc/search queues or queues predating this field.
+  queueSource: QueueSource | null;
 
   // Scanning State
   isScanning: boolean;
@@ -572,7 +582,7 @@ export interface PlayerState {
   toggleTrackLove: (track: TrackInfo) => Promise<void>;
 
   // Play Queue Actions
-  setPlaylist: (tracks: TrackInfo[], startIndex?: number) => Promise<void>;
+  setPlaylist: (tracks: TrackInfo[], startIndex?: number, source?: QueueSource | null) => Promise<void>;
   addTrackToPlaylist: (track: TrackInfo, options?: QueueMutationOptions) => void;
   playNext: (track: TrackInfo, options?: QueueMutationOptions) => void;
   removeFromPlaylist: (index: number) => void;
@@ -915,6 +925,7 @@ export const usePlayerStore = create<PlayerState>()(
         setArtistQueryResultIds: (ids: string[] | null) => { set({ artistFilters: { ...get().artistFilters, queryResultIds: ids } }); },
         setAlbumQueryResultIds: (ids: string[] | null) => { set({ albumFilters: { ...get().albumFilters, queryResultIds: ids } }); },
         playlist: [] as TrackInfo[],
+        queueSource: null as QueueSource | null,
 
         isScanning: false as boolean,
         scanPhase: 'idle' as 'idle' | 'walk' | 'metadata' | 'analysis',
@@ -2091,9 +2102,9 @@ export const usePlayerStore = create<PlayerState>()(
           }
         },
 
-        setPlaylist: async (playlist: TrackInfo[], startIndex: number = 0) => {
+        setPlaylist: async (playlist: TrackInfo[], startIndex: number = 0, source: QueueSource | null = null) => {
           const queuePlaylist = playlist.map((track) => cloneTrackForQueue(track));
-          set({ playlist: queuePlaylist, currentIndex: startIndex });
+          set({ playlist: queuePlaylist, currentIndex: startIndex, queueSource: source });
           persistContinuitySnapshot(true);
           if (queuePlaylist.length > 0 && startIndex < queuePlaylist.length) {
             await get().playAtIndex(startIndex);
@@ -2211,6 +2222,7 @@ export const usePlayerStore = create<PlayerState>()(
           set({
             playlist: [],
             currentIndex: null,
+            queueSource: null,
             playbackState: 'stopped',
             isBuffering: false,
           });
@@ -2667,6 +2679,7 @@ export const usePlayerStore = create<PlayerState>()(
           return rest;
         }) : [],
         currentIndex: state.currentIndex,
+        queueSource: state.queueSource,
         playbackState: state.playbackState,
       }),
       onRehydrateStorage: () => (state) => {

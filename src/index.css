@@ -7283,6 +7283,20 @@ a:focus-visible > .genre-card .genre-card__label {
   overflow: hidden;
 }
 
+/* Clickable now-playing title → navigates to where the queue is playing from. */
+.player-title-link {
+  display: block;
+  min-width: 0;
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+  transition: color var(--transition-ui, 0.15s ease);
+}
+.player-title-link:hover,
+.player-title-link:focus-visible {
+  color: var(--color-primary);
+}
+
 /* Ticker wrapper sits inside .player-title. The inner span is the actual
    text that translates back and forth when it overflows. Float-mode only;
    dock mode has enough room that this almost never triggers, and we

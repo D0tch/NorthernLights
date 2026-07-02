@@ -737,8 +737,8 @@ export const AlbumDetail: React.FC = () => {
         return artistLinkByName.get(artistName.toLowerCase()) || null;
     }, [artistLinkByName]);
 
-    const handlePlayAll = useCallback(() => setPlaylist(sortedTracks, 0), [setPlaylist, sortedTracks]);
-    const handlePlayTrack = useCallback((index: number) => setPlaylist(sortedTracks, index), [setPlaylist, sortedTracks]);
+    const handlePlayAll = useCallback(() => setPlaylist(sortedTracks, 0, albumId ? { kind: 'album', id: albumId } : null), [setPlaylist, sortedTracks, albumId]);
+    const handlePlayTrack = useCallback((index: number) => setPlaylist(sortedTracks, index, albumId ? { kind: 'album', id: albumId } : null), [setPlaylist, sortedTracks, albumId]);
     const handleTrackContextMenu = useCallback(
         (track: TrackInfo, x: number, y: number) => openContextMenu(track, x, y),
         [openContextMenu]

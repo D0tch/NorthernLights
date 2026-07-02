@@ -281,6 +281,20 @@ export const PlayerControls: React.FC = () => {
   const currentTrack = usePlayerStore((state) =>
     state.currentIndex !== null ? state.playlist[state.currentIndex] : null
   );
+  const queueSource = usePlayerStore((state) => state.queueSource);
+
+  // Destination for the now-playing title: where the queue was started from.
+  // album/playlist → that page; artist-top (Last.fm popular list) → the artist;
+  // artist radio or no known source → the current track's album.
+  const nowPlayingLink = useMemo<{ href: string; label: string } | null>(() => {
+    if (queueSource) {
+      if (queueSource.kind === 'album') return { href: `/library/album/${queueSource.id}`, label: 'album' };
+      if (queueSource.kind === 'playlist') return { href: `/playlists/${queueSource.id}`, label: 'playlist' };
+      if (queueSource.kind === 'artist-top') return { href: `/library/artist/${queueSource.id}`, label: 'artist' };
+    }
+    if (currentTrack?.albumId) return { href: `/library/album/${currentTrack.albumId}`, label: 'album' };
+    return null;
+  }, [queueSource, currentTrack]);
 
   const loadPath = usePlayerStore((state) => state.playbackTelemetry.loadPath);
   const castConnected = usePlayerStore((state) => state.castConnected);
@@ -385,9 +399,22 @@ export const PlayerControls: React.FC = () => {
         {currentTrack ? (
           <div className="player-metadata">
             <div className="player-title">
-              <TitleTicker
-                text={currentTrack.title || currentTrack.path.split(/[\\/]/).pop() || ''}
-              />
+              {nowPlayingLink ? (
+                <Link
+                  to={nowPlayingLink.href}
+                  className="player-title-link"
+                  aria-label={`Go to ${nowPlayingLink.label}`}
+                  title={`Go to ${nowPlayingLink.label}`}
+                >
+                  <TitleTicker
+                    text={currentTrack.title || currentTrack.path.split(/[\\/]/).pop() || ''}
+                  />
+                </Link>
+              ) : (
+                <TitleTicker
+                  text={currentTrack.title || currentTrack.path.split(/[\\/]/).pop() || ''}
+                />
+              )}
             </div>
             <div className="player-subline">
               {currentTrack.artistId ? (

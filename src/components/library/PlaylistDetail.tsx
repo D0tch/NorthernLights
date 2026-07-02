@@ -678,7 +678,7 @@ export const PlaylistDetail: React.FC = () => {
 
   const handlePlayFromIndex = useCallback((startIndex: number) => {
     if (playlistTracks.length === 0) return;
-    void setPlaylist(playlistTracks, startIndex);
+    void setPlaylist(playlistTracks, startIndex, playlistId ? { kind: 'playlist', id: playlistId } : null);
   }, [playlistTracks, setPlaylist]);
 
   const handleMoveTrack = useCallback((fromIndex: number, toIndex: number) => {
