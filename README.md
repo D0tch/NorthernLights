@@ -45,6 +45,7 @@ Aurora is built to feel like a premium music service that happens to run on your
 ### Playback that respects your files
 - **Bit-perfect when you want it, adaptive when you need it.** Play your original files untouched (lossless passthrough for FLAC, ALAC, Opus, WAV, and more) or transcode on the fly across quality tiers, selected automatically from network and device. Broad format support including MP3, FLAC, OGG/Opus, M4A/AAC/ALAC, WAV, and FFmpeg-backed WMA.
 - **True gapless transitions** — the next track's stream is prepared in parallel and promoted in milliseconds, not stitched together after a stall.
+- **Volume leveling (opt-in).** Loudness normalization measures each track's EBU R128 loudness and evens out volume from track to track — or per album, preserving an album's intended dynamics — with true-peak limiting so nothing clips. No more reaching for the dial between a quiet ballad and a loud master.
 - **Full transport, everywhere it matters:** lock-screen / notification / media-key controls with live scrubbing, audio-output device routing, a screen wake lock so the phone won't sleep mid-track, a sleep timer that fades out gently, and automatic resume right where you left off.
 
 ### A library that understands your music
@@ -54,7 +55,7 @@ Aurora is built to feel like a premium music service that happens to run on your
 
 ### Discovery computed from *your* collection
 - **Acoustic similarity from real machine-learning embeddings** — MusiCNN acoustic vectors plus 1280-dimension Discogs-EffNet embeddings, indexed with pgvector — so songs are matched by how they actually sound, not by their genre labels.
-- **A Hub of auto-curated surfaces:** a time-of-day daylist, on-repeat, a long-tail "repeat rewind," artist radio, decade and genre mixes, and seasonal time capsules.
+- **A Hub of auto-curated surfaces:** a time-of-day daylist, on-repeat, a long-tail "repeat rewind," artist radio, decade and genre mixes, and yearly & seasonal **Wrapped** recaps of your top tracks (blended with your Last.fm / ListenBrainz history when connected).
 - **AI playlists from a prompt or a mood,** grounded in your own library — with genre-ontology-aware blending, diversity / artist-spread / discovery-bias controls, banned genres, and automatic relaxation when a request is too narrow. Recommendations come from your music's actual audio fingerprint, never a cloud catalog.
 
 ### Plays on every screen
