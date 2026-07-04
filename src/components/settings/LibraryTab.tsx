@@ -322,6 +322,25 @@ export const LibraryTab: React.FC = () => {
         });
     };
 
+    const handleMeasureLoudness = async () => {
+        try {
+            const res = await fetch('/api/library/analyze/loudness', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...getAuthHeader() },
+                body: JSON.stringify({}),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) {
+                showToast(data.detail || data.error || 'Loudness measurement failed', 'error');
+                return;
+            }
+            showToast(data.message || 'Loudness measurement started', 'success');
+            fetchDirStats();
+        } catch (e) {
+            showToast(`Loudness measurement failed: ${e}`, 'error');
+        }
+    };
+
     const totalStats = Object.values(dirStats).reduce(
         (acc, s) => ({
             totalTracks: acc.totalTracks + s.totalTracks,
@@ -455,9 +474,12 @@ export const LibraryTab: React.FC = () => {
                         <button type="button" className="btn btn-ghost btn-sm" onClick={handleForceAnalyze} disabled={isScanning}>
                             Re-analyze All
                         </button>
+                        <button type="button" className="btn btn-ghost btn-sm" onClick={handleMeasureLoudness} disabled={isScanning}>
+                            Measure Loudness
+                        </button>
                     </div>
                 </div>
-                <p className="library-panel__description">Runs native Essentia feature extraction on tracks that have not been analyzed yet. Requires ML models below.</p>
+                <p className="library-panel__description">Runs native Essentia feature extraction on tracks that have not been analyzed yet. Requires ML models below. "Measure Loudness" computes EBU R128 loudness (for volume normalization) across tracks that don't have it yet.</p>
                 {dirStatsLoading ? (
                     <div className="library-progress" aria-live="polite">
                         <div className="library-progress__label">
