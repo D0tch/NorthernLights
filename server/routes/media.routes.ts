@@ -4,7 +4,8 @@ import path from 'path';
 import { spawn } from 'child_process';
 import * as mm from 'music-metadata';
 import { isPathAllowed, pathToBuffer } from '../state';
-import { initDB, getArtHashForPath } from '../database';
+import { initDB, getArtHashForPath, getTrackLoudnessByIds, getAlbumLoudness } from '../database';
+import { maybeMeasureLoudnessForUser } from '../services/loudness.service';
 import { artCachePath, isValidArtSize, DEFAULT_ART_SIZE, findImageStart, type ArtSize } from '../services/artCache';
 import {
   getOrCreateHlsSession,
@@ -201,7 +202,7 @@ function rewriteMediaPlaylistSegments(playlist: string, quality: string, codec: 
   );
 }
 
-async function resolveTrackForHls(trackId: string): Promise<{
+async function resolveTrackForHls(trackId: string, userId?: string): Promise<{
   fileBuf: Buffer;
   bitrate: number | null;
   sourceFormat: string | null;
@@ -209,6 +210,7 @@ async function resolveTrackForHls(trackId: string): Promise<{
   let fileBuf: Buffer;
   let bitrate: number | null = null;
   let sourceFormat: string | null = null;
+  let resolvedId: string | null = null;
 
   if (UUID_REGEX.test(trackId)) {
     const db = await initDB();
@@ -221,14 +223,16 @@ async function resolveTrackForHls(trackId: string): Promise<{
     fileBuf = pathToBuffer(result.rows[0].path);
     bitrate = result.rows[0].bitrate;
     sourceFormat = result.rows[0].format;
+    resolvedId = trackId;
   } else {
     const dbPath = Buffer.from(decodeURIComponent(trackId), 'base64').toString();
     fileBuf = pathToBuffer(dbPath);
 
     try {
       const db = await initDB();
-      const result = await db.query('SELECT bitrate, format FROM tracks WHERE path = $1', [dbPath]);
+      const result = await db.query('SELECT id, bitrate, format FROM tracks WHERE path = $1', [dbPath]);
       if (result.rows.length > 0) {
+        resolvedId = result.rows[0].id;
         bitrate = result.rows[0].bitrate;
         sourceFormat = result.rows[0].format;
       }
@@ -242,6 +246,13 @@ async function resolveTrackForHls(trackId: string): Promise<{
     throw err;
   }
 
+  // Precompute loudness for this track (background, deduped, gated on the user's
+  // opt-in). Playback resolution is the chokepoint that covers HLS *and* the
+  // direct/Subsonic paths; this never blocks the response.
+  if (userId && resolvedId) {
+    void maybeMeasureLoudnessForUser(userId, resolvedId, fileBuf.toString('utf8'));
+  }
+
   return { fileBuf, bitrate, sourceFormat };
 }
 
@@ -253,8 +264,8 @@ function normalizeTargetCodec(codec: string, quality: string): string {
   return codec;
 }
 
-async function ensureHlsSessionForRequest(trackId: string, quality: string, targetCodec: string) {
-  const { fileBuf, bitrate, sourceFormat } = await resolveTrackForHls(trackId);
+async function ensureHlsSessionForRequest(trackId: string, quality: string, targetCodec: string, userId?: string) {
+  const { fileBuf, bitrate, sourceFormat } = await resolveTrackForHls(trackId, userId);
   const codec = normalizeTargetCodec(targetCodec, quality);
   await getOrCreateHlsSession(trackId, fileBuf, quality, bitrate, sourceFormat, codec);
   return {
@@ -284,6 +295,48 @@ router.post('/cast/log', (req, res) => {
   res.sendStatus(204);
 });
 
+// Loudness for the client's gain stage. Returns BOTH per-track and per-album
+// loudness so the client can switch track/album mode instantly with no refetch.
+// Missing ids (not yet measured) return null and are opportunistically queued
+// for background measurement (gated on the user's opt-in, deduped).
+router.get('/loudness', async (req, res) => {
+  try {
+    const userId = (req as any).user?.userId as string | undefined;
+    const ids = Array.from(new Set(String(req.query.ids || '').split(',').map((s) => s.trim()).filter(Boolean))).slice(0, 500);
+    if (ids.length === 0) return res.json({});
+
+    const db = await initDB();
+    const metaRes = await db.query('SELECT id, path, album_id FROM tracks WHERE id = ANY($1)', [ids]);
+    const meta = new Map<string, { path: string; albumId: string | null }>();
+    for (const r of metaRes.rows as any[]) meta.set(r.id, { path: r.path, albumId: r.album_id });
+
+    const trackLoud = await getTrackLoudnessByIds(ids);
+    const trackMap = new Map(trackLoud.map((r) => [r.track_id, { lufs: r.loudness_lufs, truePeakDbfs: r.true_peak_dbfs }]));
+
+    // Memoize album loudness per album so co-album tracks don't recompute it.
+    const albumCache = new Map<string, { lufs: number; truePeakDbfs: number } | null>();
+    const albumFor = async (albumId: string | null) => {
+      if (!albumId) return null;
+      if (!albumCache.has(albumId)) albumCache.set(albumId, await getAlbumLoudness(albumId));
+      return albumCache.get(albumId) ?? null;
+    };
+
+    const out: Record<string, { track: unknown; album: unknown }> = {};
+    for (const id of ids) {
+      const m = meta.get(id);
+      const track = trackMap.get(id) ?? null;
+      out[id] = { track, album: m ? await albumFor(m.albumId) : null };
+      if (!track && userId && m?.path) {
+        void maybeMeasureLoudnessForUser(userId, id, pathToBuffer(m.path).toString('utf8'));
+      }
+    }
+    res.json(out);
+  } catch (e) {
+    console.error('[Loudness] /api/loudness error', (e as Error).message);
+    res.status(500).json({ error: 'Failed to load loudness' });
+  }
+});
+
 // Serve HLS playlist for a track
 router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
   setCorsHeaders(req, res);
@@ -295,7 +348,7 @@ router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
 
   try {
     const token = req.query.token as string | undefined;
-    const { bitrate } = await resolveTrackForHls(trackId);
+    const { bitrate } = await resolveTrackForHls(trackId, (req as any).user?.userId);
     const output = buildMasterPlaylist(trackId, quality, targetCodec, token, bitrate);
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
@@ -326,7 +379,7 @@ router.all('/stream/:trackId/media.m3u8', async (req, res) => {
   let targetCodec = (req.query.codec as string) || 'aac';
 
   try {
-    const ensured = await ensureHlsSessionForRequest(trackId, quality, targetCodec);
+    const ensured = await ensureHlsSessionForRequest(trackId, quality, targetCodec, (req as any).user?.userId);
     targetCodec = ensured.codec;
     const sessionInfo = ensured.sessionInfo;
 
@@ -382,7 +435,7 @@ router.all('/stream/:trackId/prewarm', async (req, res) => {
   let targetCodec = (req.query.codec as string) || 'aac';
 
   try {
-    const ensured = await ensureHlsSessionForRequest(trackId, quality, targetCodec);
+    const ensured = await ensureHlsSessionForRequest(trackId, quality, targetCodec, (req as any).user?.userId);
     targetCodec = ensured.codec;
     const sessionInfo = ensured.sessionInfo;
 

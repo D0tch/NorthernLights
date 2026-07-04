@@ -7,6 +7,7 @@ import * as mm from 'music-metadata';
 import { initDB, touchSubsonicApiKey, getActiveSubsonicApiKeyByPrefix, updateSubsonicApiKeyHash, getPlaylists, getPlaylistTracks, getPlaylistMeta, createPlaylist, addTracksToPlaylist, deletePlaylist, recordPlaybackForUser, setTrackLovedForUser, setTrackRatingForUser, getUserSetting, setUserSetting, getSystemSetting } from '../database';
 import { fetchCandidatePool, computeArtistCentroids } from '../services/candidatePool.service';
 import { isPathAllowed, pathToBuffer } from '../state';
+import { maybeMeasureLoudnessForUser } from '../services/loudness.service';
 import { getOrCreateHlsSession, getSessionInfo, touchSession, getSessionOutputDir } from '../services/hlsStream.service';
 import { generateScopedToken, verifyScopedToken } from '../services/scopedToken.service';
 import { writeDebugLog } from '../services/debugLogger.service';
@@ -736,6 +737,8 @@ async function resolvePlayableTrack(id: string, userId: string) {
     err.status = 403;
     throw err;
   }
+  // Precompute loudness in the background (deduped, gated on the user's opt-in).
+  void maybeMeasureLoudnessForUser(userId, track.id, fileBuf.toString('utf8'));
   return { track, fileBuf };
 }
 
