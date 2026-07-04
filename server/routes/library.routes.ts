@@ -3,7 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { ChildProcessPool } from '../workers/processPool';
 import * as mm from 'music-metadata';
-import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTracksWithSimulatedFeatures, getSimulatedFeatureTracks, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getPathsWithMeta, countTracksByArtHash, deleteTracksByPaths, purgeOrphanedEntities, recordUnparsedTrack, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting, normalizeArtistNames, getPrimaryArtistName, normalizeArtistIdentityKey, setTrackCredits, isCompilationArtistName } from '../database';
+import { addDirectory, addTrack, addTrackFeatures, getTracksWithoutFeatures, getTracksWithSimulatedFeatures, getSimulatedFeatureTracks, getTrackCountWithFeatures, getAllTracks, getTrackById, getDirectories, removeDirectory, removeTracksByDirectory, getOrCreateArtist, getOrCreateAlbum, getOrCreateGenre, getAllArtists, getAllAlbums, getAllGenres, getPathsWithMeta, countTracksByArtHash, deleteTracksByPaths, purgeOrphanedEntities, recordUnparsedTrack, purgeOrphanedTracks, setTrackLovedForUser, getUserSetting, getSystemSetting, normalizeArtistNames, getPrimaryArtistName, normalizeArtistIdentityKey, setTrackCredits, isCompilationArtistName, setTrackLoudness, getTracksWithoutLoudness, getTracksWithFailedLoudness } from '../database';
+import { measureLoudness } from '../services/loudness.service';
 import { cleanupOrphanArt } from '../services/artCache';
 import { genreMatrixService } from '../services/genreMatrix.service';
 import { loveTrack, unloveTrack } from '../services/lastfm.service';
@@ -724,6 +725,84 @@ async function processAnalysisBatch(tracks: { id: string; filePath: Buffer; titl
   if (featuresWritten > 0) void refreshArtistAudioProfiles();
 }
 
+// Loudness (EBU R128) backfill. Mirrors processAnalysisBatch's dynamic worker
+// loop + concurrencyChanged scaling + scan-status progress, but runs the ffmpeg
+// measurement in-process (ffmpeg is its own binary — no worker/pool subsystem).
+// Shares the audioAnalysisCpu concurrency knob; callers run it AFTER the feature
+// batch so two full-file decode workloads don't contend for cores.
+async function processLoudnessBatch(tracks: { id: string; filePath: Buffer; title: string; artist?: string | null }[], concurrency: number): Promise<void> {
+  const { settingsEmitter } = await import('../state');
+  let index = 0;
+  const total = tracks.length;
+  let currentConcurrency = Math.max(1, Math.min(concurrency, total));
+  let activeLoops = 0;
+  let orchestrationActive = true;
+  const activePromises = new Set<Promise<void>>();
+  const activeMap = new Map<number, string>();
+
+  const runWorkerLoop = async () => {
+    activeLoops++;
+    try {
+      while (orchestrationActive && activeLoops <= currentConcurrency && index < total) {
+        const i = index++;
+        if (i >= total) break;
+        const track = tracks[i];
+        const displayName = track.artist ? `${track.artist} - ${track.title}` : track.title;
+        activeMap.set(i, displayName);
+        scanStatus.activeFiles = Array.from(activeMap.values());
+        scanStatus.currentFile = displayName;
+        scanStatus.scannedFiles++;
+        scanStatus.activeWorkers = activeMap.size;
+        broadcastScanStatus();
+        try {
+          const result = await measureLoudness(track.filePath.toString('utf8'));
+          // (null, null) records a failure sentinel so it isn't retried forever.
+          await setTrackLoudness(track.id, result?.lufs ?? null, result?.truePeakDbfs ?? null);
+        } catch (err) {
+          console.error(`[Loudness] batch job failed for "${track.title}":`, err);
+        } finally {
+          activeMap.delete(i);
+          scanStatus.activeFiles = Array.from(activeMap.values());
+          scanStatus.activeWorkers = activeMap.size;
+          broadcastScanStatus();
+        }
+      }
+    } finally {
+      activeLoops--;
+    }
+  };
+
+  const updateConcurrency = (newLimit: number) => {
+    currentConcurrency = newLimit;
+    while (activeLoops < currentConcurrency && index < total) {
+      const p = runWorkerLoop();
+      activePromises.add(p);
+      p.finally(() => activePromises.delete(p));
+    }
+  };
+
+  const onSettingsChanged = async () => {
+    if (!orchestrationActive) return;
+    try {
+      const newLimit = Math.min(await getAnalysisConcurrency(), total);
+      if (newLimit !== currentConcurrency) {
+        console.log(`[Loudness] Dynamically scaling concurrency ${currentConcurrency} -> ${newLimit}`);
+        updateConcurrency(newLimit);
+      }
+    } catch { /* ignore */ }
+  };
+
+  settingsEmitter.on('concurrencyChanged', onSettingsChanged);
+  updateConcurrency(currentConcurrency);
+
+  while (index < total || activePromises.size > 0) {
+    await new Promise(r => setTimeout(r, 100));
+  }
+
+  orchestrationActive = false;
+  settingsEmitter.off('concurrencyChanged', onSettingsChanged);
+}
+
 // ─── Shared scan lifecycle helpers ────────────────────────────────────
 
 function resetScanStatus(libraryChanged = false) {
@@ -924,6 +1003,18 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
       await processAnalysisBatch(tracksNeedingAnalysis, concurrency);
       console.log(`[Scanner] Analysis phase complete: ${tracksNeedingAnalysis.length} track(s) analyzed`);
     }
+
+    // ── Loudness (EBU R128) — after features so two full-decode passes don't contend ──
+    const tracksNeedingLoudness = await getTracksWithoutLoudness();
+    if (tracksNeedingLoudness.length > 0) {
+      scanStatus.phase = 'analysis';
+      scanStatus.totalFiles = tracksNeedingLoudness.length;
+      scanStatus.scannedFiles = 0;
+      scanStatus.currentFile = '';
+      broadcastScanStatus(true);
+      await processLoudnessBatch(tracksNeedingLoudness, await getAnalysisConcurrency());
+      console.log(`[Scanner] Loudness phase complete: ${tracksNeedingLoudness.length} track(s) measured`);
+    }
   }
 
   // Trigger Genre Matrix regeneration after any change
@@ -1100,6 +1191,57 @@ router.post('/analyze', async (req, res) => {
   } catch (error) {
     console.error('Analysis error:', error);
     res.status(500).json({ error: 'Failed to complete analysis' });
+  } finally {
+    resetScanStatus();
+  }
+});
+
+// Backfill loudness (EBU R128). Default: tracks never attempted. force: ALL
+// tracks (re-measure). retryFailures: tracks whose prior measurement failed.
+router.post('/analyze/loudness', async (req, res) => {
+  if (scanStatus.isScanning) {
+    return res.status(400).json({
+      error: 'A scan or analysis is already in progress',
+      phase: scanStatus.phase,
+      detail: `Currently in ${scanStatus.phase} phase. Please wait for it to complete.`,
+    });
+  }
+
+  const force = req.body?.force === true;
+  const retryFailures = req.body?.retryFailures === true;
+
+  try {
+    let tracks: { id: string; filePath: Buffer; title: string; artist?: string | null }[];
+    if (force) {
+      const { initDB } = await import('../database');
+      const db = await initDB();
+      const dbRes = await db.query('SELECT t.id, t.path, t.title, t.artist FROM tracks t ORDER BY t.title');
+      tracks = dbRes.rows.map((r: any) => ({ id: r.id, filePath: Buffer.from(r.path, 'base64'), title: r.title, artist: r.artist || null }));
+    } else if (retryFailures) {
+      tracks = await getTracksWithFailedLoudness();
+    } else {
+      tracks = await getTracksWithoutLoudness();
+    }
+
+    if (tracks.length === 0) {
+      return res.json({ status: 'completed', message: 'All tracks already have loudness', count: 0 });
+    }
+
+    scanStatus.isScanning = true;
+    scanStatus.phase = 'analysis';
+    scanStatus.totalFiles = tracks.length;
+    scanStatus.scannedFiles = 0;
+    scanStatus.activeFiles = [];
+    scanStatus.activeWorkers = 0;
+    scanStatus.currentFile = '';
+    broadcastScanStatus(true);
+
+    await processLoudnessBatch(tracks, await getAnalysisConcurrency());
+    console.log(`[Loudness] Standalone backfill complete: ${tracks.length} tracks`);
+    res.json({ status: 'completed', message: `Measured ${tracks.length} tracks`, count: tracks.length });
+  } catch (error) {
+    console.error('Loudness backfill error:', error);
+    res.status(500).json({ error: 'Failed to complete loudness backfill' });
   } finally {
     resetScanStatus();
   }
