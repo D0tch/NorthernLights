@@ -1,5 +1,6 @@
 import type Hls from 'hls.js';
 import { castManager } from './CastManager';
+import { dbToLinear } from './loudness';
 
 // hls.js is ~512 KB. Load it lazily on first HLS playback so cast-only
 // or never-played sessions don't pay for it on initial paint.
@@ -34,6 +35,12 @@ class PlaybackManager {
     private static instance: PlaybackManager;
     private audio: HTMLAudioElement;
     private audioContext: AudioContext | null = null;
+    // Loudness-normalization gain, wired per <audio> element (source → gain →
+    // destination). Kept per element because promotePreparedAudio() swaps the
+    // active element; activeGainNode always points at the current element's node.
+    private webAudioNodes = new WeakMap<HTMLAudioElement, { source: MediaElementAudioSourceNode; gain: GainNode }>();
+    private activeGainNode: GainNode | null = null;
+    private currentLoudnessGainDb: number | null = null; // null → unity (no normalization)
     private hls: Hls | null = null;
     private nextAudio: HTMLAudioElement | null = null;
     private nextHls: Hls | null = null;
@@ -720,6 +727,9 @@ class PlaybackManager {
             this.attachAudioEvents(nextAudio);
             this.nextAudio = nextAudio;
             this.nextUrlKey = key;
+            // Wire the prepared element's loudness chain now (context exists by
+            // prebuffer time) so gapless promotion doesn't bypass the graph.
+            if (this.audioContext) this.attachLoudnessChain(nextAudio);
 
             const authToken = new URL(effectiveHlsUrl, window.location.origin).searchParams.get('token') || '';
 
@@ -1001,12 +1011,25 @@ class PlaybackManager {
         this.nextHls = null;
         this.nextUrlKey = null;
 
+        // The promoted element already owns its loudness chain (wired in
+        // prepareNextUrl); re-point the active gain node and re-apply.
+        const promotedGain = this.attachLoudnessChain(this.audio);
+        if (promotedGain) this.activeGainNode = promotedGain;
+        this.applyLoudnessGainToActive();
+
         if (oldAudio.src && oldAudio.src.startsWith('blob:')) {
             URL.revokeObjectURL(oldAudio.src);
         }
         oldAudio.removeAttribute('src');
         oldAudio.load();
         audioOutputManager.unregisterElement(oldAudio);
+        // Disconnect the discarded element's loudness chain so it doesn't linger
+        // connected to the destination for the rest of the session.
+        const oldNodes = this.webAudioNodes.get(oldAudio);
+        if (oldNodes) {
+            try { oldNodes.source.disconnect(); oldNodes.gain.disconnect(); } catch { /* already gone */ }
+            this.webAudioNodes.delete(oldAudio);
+        }
 
         logPlaybackInfo('[Playback] Promoting prepared next track');
         this.recordTelemetry({
@@ -1250,6 +1273,8 @@ class PlaybackManager {
             this.audioContext.close();
             this.audioContext = null;
         }
+        this.activeGainNode = null;
+        this.webAudioNodes = new WeakMap();
     }
 
     // --- Web Audio API Integration (Foundation for EQ/Visualizers) ---
@@ -1263,12 +1288,13 @@ class PlaybackManager {
         try {
             if (!this.audioContext) {
                 this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-                const source = this.audioContext.createMediaElementSource(this.audio);
-
-                // Basic routing: Source -> Destination
-                // Future: Source -> Gain (crossfade) -> Analyser (visualizer) -> Biquads (EQ) -> Destination
-                source.connect(this.audioContext.destination);
             }
+            // Wire (or re-point to) the active element's loudness chain. Idempotent
+            // per element; also covers a post-promotion element that was created
+            // before the context existed.
+            const gain = this.attachLoudnessChain(this.audio);
+            if (gain) this.activeGainNode = gain;
+            this.applyLoudnessGainToActive();
 
             if (this.audioContext.state === 'suspended') {
                 this.audioContext.resume();
@@ -1276,6 +1302,43 @@ class PlaybackManager {
         } catch (e) {
             console.warn("Could not initialize AudioContext:", e);
         }
+    }
+
+    /**
+     * Build MediaElementSource(el) → GainNode → destination exactly once per
+     * element (WeakMap-guarded — createMediaElementSource throws on a 2nd call).
+     * Returns the element's GainNode, or null if the context doesn't exist yet.
+     */
+    private attachLoudnessChain(element: HTMLAudioElement): GainNode | null {
+        const ctx = this.audioContext;
+        if (!ctx) return null;
+        const existing = this.webAudioNodes.get(element);
+        if (existing) return existing.gain;
+        try {
+            const source = ctx.createMediaElementSource(element);
+            const gain = ctx.createGain();
+            gain.gain.value = dbToLinear(this.currentLoudnessGainDb); // start correct → no click
+            source.connect(gain);
+            gain.connect(ctx.destination);
+            this.webAudioNodes.set(element, { source, gain });
+            return gain;
+        } catch (e) {
+            console.warn('[Loudness] attachLoudnessChain failed:', e);
+            return null;
+        }
+    }
+
+    private applyLoudnessGainToActive(): void {
+        const ctx = this.audioContext;
+        if (!ctx || !this.activeGainNode) return;
+        // Short ramp to avoid a click when the gain changes mid-playback.
+        this.activeGainNode.gain.setTargetAtTime(dbToLinear(this.currentLoudnessGainDb), ctx.currentTime, 0.05);
+    }
+
+    /** Set the loudness-normalization gain for the current track. null → unity. */
+    public setLoudnessGainDb(dbOrNull: number | null): void {
+        this.currentLoudnessGainDb = dbOrNull;
+        this.applyLoudnessGainToActive();
     }
 }
 
