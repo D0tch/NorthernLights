@@ -244,6 +244,18 @@ export async function initDB(): Promise<Pool> {
         EXCEPTION WHEN OTHERS THEN null;
         END $$;
 
+        -- Migration: Loudness normalization (EBU R128). loudness_measured_at is a
+        -- sentinel: set on every attempt (success OR failure) so a track that can't
+        -- be measured isn't retried forever. Success also fills lufs + true peak;
+        -- failure leaves them NULL. "Needs measuring" == loudness_measured_at IS NULL.
+        DO $$
+        BEGIN
+          ALTER TABLE track_features ADD COLUMN IF NOT EXISTS loudness_lufs REAL;
+          ALTER TABLE track_features ADD COLUMN IF NOT EXISTS true_peak_dbfs REAL;
+          ALTER TABLE track_features ADD COLUMN IF NOT EXISTS loudness_measured_at TIMESTAMPTZ;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+
         -- Migration: Add 8D acoustic vector (named column for 10D expansion)
         DO $$
         BEGIN
@@ -1485,13 +1497,125 @@ export async function addTrackFeatures(trackId: string, audioFeatures: { bpm: nu
   `, [trackId, audioFeatures.bpm, vector8dStr, embStr, simulated]);
 }
 
+// ─── Loudness (EBU R128) ──────────────────────────────────────────────
+// Stored on track_features but written independently of the Python feature
+// pipeline. Upserts ONLY the loudness columns so it never clobbers bpm/vectors.
+// Passing (null, null) records a measurement FAILURE (sentinel timestamp set,
+// values left NULL) so the track isn't re-attempted on every scan/playback.
+export async function setTrackLoudness(
+  trackId: string,
+  lufs: number | null,
+  truePeakDbfs: number | null,
+): Promise<void> {
+  const db = await initDB();
+  await db.query(`
+    INSERT INTO track_features (track_id, loudness_lufs, true_peak_dbfs, loudness_measured_at)
+    VALUES ($1, $2, $3, NOW())
+    ON CONFLICT (track_id) DO UPDATE SET
+      loudness_lufs = EXCLUDED.loudness_lufs,
+      true_peak_dbfs = EXCLUDED.true_peak_dbfs,
+      loudness_measured_at = EXCLUDED.loudness_measured_at
+  `, [trackId, lufs, truePeakDbfs]);
+}
+
+// Batch read for the client's per-track gain. Skips failure-sentinel rows
+// (loudness_lufs IS NULL) so callers only see real measurements.
+export async function getTrackLoudnessByIds(
+  ids: string[],
+): Promise<{ track_id: string; loudness_lufs: number; true_peak_dbfs: number | null }[]> {
+  if (!ids || ids.length === 0) return [];
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT track_id, loudness_lufs, true_peak_dbfs
+    FROM track_features
+    WHERE track_id = ANY($1) AND loudness_lufs IS NOT NULL
+  `, [ids]);
+  return res.rows.map((r: any) => ({
+    track_id: r.track_id,
+    loudness_lufs: Number(r.loudness_lufs),
+    true_peak_dbfs: r.true_peak_dbfs == null ? null : Number(r.true_peak_dbfs),
+  }));
+}
+
+// Album-mode loudness: one gain for the whole album so intra-album dynamics
+// survive. Approximated as the duration-weighted energy mean of the album's
+// measured tracks (loudness is power-like → weight 10^(LUFS/10)); album peak is
+// the loudest member's true peak. Reuses per-track data — no second decode.
+export async function getAlbumLoudness(
+  albumId: string | null | undefined,
+): Promise<{ lufs: number; truePeakDbfs: number } | null> {
+  if (!albumId) return null;
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT tf.loudness_lufs AS lufs, tf.true_peak_dbfs AS peak, t.duration AS duration
+    FROM tracks t
+    JOIN track_features tf ON tf.track_id = t.id
+    WHERE t.album_id = $1 AND tf.loudness_lufs IS NOT NULL
+  `, [albumId]);
+  if (res.rowCount === 0) return null;
+  let energySum = 0, weightSum = 0, peak = -Infinity;
+  for (const r of res.rows as any[]) {
+    const lufs = Number(r.lufs);
+    if (!Number.isFinite(lufs)) continue;
+    const w = Number(r.duration) > 0 ? Number(r.duration) : 1; // equal weight if duration missing
+    energySum += w * Math.pow(10, lufs / 10);
+    weightSum += w;
+    const p = Number(r.peak);
+    if (Number.isFinite(p) && p > peak) peak = p;
+  }
+  if (weightSum <= 0 || energySum <= 0) return null;
+  // Unknown peak → assume full scale (0 dBFS) so the client's limiter stays conservative.
+  return { lufs: 10 * Math.log10(energySum / weightSum), truePeakDbfs: Number.isFinite(peak) ? peak : 0 };
+}
+
+// Tracks that have never had a loudness measurement attempted (no row, or a
+// row without the sentinel). Same shape processAnalysisBatch/processLoudnessBatch consume.
+export async function getTracksWithoutLoudness(): Promise<{ id: string; filePath: Buffer; title: string; artist: string | null }[]> {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT t.id, t.path, t.title, t.artist
+    FROM tracks t
+    LEFT JOIN track_features tf ON t.id = tf.track_id
+    WHERE tf.loudness_measured_at IS NULL
+    ORDER BY t.title
+  `);
+  return res.rows.map((r: any) => ({
+    id: r.id,
+    filePath: Buffer.from(r.path, 'base64'),
+    title: r.title,
+    artist: r.artist || null,
+  }));
+}
+
+// Tracks whose loudness measurement was attempted but failed (sentinel set, no
+// value) — for the "retry failures" backfill mode.
+export async function getTracksWithFailedLoudness(): Promise<{ id: string; filePath: Buffer; title: string; artist: string | null }[]> {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT t.id, t.path, t.title, t.artist
+    FROM tracks t
+    JOIN track_features tf ON t.id = tf.track_id
+    WHERE tf.loudness_measured_at IS NOT NULL AND tf.loudness_lufs IS NULL
+    ORDER BY t.title
+  `);
+  return res.rows.map((r: any) => ({
+    id: r.id,
+    filePath: Buffer.from(r.path, 'base64'),
+    title: r.title,
+    artist: r.artist || null,
+  }));
+}
+
 export async function getTracksWithoutFeatures(): Promise<{ id: string; filePath: Buffer; title: string; artist: string | null }[]> {
   const db = await initDB();
   const res = await db.query(`
     SELECT t.id, t.path, t.title, t.artist
     FROM tracks t
     LEFT JOIN track_features tf ON t.id = tf.track_id
-    WHERE tf.track_id IS NULL
+    -- Key on the acoustic vector, not row presence: loudness measurement can
+    -- create a track_features row (loudness columns only) before feature
+    -- analysis runs, so "row exists" no longer means "features computed".
+    WHERE tf.acoustic_vector_8d IS NULL
     ORDER BY t.title
   `);
   return res.rows.map((r: any) => ({
@@ -1558,7 +1682,7 @@ export async function getTrackCountWithFeatures(): Promise<{ withFeatures: numbe
   const res = await db.query(`
     SELECT
       COUNT(*) as total,
-      COUNT(tf.track_id) as with_features
+      COUNT(tf.acoustic_vector_8d) as with_features
     FROM tracks t
     LEFT JOIN track_features tf ON t.id = tf.track_id
   `);
