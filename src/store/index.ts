@@ -18,6 +18,8 @@ import {
 } from './playbackTime';
 
 import { clearExternalCache } from '../utils/externalImagery';
+import { computeLoudnessGainDb, type LoudnessData } from '../utils/loudness';
+import { getCachedLoudness, fetchLoudness, invalidateLoudness, type TrackLoudnessEntry } from '../utils/loudnessCache';
 import type { ToastType } from '../components/Toast';
 
 export interface ToastItem {
@@ -31,6 +33,50 @@ export interface ToastItem {
 
 // Re-entrancy guard: incremented on each playAtIndex call to discard stale callbacks
 let playGeneration = 0;
+
+// Compute + apply the loudness-normalization gain for a track becoming current.
+// Applies what's cached immediately (unity if disabled/unmeasured), then fetches
+// loudness for this track + a short lookahead and re-applies. If the server
+// hasn't measured the track yet, one delayed retry gives the background
+// measurement time to land. All async work is generation-guarded so a skip
+// abandons stale updates.
+function applyLoudnessForTrack(get: () => PlayerState, track: TrackInfo, generation: number): void {
+  const s = get();
+  if (!s.loudnessNormEnabled) { playbackManager.setLoudnessGainDb(null); return; }
+  const settings = { enabled: true, targetLufs: s.loudnessTargetLufs, preampDb: s.loudnessPreampDb };
+  const mode = s.loudnessMode;
+  const pick = (entry: TrackLoudnessEntry | undefined | null): LoudnessData | null => {
+    if (!entry) return null;
+    // Album mode falls back to per-track when the album value isn't ready yet.
+    return mode === 'album' ? (entry.album ?? entry.track) : entry.track;
+  };
+
+  playbackManager.setLoudnessGainDb(computeLoudnessGainDb(pick(getCachedLoudness(track.id)), settings));
+
+  if (getCachedLoudness(track.id) !== undefined) return; // already fetched
+
+  const authHeaders = (get() as any).getAuthHeader();
+  const ids = [track.id];
+  const here = s.playlist.findIndex((t) => t.id === track.id);
+  if (here >= 0) for (const t of s.playlist.slice(here + 1, here + 3)) if (t?.id) ids.push(t.id);
+
+  void fetchLoudness(ids, authHeaders).then(() => {
+    if (generation !== playGeneration) return;
+    const chosen = pick(getCachedLoudness(track.id));
+    playbackManager.setLoudnessGainDb(computeLoudnessGainDb(chosen, settings));
+    if (chosen === null) {
+      // Not measured yet — give the background pass a moment, then retry once.
+      setTimeout(() => {
+        if (generation !== playGeneration) return;
+        invalidateLoudness(track.id);
+        void fetchLoudness([track.id], authHeaders).then(() => {
+          if (generation !== playGeneration) return;
+          playbackManager.setLoudnessGainDb(computeLoudnessGainDb(pick(getCachedLoudness(track.id)), settings));
+        });
+      }, 4000);
+    }
+  });
+}
 
 // In-flight dedup + cancellation for the library/playlist fetches. The init
 // sequence and the 10s health poller both fire these unawaited; without dedup a
@@ -512,6 +558,12 @@ export interface PlayerState {
   hlsLoggingEnabled: boolean;
   ffmpegLoggingEnabled: boolean;
   openSubsonicEnabled: boolean;
+  // Loudness normalization (EBU R128). User-scoped so the server can gate
+  // background measurement on the user's opt-in.
+  loudnessNormEnabled: boolean;
+  loudnessTargetLufs: number;
+  loudnessPreampDb: number;
+  loudnessMode: 'track' | 'album';
   llmBaseUrl: string;
   llmApiKey: string;
   llmModelName: string;
@@ -1075,6 +1127,10 @@ export const usePlayerStore = create<PlayerState>()(
         hlsLoggingEnabled: false,
         ffmpegLoggingEnabled: false,
         openSubsonicEnabled: true,
+        loudnessNormEnabled: false as boolean,
+        loudnessTargetLufs: -18,
+        loudnessPreampDb: 0,
+        loudnessMode: 'track' as 'track' | 'album',
         llmBaseUrl: '',
         llmApiKey: '',
         llmModelName: '',
@@ -1278,6 +1334,14 @@ export const usePlayerStore = create<PlayerState>()(
             playbackManager.clearPreparedAudio();
             prewarmNextFromState(get());
           }
+          // Live-apply loudness changes to the current track (no track change needed).
+          if (settings.loudnessNormEnabled !== undefined || settings.loudnessTargetLufs !== undefined
+              || settings.loudnessPreampDb !== undefined || settings.loudnessMode !== undefined) {
+            const st = get();
+            const cur = st.currentIndex != null ? st.playlist[st.currentIndex] : null;
+            if (cur) applyLoudnessForTrack(get, cur, playGeneration);
+            else playbackManager.setLoudnessGainDb(null);
+          }
         },
 
         loadSettings: async () => {
@@ -1308,6 +1372,10 @@ export const usePlayerStore = create<PlayerState>()(
                 hlsLoggingEnabled: data.hlsLoggingEnabled === true,
                 ffmpegLoggingEnabled: data.ffmpegLoggingEnabled === true,
                 openSubsonicEnabled: data.openSubsonicEnabled !== false,
+                loudnessNormEnabled: data.loudnessNormEnabled === true,
+                loudnessTargetLufs: typeof data.loudnessTargetLufs === 'number' ? data.loudnessTargetLufs : -18,
+                loudnessPreampDb: typeof data.loudnessPreampDb === 'number' ? data.loudnessPreampDb : 0,
+                loudnessMode: data.loudnessMode === 'album' ? 'album' : 'track',
                 llmBaseUrl: data.llmBaseUrl || '',
                 llmApiKey: data.llmApiKey || '',
                 llmModelName: data.llmModelName || '',
@@ -1399,6 +1467,10 @@ export const usePlayerStore = create<PlayerState>()(
                 hlsLoggingEnabled: state.hlsLoggingEnabled,
                 ffmpegLoggingEnabled: state.ffmpegLoggingEnabled,
                 openSubsonicEnabled: state.openSubsonicEnabled,
+                loudnessNormEnabled: state.loudnessNormEnabled,
+                loudnessTargetLufs: state.loudnessTargetLufs,
+                loudnessPreampDb: state.loudnessPreampDb,
+                loudnessMode: state.loudnessMode,
                 llmBaseUrl: state.llmBaseUrl,
                 llmApiKey: state.llmApiKey,
                 llmModelName: state.llmModelName,
@@ -2348,7 +2420,9 @@ export const usePlayerStore = create<PlayerState>()(
               );
             } else if (playable.url) {
               // Not casting: play locally — pass both HLS and raw URLs (rebuilt
-              // with the current token above).
+              // with the current token above). Set loudness gain before playUrl so
+              // a freshly-wired gain node initializes at the right value (no click).
+              applyLoudnessForTrack(get, playable, generation);
               await playbackManager.playUrl(playable.url, playable.rawUrl || '', playable.title, playable.artist || ((playable.artists as string[])?.join(', ')), playable.artUrl, playable.album, playable.format);
             } else if (track.fileHandle) {
                // Fallback for local file handles
@@ -2693,6 +2767,12 @@ export const usePlayerStore = create<PlayerState>()(
         streamingQuality: state.streamingQuality,
         playbackDebugLogging: state.playbackDebugLogging,
         prebufferPolicy: state.prebufferPolicy,
+        // Persisted locally too (though server-synced) so normalization applies
+        // instantly on reload, before loadSettings round-trips.
+        loudnessNormEnabled: state.loudnessNormEnabled,
+        loudnessTargetLufs: state.loudnessTargetLufs,
+        loudnessPreampDb: state.loudnessPreampDb,
+        loudnessMode: state.loudnessMode,
         audioOutputDeviceId: state.audioOutputDeviceId,
         audioOutputDeviceLabel: state.audioOutputDeviceLabel,
         // Persist playlist and stable playback state; resume position is handled by the throttled continuity snapshot.

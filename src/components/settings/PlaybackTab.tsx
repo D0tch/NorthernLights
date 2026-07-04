@@ -47,6 +47,10 @@ export const PlaybackTab: React.FC = () => {
     const prebufferPolicy = usePlayerStore(state => state.prebufferPolicy);
     const resumeStalenessDays = usePlayerStore(state => state.resumeStalenessDays);
     const playbackDebugLogging = usePlayerStore(state => state.playbackDebugLogging);
+    const loudnessNormEnabled = usePlayerStore(state => state.loudnessNormEnabled);
+    const loudnessTargetLufs = usePlayerStore(state => state.loudnessTargetLufs);
+    const loudnessPreampDb = usePlayerStore(state => state.loudnessPreampDb);
+    const loudnessMode = usePlayerStore(state => state.loudnessMode);
     const playbackTelemetry = usePlayerStore(state => state.playbackTelemetry);
     const sleepTimerEndsAt = usePlayerStore(state => state.sleepTimerEndsAt);
     const startSleepTimer = usePlayerStore(state => state.startSleepTimer);
@@ -223,6 +227,82 @@ export const PlaybackTab: React.FC = () => {
                         <p className="text-xs text-[var(--color-text-muted)] mt-1.5">
                             How much of a track you must listen to before it counts as played — this drives both your play counts/stats on the server and what gets scrobbled to Last.fm &amp; ListenBrainz. A 4-minute cap and a 30-second minimum track length always apply, matching standard scrobbling rules.
                         </p>
+                    </div>
+
+                    <div className="mb-6 p-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)]">
+                        <div className="flex items-center justify-between">
+                            <div className="pr-4">
+                                <p className="text-sm font-medium text-[var(--color-text-primary)]">Loudness Normalization</p>
+                                <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
+                                    Even out volume between tracks by measuring each track's loudness (EBU R128) and adjusting gain toward a target. Peaks are limited to avoid clipping.
+                                </p>
+                            </div>
+                            <button
+                                onClick={() => setSettings({ loudnessNormEnabled: !loudnessNormEnabled })}
+                                className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors flex-shrink-0 ${loudnessNormEnabled ? 'bg-[var(--color-primary)]' : 'bg-gray-200 dark:bg-[var(--color-bg-tertiary)]'}`}
+                                aria-pressed={loudnessNormEnabled}
+                                aria-label="Toggle loudness normalization"
+                            >
+                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${loudnessNormEnabled ? 'translate-x-6' : 'translate-x-1'}`} />
+                            </button>
+                        </div>
+
+                        <div className={`mt-4 space-y-4 ${loudnessNormEnabled ? '' : 'opacity-50 pointer-events-none'}`}>
+                            <div>
+                                <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Normalize by</label>
+                                <select
+                                    value={loudnessMode}
+                                    disabled={!loudnessNormEnabled}
+                                    onChange={e => setSettings({ loudnessMode: e.target.value as 'track' | 'album' })}
+                                    className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
+                                >
+                                    <option value="track">Track — every track at the same loudness</option>
+                                    <option value="album">Album — consistent between albums, dynamics kept within one</option>
+                                </select>
+                            </div>
+
+                            <div>
+                                <label className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                                    <span>Target loudness</span>
+                                    <span>{loudnessTargetLufs} LUFS</span>
+                                </label>
+                                <input
+                                    type="range"
+                                    min={-23}
+                                    max={-9}
+                                    step={1}
+                                    value={loudnessTargetLufs}
+                                    disabled={!loudnessNormEnabled}
+                                    onChange={e => setSettings({ loudnessTargetLufs: Number(e.target.value) })}
+                                    className="w-full accent-[var(--color-primary)]"
+                                    aria-label="Target loudness in LUFS"
+                                />
+                                <p className="text-xs text-[var(--color-text-muted)] mt-1.5">
+                                    −18 LUFS is the ReplayGain reference (recommended). −14 matches streaming services (louder, less headroom).
+                                </p>
+                            </div>
+
+                            <div>
+                                <label className="flex justify-between text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                                    <span>Pre-amp</span>
+                                    <span>{loudnessPreampDb > 0 ? '+' : ''}{loudnessPreampDb} dB</span>
+                                </label>
+                                <input
+                                    type="range"
+                                    min={-12}
+                                    max={12}
+                                    step={1}
+                                    value={loudnessPreampDb}
+                                    disabled={!loudnessNormEnabled}
+                                    onChange={e => setSettings({ loudnessPreampDb: Number(e.target.value) })}
+                                    className="w-full accent-[var(--color-primary)]"
+                                    aria-label="Loudness pre-amp in dB"
+                                />
+                                <p className="text-xs text-[var(--color-text-muted)] mt-1.5">
+                                    A constant offset applied on top of the target. Casting is not affected. First play of a new track may be unnormalized until it's measured.
+                                </p>
+                            </div>
+                        </div>
                     </div>
 
                     <div className="mb-6 p-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)]">
