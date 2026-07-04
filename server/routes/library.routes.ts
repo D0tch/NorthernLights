@@ -1007,7 +1007,7 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
     // ── Loudness (EBU R128) — after features so two full-decode passes don't contend ──
     const tracksNeedingLoudness = await getTracksWithoutLoudness();
     if (tracksNeedingLoudness.length > 0) {
-      scanStatus.phase = 'analysis';
+      scanStatus.phase = 'loudness';
       scanStatus.totalFiles = tracksNeedingLoudness.length;
       scanStatus.scannedFiles = 0;
       scanStatus.currentFile = '';
@@ -1228,7 +1228,7 @@ router.post('/analyze/loudness', async (req, res) => {
     }
 
     scanStatus.isScanning = true;
-    scanStatus.phase = 'analysis';
+    scanStatus.phase = 'loudness';
     scanStatus.totalFiles = tracks.length;
     scanStatus.scannedFiles = 0;
     scanStatus.activeFiles = [];

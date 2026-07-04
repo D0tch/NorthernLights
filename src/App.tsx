@@ -244,7 +244,7 @@ const App: React.FC = () => {
   const onSSEMessage = React.useCallback((data: any) => {
     const d = data as {
       isScanning: boolean;
-      phase: 'idle' | 'walk' | 'metadata' | 'analysis';
+      phase: 'idle' | 'walk' | 'metadata' | 'analysis' | 'loudness';
       scannedFiles: number;
       totalFiles: number;
       activeWorkers: number;

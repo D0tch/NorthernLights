@@ -465,7 +465,7 @@ export interface PlayerState {
 
   // Scanning State
   isScanning: boolean;
-  scanPhase: 'idle' | 'walk' | 'metadata' | 'analysis';
+  scanPhase: 'idle' | 'walk' | 'metadata' | 'analysis' | 'loudness';
   scannedFiles: number;
   totalFiles: number;
   activeWorkers: number;
@@ -639,7 +639,7 @@ export interface PlayerState {
   addTracksToLibrary: (newTracks: TrackInfo[]) => void;
   setIsScanning: (
     isScanning: boolean,
-    phase?: 'idle' | 'walk' | 'metadata' | 'analysis',
+    phase?: 'idle' | 'walk' | 'metadata' | 'analysis' | 'loudness',
     scanned?: number,
     total?: number,
     workers?: number,
@@ -1000,7 +1000,7 @@ export const usePlayerStore = create<PlayerState>()(
         lastOpenedAlbum: null as LastOpenedAlbum | null,
 
         isScanning: false as boolean,
-        scanPhase: 'idle' as 'idle' | 'walk' | 'metadata' | 'analysis',
+        scanPhase: 'idle' as 'idle' | 'walk' | 'metadata' | 'analysis' | 'loudness',
         scannedFiles: 0,
         totalFiles: 0,
         activeWorkers: 0,

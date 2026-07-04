@@ -27,7 +27,9 @@ export const GlobalScanningIndicator: React.FC<GlobalScanningIndicatorProps> = (
   );
 
   const isAnalysis = scanPhase === 'analysis';
-  const isMetaOrAnalysis = scanPhase === 'metadata' || scanPhase === 'analysis';
+  const isLoudness = scanPhase === 'loudness';
+  const isTrackPhase = isAnalysis || isLoudness; // per-track phases (vs file walk/metadata)
+  const isMetaOrAnalysis = scanPhase === 'metadata' || isTrackPhase;
 
   return (
     <div className="global-scanning-indicator">
@@ -40,16 +42,16 @@ export const GlobalScanningIndicator: React.FC<GlobalScanningIndicatorProps> = (
         <div className="scan-info-col">
           <div className="scan-title-row">
             <span className="scan-title">
-              {isAnalysis ? 'Analyzing Audio...' : 'Scanning Library...'}
+              {isLoudness ? 'Measuring Loudness...' : isAnalysis ? 'Analyzing Audio...' : 'Scanning Library...'}
             </span>
-            <span className={`scan-phase-badge ${isAnalysis ? 'scan-phase-badge--analysis' : 'scan-phase-badge--other'}`}>
+            <span className={`scan-phase-badge ${isTrackPhase ? 'scan-phase-badge--analysis' : 'scan-phase-badge--other'}`}>
               {scanPhase}
             </span>
           </div>
 
           {isMetaOrAnalysis ? (
             <div className="scan-progress-row">
-              <span>{scannedFiles} / {totalFiles} {isAnalysis ? 'tracks' : 'files'}</span>
+              <span>{scannedFiles} / {totalFiles} {isTrackPhase ? 'tracks' : 'files'}</span>
               <span>{activeWorkers} workers</span>
             </div>
           ) : (
@@ -63,7 +65,7 @@ export const GlobalScanningIndicator: React.FC<GlobalScanningIndicatorProps> = (
       {isMetaOrAnalysis && activeFiles.length > 0 && (
         <div className="scan-active-files">
           <div className="scan-active-files-heading">
-            {isAnalysis ? 'Currently Analyzing:' : 'Currently Processing:'}
+            {isLoudness ? 'Currently Measuring:' : isAnalysis ? 'Currently Analyzing:' : 'Currently Processing:'}
           </div>
           <ul className="scan-active-files-list">
             {activeFiles.slice(0, 10).map((file, i) => (

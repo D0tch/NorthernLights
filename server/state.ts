@@ -81,7 +81,7 @@ export function getSessionHistory(userId: string): string[] {
 // Scan status state (shared between library routes)
 export const scanStatus = {
   isScanning: false,
-  phase: 'idle' as 'idle' | 'walk' | 'metadata' | 'analysis',
+  phase: 'idle' as 'idle' | 'walk' | 'metadata' | 'analysis' | 'loudness',
   scannedFiles: 0,
   totalFiles: 0,
   activeFiles: [] as string[],
