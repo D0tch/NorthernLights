@@ -59,3 +59,18 @@ export function canBrowserPlayNative(format: string | null | undefined): boolean
     // APE, DSF, DSD, TAK, etc. — no native support
     return false;
 }
+
+/**
+ * Lossless MIME to cast a file *progressively* (raw bytes, platform player), or
+ * null if it isn't a Cast-native lossless container. Per the Cast SDK: FLAC
+ * (≤96/24) and WAV/LPCM play on every Cast audio device; ALAC is unsupported
+ * everywhere (→ null, falls back to AAC HLS). Format-string based so it works on
+ * existing rows without the `lossless` backfill (FLAC/WAV are inherently lossless).
+ */
+export function castLosslessMime(format: string | null | undefined): string | null {
+    if (!format) return null;
+    const f = format.toLowerCase();
+    if (f.includes('flac')) return 'audio/flac';
+    if (f.includes('wave') || f.includes('wav') || f.includes('riff') || f.includes('pcm')) return 'audio/wav';
+    return null;
+}

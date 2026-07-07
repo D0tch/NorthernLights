@@ -39,6 +39,7 @@ export interface TrackInfo {
   isCompilation?: boolean | number;
   bitrate?: number;
   format?: string;
+  lossless?: boolean; // authoritative flag from music-metadata (server tracks.lossless)
   
   artistId?: string;
   albumId?: string;

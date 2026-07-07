@@ -1,6 +1,7 @@
 import { playbackManager } from './PlaybackManager';
 import { usePlayerStore } from '../store';
 import { applyCastStreamingQualityToHlsUrl, applyStreamingQualityToHlsUrl } from './streaming';
+import { castLosslessMime } from './losslessCapability';
 import { createQueueEntryId, ensureQueueEntryIds } from './queue';
 import type { TrackInfo } from './fileSystem';
 declare const chrome: any;
@@ -1285,8 +1286,10 @@ export class CastManager {
         const includeArtwork = options?.includeArtwork ?? true;
         const includeDuration = options?.includeDuration ?? true;
         const compactHlsUrl = options?.compactHlsUrl ?? false;
-        const useHls = !!this.customAppId;
         const streamingQuality = usePlayerStore.getState().streamingQuality;
+        // Cast lossless (progressive FLAC/WAV) at Source quality; else AAC HLS. See castMedia.
+        const losslessMime = streamingQuality === 'source' ? castLosslessMime(track.format) : null;
+        const useHls = !!this.customAppId && !losslessMime;
         const effectiveHlsUrl = useHls
             ? applyCastStreamingQualityToHlsUrl(track.url || '', streamingQuality)
             : applyStreamingQualityToHlsUrl(track.url || '', streamingQuality);
@@ -1301,7 +1304,7 @@ export class CastManager {
                 mediaUrl = url.toString();
             } catch { /* ignore */ }
         }
-        const contentType = useHls ? 'application/vnd.apple.mpegurl' : inferContentType(mediaUrl, track.format);
+        const contentType = useHls ? 'application/vnd.apple.mpegurl' : (losslessMime || inferContentType(mediaUrl, track.format));
         const mediaInfo = new chrome.cast.media.MediaInfo(mediaUrl, contentType);
         mediaInfo.streamType = chrome.cast.media.StreamType.BUFFERED;
         if (useHls && chrome.cast.media.HlsSegmentFormat?.TS) {
@@ -1798,12 +1801,18 @@ export class CastManager {
         const castSession = this.castContext.getCurrentSession();
         if (!castSession) return;
 
+        const streamingQuality = usePlayerStore.getState().streamingQuality;
         const effectiveHlsUrl = this.customAppId
-            ? applyCastStreamingQualityToHlsUrl(hlsUrl, usePlayerStore.getState().streamingQuality)
-            : applyStreamingQualityToHlsUrl(hlsUrl, usePlayerStore.getState().streamingQuality);
+            ? applyCastStreamingQualityToHlsUrl(hlsUrl, streamingQuality)
+            : applyStreamingQualityToHlsUrl(hlsUrl, streamingQuality);
 
-        // Select URL based on mode: custom receiver → HLS, default → raw file
-        const useHls = !!(this.customAppId && effectiveHlsUrl);
+        // Cast lossless: when the user picks Source and the file is a Cast-native
+        // lossless container (FLAC/WAV), send the raw bytes progressively (audio/flac,
+        // audio/wav) instead of the AAC HLS transcode. ALAC/others → null → AAC HLS.
+        const losslessMime = streamingQuality === 'source' ? castLosslessMime(format) : null;
+
+        // Select URL: custom receiver → HLS, unless casting lossless; default → raw file.
+        const useHls = !!(this.customAppId && effectiveHlsUrl) && !losslessMime;
         let mediaUrl = useHls ? effectiveHlsUrl : (rawUrl || effectiveHlsUrl);
         const authToken = token || this.extractTokenFromUrl(mediaUrl);
 
@@ -1825,7 +1834,7 @@ export class CastManager {
             }
         } catch { /* ignore */ }
 
-        const contentType = useHls ? 'application/vnd.apple.mpegurl' : inferContentType(mediaUrl, format);
+        const contentType = useHls ? 'application/vnd.apple.mpegurl' : (losslessMime || inferContentType(mediaUrl, format));
         const mediaInfo = new chrome.cast.media.MediaInfo(mediaUrl, contentType);
         mediaInfo.streamType = chrome.cast.media.StreamType.BUFFERED;
         if (useHls && chrome.cast.media.HlsSegmentFormat?.TS) {
