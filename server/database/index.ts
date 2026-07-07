@@ -216,6 +216,24 @@ export async function initDB(): Promise<Pool> {
         UPDATE tracks SET decoded_path = decode(path, 'base64') WHERE decoded_path IS NULL AND path IS NOT NULL;
         CREATE INDEX IF NOT EXISTS tracks_decoded_path_idx ON tracks(decoded_path);
 
+        -- lossless: authoritative flag from music-metadata's format.lossless (set on
+        -- scan). NULL = unknown/not-yet-rescanned. Drives cast-lossless eligibility
+        -- fallbacks and the "Lossless" UI label (distinguishes ALAC from AAC in M4A).
+        DO $$
+        BEGIN
+          ALTER TABLE tracks ADD COLUMN IF NOT EXISTS lossless BOOLEAN;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+        -- Backfill unambiguous lossless containers by format string so existing
+        -- FLAC/WAV/AIFF rows get the flag without a rescan. M4A stays NULL (ALAC vs
+        -- AAC is indistinguishable from the container string) and converges on rescan.
+        UPDATE tracks SET lossless = TRUE
+          WHERE lossless IS NULL AND format IS NOT NULL
+            AND (format ILIKE '%flac%' OR format ILIKE '%wave%' OR format ILIKE '%wav%'
+              OR format ILIKE '%aiff%' OR format ILIKE '%aif%' OR format ILIKE '%monkey%'
+              OR format ILIKE '%wavpack%' OR format ILIKE '%dsd%' OR format ILIKE '%dsf%'
+              OR format ILIKE '%dff%');
+
         CREATE TABLE IF NOT EXISTS track_features (
           track_id TEXT REFERENCES tracks(id) ON DELETE CASCADE PRIMARY KEY,
           bpm NUMERIC,
@@ -1327,8 +1345,8 @@ export async function addTrack(track: any) {
   const sanitizeArray = (arr: any) => Array.isArray(arr) ? arr.map(sanitizeString) : arr;
 
   await db.query(`
-    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls, art_hash, file_mtime, file_size, decoded_path)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, decode($14, 'base64'))
+    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls, art_hash, file_mtime, file_size, decoded_path, lossless)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, decode($14, 'base64'), $33)
     ON CONFLICT (id) DO UPDATE SET
       title = EXCLUDED.title,
       artist = EXCLUDED.artist,
@@ -1363,7 +1381,9 @@ export async function addTrack(track: any) {
       art_hash = COALESCE(EXCLUDED.art_hash, tracks.art_hash),
       file_mtime = COALESCE(EXCLUDED.file_mtime, tracks.file_mtime),
       file_size = COALESCE(EXCLUDED.file_size, tracks.file_size),
-      decoded_path = EXCLUDED.decoded_path
+      decoded_path = EXCLUDED.decoded_path,
+      -- COALESCE so a null (unknown) never wipes a known lossless flag.
+      lossless = COALESCE(EXCLUDED.lossless, tracks.lossless)
     WHERE
       tracks.title IS DISTINCT FROM EXCLUDED.title OR
       tracks.artist IS DISTINCT FROM EXCLUDED.artist OR
@@ -1398,7 +1418,8 @@ export async function addTrack(track: any) {
       -- a re-tag (identical text metadata, new cover) still records the update.
       (EXCLUDED.art_hash IS NOT NULL AND tracks.art_hash IS DISTINCT FROM EXCLUDED.art_hash) OR
       (EXCLUDED.file_mtime IS NOT NULL AND tracks.file_mtime IS DISTINCT FROM EXCLUDED.file_mtime) OR
-      (EXCLUDED.file_size IS NOT NULL AND tracks.file_size IS DISTINCT FROM EXCLUDED.file_size)
+      (EXCLUDED.file_size IS NOT NULL AND tracks.file_size IS DISTINCT FROM EXCLUDED.file_size) OR
+      (EXCLUDED.lossless IS NOT NULL AND tracks.lossless IS DISTINCT FROM EXCLUDED.lossless)
   `, [
     id,
     sanitizeString(track.title) || path.basename(track.path),
@@ -1432,6 +1453,7 @@ export async function addTrack(track: any) {
     track.artHash ?? null,
     track.fileMtime ?? null,
     track.fileSize ?? null,
+    typeof track.lossless === 'boolean' ? track.lossless : null,
   ]);
 
   if (track.audioFeatures) {

@@ -469,6 +469,7 @@ async function processMetadataBatch(input: Array<Buffer | ScanItem>, concurrency
               isCompilation: metadata.isCompilation || false,
               bitrate: metadata.bitrate || null,
               format: metadata.format || null,
+              lossless: typeof metadata.lossless === 'boolean' ? metadata.lossless : null,
               artistId,
               albumId,
               genreId,

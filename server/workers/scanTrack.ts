@@ -410,6 +410,9 @@ process.stdin.on('data', async (chunk: string) => {
             isCompilation: metadata.common.compilation || false,
             bitrate: metadata.format.bitrate ? Math.round(metadata.format.bitrate) : null,
             format: metadata.format.container || metadata.format.codec || null,
+            // music-metadata computes this per-codec (distinguishes ALAC from AAC in M4A);
+            // authoritative lossless flag, used for cast-lossless eligibility + UI labels.
+            lossless: typeof metadata.format.lossless === 'boolean' ? metadata.format.lossless : null,
             isrc: metadata.common.isrc?.[0] || null,
             mbRecordingId: metadata.common.musicbrainz_recordingid || null,
             mbTrackId: metadata.common.musicbrainz_trackid || null,
