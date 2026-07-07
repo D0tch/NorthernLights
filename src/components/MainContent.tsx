@@ -2,6 +2,7 @@ import React from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { usePlayerStore } from '../store/index';
 import { usePlayerPlacement } from '../hooks/usePlayerPlacement';
+import { useScrollRestoration } from '../hooks/useScrollRestoration';
 import { AlbumDetail, ArtistDetail, PlaylistDetail, LibraryHome, Hub, Playlists } from '../utils/routePrefetch';
 
 const GenreDetail = React.lazy(() => import('./library/GenreDetail').then(module => ({ default: module.GenreDetail })));
@@ -51,10 +52,14 @@ export const MainContent: React.FC = () => {
   const playlist = usePlayerStore(state => state.playlist);
   const [playerPlacement] = usePlayerPlacement();
   const [folderPathInput, setFolderPathInput] = React.useState('');
+  // The single scroll viewport shared by every routed page (and the virtualized
+  // grids). Restore its position on back/forward, reset to top on fresh nav.
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  useScrollRestoration(scrollRef);
 
   return (
     <div className="flex-1 flex overflow-hidden">
-      <div className={`flex-1 overflow-y-auto ${
+      <div ref={scrollRef} className={`flex-1 overflow-y-auto ${
         playlist.length > 0
           ? playerPlacement === 'dock'
             ? 'pb-32 md:pb-24'
