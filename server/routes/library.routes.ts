@@ -1004,16 +1004,20 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
       console.log(`[Scanner] Analysis phase complete: ${tracksNeedingAnalysis.length} track(s) analyzed`);
     }
 
-    // ── Loudness (EBU R128) — after features so two full-decode passes don't contend ──
-    const tracksNeedingLoudness = await getTracksWithoutLoudness();
-    if (tracksNeedingLoudness.length > 0) {
-      scanStatus.phase = 'loudness';
-      scanStatus.totalFiles = tracksNeedingLoudness.length;
-      scanStatus.scannedFiles = 0;
-      scanStatus.currentFile = '';
-      broadcastScanStatus(true);
-      await processLoudnessBatch(tracksNeedingLoudness, await getAnalysisConcurrency());
-      console.log(`[Scanner] Loudness phase complete: ${tracksNeedingLoudness.length} track(s) measured`);
+    // ── Loudness (EBU R128) — after features so two full-decode passes don't contend.
+    // Skipped in 'lazy' mode (tracks are measured on play instead). ──
+    const loudnessMode = (await getSystemSetting('loudnessComputeMode')) || 'both';
+    if (loudnessMode === 'full' || loudnessMode === 'both') {
+      const tracksNeedingLoudness = await getTracksWithoutLoudness();
+      if (tracksNeedingLoudness.length > 0) {
+        scanStatus.phase = 'loudness';
+        scanStatus.totalFiles = tracksNeedingLoudness.length;
+        scanStatus.scannedFiles = 0;
+        scanStatus.currentFile = '';
+        broadcastScanStatus(true);
+        await processLoudnessBatch(tracksNeedingLoudness, await getAnalysisConcurrency());
+        console.log(`[Scanner] Loudness phase complete: ${tracksNeedingLoudness.length} track(s) measured`);
+      }
     }
   }
 

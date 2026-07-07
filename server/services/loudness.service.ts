@@ -1,5 +1,5 @@
 import { spawn } from 'child_process';
-import { initDB, setTrackLoudness, getUserSetting } from '../database';
+import { initDB, setTrackLoudness, getUserSetting, getSystemSetting } from '../database';
 import { isPathAllowed } from '../state';
 
 // ─── Loudness measurement (EBU R128 via ffmpeg) ───────────────────────
@@ -105,14 +105,18 @@ export function fireLoudnessMeasurement(trackId: string, fsPath: string): void {
 }
 
 /**
- * Gate the lazy playback trigger on the user's opt-in. Loudness is intrinsic,
- * shared track data, so a single enabled user warms the cache for everyone; a
- * user who hasn't turned normalization on triggers zero ffmpeg from playback.
+ * Gate the lazy playback trigger on (a) the system compute mode and (b) the
+ * user's opt-in. Loudness is intrinsic, shared track data, so a single enabled
+ * user warms the cache for everyone; a user who hasn't turned normalization on
+ * triggers zero ffmpeg from playback. When the mode is 'full', on-play
+ * measurement is off entirely (the library is measured by scan/manual backfill).
  * (Explicit library backfill is operator-driven and bypasses this gate.)
  */
 export async function maybeMeasureLoudnessForUser(userId: string | undefined, trackId: string, fsPath: string): Promise<void> {
   if (!userId || !trackId || !fsPath) return;
   try {
+    // Default (unset) → 'both', so lazy is allowed unless the admin picked 'full'.
+    if ((await getSystemSetting('loudnessComputeMode')) === 'full') return;
     if ((await getUserSetting(userId, 'loudnessNormEnabled')) !== true) return;
   } catch {
     return; // if we can't confirm the user wants it, do nothing

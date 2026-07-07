@@ -70,6 +70,7 @@ const defaultSystemPlaylistConfig = Object.fromEntries(
 export const SystemTab: React.FC = () => {
     const audioAnalysisCpu = usePlayerStore(state => state.audioAnalysisCpu);
     const scannerConcurrency = usePlayerStore(state => state.scannerConcurrency);
+    const loudnessComputeMode = usePlayerStore(state => state.loudnessComputeMode);
     const hubGenerationSchedule = usePlayerStore(state => state.hubGenerationSchedule);
     const systemPlaylistConfig = usePlayerStore(state => state.systemPlaylistConfig);
     const hlsLoggingEnabled = usePlayerStore(state => state.hlsLoggingEnabled);
@@ -236,6 +237,20 @@ export const SystemTab: React.FC = () => {
                             <option value="NVMe">Premium NVMe (32 processes)</option>
                         </select>
                         <p className="text-xs text-[var(--color-text-muted)] mt-1.5">Controls how many files are scanned simultaneously for metadata. Higher values require faster disk I/O.</p>
+                    </div>
+
+                    <div>
+                        <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Loudness Computation</label>
+                        <select
+                            value={loudnessComputeMode}
+                            onChange={e => setSettings({ loudnessComputeMode: e.target.value as 'lazy' | 'full' | 'both' })}
+                            className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
+                        >
+                            <option value="lazy">Lazy — measure tracks only as they're played</option>
+                            <option value="full">Full — backfill the whole library after each scan</option>
+                            <option value="both">Both — backfill after scans and measure on play</option>
+                        </select>
+                        <p className="text-xs text-[var(--color-text-muted)] mt-1.5">When and how EBU R128 loudness is computed for volume normalization. After the initial run, "Full" only measures newly added tracks. The "Measure Loudness" button in Library settings always runs regardless of this setting.</p>
                     </div>
                 </div>
             )}

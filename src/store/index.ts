@@ -553,6 +553,9 @@ export interface PlayerState {
   llmPlaylistCount: number;
   audioAnalysisCpu: string;
   scannerConcurrency: string;
+  // Loudness computation strategy (system-wide): 'lazy' measures on play only,
+  // 'full' backfills the library after a scan, 'both' does both.
+  loudnessComputeMode: 'lazy' | 'full' | 'both';
   hubGenerationSchedule: string;
   systemPlaylistConfig: Record<string, boolean>;
   hlsLoggingEnabled: boolean;
@@ -1122,6 +1125,7 @@ export const usePlayerStore = create<PlayerState>()(
         llmPlaylistCount: 3,
         audioAnalysisCpu: 'Balanced',
         scannerConcurrency: 'SSD',
+        loudnessComputeMode: 'both' as 'lazy' | 'full' | 'both',
         hubGenerationSchedule: 'Daily',
         systemPlaylistConfig: { ...defaultSystemPlaylistConfig },
         hlsLoggingEnabled: false,
@@ -1367,6 +1371,7 @@ export const usePlayerStore = create<PlayerState>()(
                 llmPlaylistCount: data.llmPlaylistCount !== undefined ? data.llmPlaylistCount : 3,
                 audioAnalysisCpu: data.audioAnalysisCpu || 'Balanced',
                 scannerConcurrency: data.scannerConcurrency || 'SSD',
+                loudnessComputeMode: (data.loudnessComputeMode === 'lazy' || data.loudnessComputeMode === 'full') ? data.loudnessComputeMode : 'both',
                 hubGenerationSchedule: normalizeHubGenerationSchedule(data.hubGenerationSchedule),
                 systemPlaylistConfig: normalizeSystemPlaylistConfig(data.systemPlaylistConfig),
                 hlsLoggingEnabled: data.hlsLoggingEnabled === true,
@@ -1462,6 +1467,7 @@ export const usePlayerStore = create<PlayerState>()(
                 llmPlaylistCount: state.llmPlaylistCount,
                 audioAnalysisCpu: state.audioAnalysisCpu,
                 scannerConcurrency: state.scannerConcurrency,
+                loudnessComputeMode: state.loudnessComputeMode,
                 hubGenerationSchedule: state.hubGenerationSchedule,
                 systemPlaylistConfig: state.systemPlaylistConfig,
                 hlsLoggingEnabled: state.hlsLoggingEnabled,
