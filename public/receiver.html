@@ -1349,10 +1349,18 @@
               }
             }
 
+            // Empty or mpegurl contentType => HLS (forced AAC/TS). A progressive
+            // lossless load (audio/flac, audio/wav) sets a real audio MIME and must
+            // pass straight to the platform player — don't rewrite codec or format.
+            var isHls = !media.contentType || media.contentType.indexOf('mpegurl') >= 0;
             if (media.contentId) {
               try {
                 var urlObj = new URL(media.contentId, window.location.href);
-                urlObj.searchParams.set('codec', FORCED_CAST_CODEC);
+                if (isHls) {
+                  urlObj.searchParams.set('codec', FORCED_CAST_CODEC);
+                }
+                // Token must ride in the URL: the platform <audio> element fetches
+                // contentId directly (Shaka request handlers don't apply to progressive).
                 if (currentAuthToken && !urlObj.searchParams.has('token')) {
                   urlObj.searchParams.set('token', currentAuthToken);
                 }
@@ -1372,7 +1380,7 @@
           if (loadRequestData.media) {
             normalizeMedia(loadRequestData.media);
             pendingMediaInfo = loadRequestData.media;
-            logAndPost('ok', LOG_TAG, 'Prepared HLS URL for forced AAC playback');
+            logAndPost('ok', LOG_TAG, 'Prepared media for playback');
             logAndPost('ok', LOG_TAG, 'LOAD contentId: ' + safeLogValue(loadRequestData.media.contentId));
             logAndPost('ok', LOG_TAG, 'LOAD contentType: ' + loadRequestData.media.contentType);
           }

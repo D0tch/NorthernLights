@@ -38,11 +38,15 @@ function formatDuration(totalSeconds: number): string {
     return `${m} min`;
 }
 
-function formatQuality(format: string | undefined, bitrate: number | undefined): string | null {
+function formatQuality(format: string | undefined, bitrate: number | undefined, lossless?: boolean): string | null {
     if (!format) return null;
     const fmt = format.toUpperCase();
-    const lossless = ['FLAC', 'ALAC', 'WAV', 'AIFF', 'APE', 'WV'];
-    if (lossless.includes(fmt)) return `${fmt} · Lossless`;
+    // Prefer the authoritative flag (correctly identifies ALAC, whose container
+    // string is just "M4A/…"); fall back to the format-name heuristic when unknown
+    // (null/undefined — e.g. rows not yet rescanned/backfilled).
+    const isLossless = lossless === true
+        || (lossless == null && ['FLAC', 'ALAC', 'WAV', 'AIFF', 'APE', 'WV'].includes(fmt));
+    if (isLossless) return `${fmt} · Lossless`;
     if (bitrate && bitrate > 0) return `${fmt} · ${Math.round(bitrate / 1000)}kbps`;
     return fmt;
 }
@@ -792,7 +796,9 @@ export const AlbumDetail: React.FC = () => {
         if (!dominantFormat && counts.size > 0) {
             dominantFormat = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
         }
-        return dominantFormat ? formatQuality(dominantFormat, maxBitrate) : null;
+        // Authoritative flag wins (catches ALAC, stored as an "M4A/…" format string).
+        const anyLossless = sortedTracks.some((t) => t.lossless === true);
+        return dominantFormat ? formatQuality(dominantFormat, maxBitrate, anyLossless ? true : undefined) : null;
     }, [sortedTracks]);
 
     const allGenres = useMemo(() => {
