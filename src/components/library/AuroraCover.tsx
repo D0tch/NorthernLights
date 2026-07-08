@@ -31,6 +31,21 @@ function hashSeed(seed: string): number {
   return h >>> 0;
 }
 
+// mulberry32 — a tiny seeded PRNG so every cover's geometry is unique yet
+// fully deterministic (same playlist → same cover, forever). Math.random is
+// deliberately never used here.
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+const lerp = (rnd: () => number, min: number, max: number) => min + rnd() * (max - min);
+
 /** Deterministic bucket pick for a seed — exported for tests and callers. */
 export function auroraSeedVariant(seed: string, buckets: number): number {
   if (buckets <= 0) return 0;
@@ -85,29 +100,79 @@ const WAVE_PATHS = [
   'M0 128 C 28 112, 66 142, 104 126 C 142 110, 166 104, 200 122 L 200 200 L 0 200 Z',
 ];
 
-// ─── Favourites: aurora curtains ───────────────────────────────────────
-// Each curtain is a gently swaying full-height band; the vertical gradient does
-// the fading so the path stays simple. Hand-tuned layout tuples.
-interface Curtain { x: number; w: number; sway: number }
-const CURTAIN_LAYOUTS: Curtain[][] = [
-  [{ x: 34, w: 26, sway: 10 }, { x: 92, w: 34, sway: -12 }, { x: 150, w: 22, sway: 8 }],
-  [{ x: 22, w: 30, sway: -10 }, { x: 78, w: 24, sway: 12 }, { x: 138, w: 36, sway: -8 }],
-  [{ x: 48, w: 36, sway: 12 }, { x: 118, w: 26, sway: -14 }, { x: 164, w: 20, sway: 6 }],
-];
+// ─── Favourites: aurora curtains (generated) ───────────────────────────
+// 2–4 gently swaying full-height bands; the vertical gradient does the fading
+// so the path stays simple. Positions/widths/sway/peak all seeded per cover.
+interface Curtain { x: number; w: number; sway: number; peak: number; peakAt: number }
+
+function genCurtains(rnd: () => number): Curtain[] {
+  const count = 2 + Math.floor(rnd() * 3); // 2–4
+  const slot = 200 / count;
+  return Array.from({ length: count }, (_, i) => {
+    const w = lerp(rnd, 18, 40);
+    const x = slot * i + lerp(rnd, 4, Math.max(8, slot - w - 4));
+    const sway = (rnd() < 0.5 ? -1 : 1) * lerp(rnd, 6, 16);
+    return { x, w, sway, peak: lerp(rnd, 0.38, 0.6), peakAt: lerp(rnd, 0.2, 0.45) };
+  });
+}
 
 function curtainPath({ x, w, sway }: Curtain): string {
   const r = x + w;
   return `M${x} 0 C ${x + sway} 60, ${x - sway} 130, ${x} 200 L ${r} 200 C ${r - sway} 130, ${r + sway} 60, ${r} 0 Z`;
 }
 
-// ─── Rediscover: echo arcs ─────────────────────────────────────────────
-// A low glow with concentric rings radiating out — light returning. Two
-// hand-tuned origins (flip covers the mirrored pair).
-const ECHO_ORIGINS = [
-  { cx: 58, cy: 148 },
-  { cx: 74, cy: 132 },
+// ─── Rediscover: echo arcs (generated) ─────────────────────────────────
+// A glow with 1–5 concentric rings radiating out — light returning. Origin,
+// ring count, spacing, stroke widths and opacities all seeded per cover.
+// Fewer rings → thicker bands: 1–2 rings target the decade ribbon's 38–58u
+// scale, and each extra ring steps the range down toward fine lines.
+const RING_WIDTH_RANGES: Array<[number, number]> = [
+  [38, 58], // 1 ring
+  [18, 32], // 2 rings
+  [8, 16],  // 3 rings
+  [4, 9],   // 4 rings
+  [1.6, 4], // 5 rings
 ];
-const ECHO_RADII = [26, 52, 82, 116];
+
+interface EchoRing { r: number; sw: number; op: number }
+
+function genEcho(rnd: () => number): { cx: number; cy: number; glowR: number; rings: EchoRing[] } {
+  const cx = lerp(rnd, 48, 152);
+  const cy = lerp(rnd, 66, 152);
+  const count = 1 + Math.floor(rnd() * 5); // 1–5
+  const [wMin, wMax] = RING_WIDTH_RANGES[count - 1];
+  const rings: EchoRing[] = [];
+  // Track the outer edge of the previous ring so fat bands never overlap.
+  let edge = lerp(rnd, 10, 26);
+  for (let i = 0; i < count; i++) {
+    const sw = lerp(rnd, wMin, wMax);
+    const r = edge + sw / 2;
+    rings.push({ r, sw, op: Math.max(0.1, lerp(rnd, 0.34, 0.5) - i * 0.07) });
+    edge = r + sw / 2 + lerp(rnd, 10, 24);
+  }
+  return { cx, cy, glowR: lerp(rnd, 48, 78), rings };
+}
+
+// ─── Decade: aurora ribbon (generated) ─────────────────────────────────
+// The sweeping band's waveform and thickness are seeded per cover; thickness
+// never drops below the original hand-tuned 38 units so the ribbon stays
+// substantial. The numeral stays fixed and readable.
+function genRibbon(rnd: () => number): { main: string; cross: string } {
+  const t = lerp(rnd, 38, 58);
+  const y0 = lerp(rnd, 118, 168);           // left anchor
+  const y1 = lerp(rnd, 72, 126);            // right anchor
+  const c1y = y0 - lerp(rnd, 28, 66);       // first control: rise
+  const c2y = y1 + lerp(rnd, 30, 84);       // second control: dip
+  const main = `M-10 ${y0} C 44 ${c1y}, 118 ${c2y}, 210 ${y1} L 210 ${y1 + t} C 118 ${c2y + t}, 44 ${c1y + t}, -10 ${y0 + t} Z`;
+  // Thin counter-band recrossing the glyph at low opacity.
+  const ct = lerp(rnd, 12, 20);
+  const cy0 = lerp(rnd, 100, 128);
+  const cy1 = lerp(rnd, 112, 146);
+  const cc1 = cy0 + lerp(rnd, 24, 48);
+  const cc2 = cy1 - lerp(rnd, 28, 52);
+  const cross = `M-10 ${cy0} C 52 ${cc1}, 128 ${cc2}, 210 ${cy1} L 210 ${cy1 + ct} C 128 ${cc2 + ct}, 52 ${cc1 + ct}, -10 ${cy0 + ct} Z`;
+  return { main, cross };
+}
 
 interface AuroraCoverProps {
   variant: AuroraCoverVariant;
@@ -161,7 +226,7 @@ export const AuroraCover: React.FC<AuroraCoverProps> = ({ variant, seed, title, 
     const p = (auroraSeedVariant(seed, 2) + 1) as 1 | 2;
     const tintA = `var(--aurora-cover-disc-${p}a)`;
     const tintB = `var(--aurora-cover-disc-${p}b)`;
-    const curtains = CURTAIN_LAYOUTS[(hash >>> 4) % CURTAIN_LAYOUTS.length];
+    const curtains = genCurtains(mulberry32(hash));
     svgBody = (
       <>
         <defs>
@@ -169,11 +234,11 @@ export const AuroraCover: React.FC<AuroraCoverProps> = ({ variant, seed, title, 
             <stop offset="0" stopColor="var(--aurora-cover-night-a)" />
             <stop offset="1" stopColor="var(--aurora-cover-night-b)" />
           </linearGradient>
-          {curtains.map((_, i) => (
+          {curtains.map((c, i) => (
             <linearGradient key={i} id={`${uid}-c${i}`} x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor={i === 1 ? tintB : tintA} stopOpacity="0.08" />
-              <stop offset="0.3" stopColor={i === 1 ? tintB : tintA} stopOpacity="0.5" />
-              <stop offset="1" stopColor={i === 1 ? tintB : tintA} stopOpacity="0" />
+              <stop offset="0" stopColor={i % 2 === 1 ? tintB : tintA} stopOpacity="0.08" />
+              <stop offset={c.peakAt} stopColor={i % 2 === 1 ? tintB : tintA} stopOpacity={c.peak} />
+              <stop offset="1" stopColor={i % 2 === 1 ? tintB : tintA} stopOpacity="0" />
             </linearGradient>
           ))}
         </defs>
@@ -188,7 +253,7 @@ export const AuroraCover: React.FC<AuroraCoverProps> = ({ variant, seed, title, 
     const p = (auroraSeedVariant(seed, 2) + 3) as 3 | 4;
     const tintA = `var(--aurora-cover-disc-${p}a)`;
     const tintB = `var(--aurora-cover-disc-${p}b)`;
-    const { cx, cy } = ECHO_ORIGINS[(hash >>> 4) % ECHO_ORIGINS.length];
+    const echo = genEcho(mulberry32(hash));
     svgBody = (
       <>
         <defs>
@@ -203,17 +268,17 @@ export const AuroraCover: React.FC<AuroraCoverProps> = ({ variant, seed, title, 
           </radialGradient>
         </defs>
         <rect width="200" height="200" fill={`url(#${uid}-night)`} />
-        <circle cx={cx} cy={cy} r="64" fill={`url(#${uid}-glow)`} />
-        {ECHO_RADII.map((r, i) => (
+        <circle cx={echo.cx} cy={echo.cy} r={echo.glowR} fill={`url(#${uid}-glow)`} />
+        {echo.rings.map((ring, i) => (
           <circle
-            key={r}
-            cx={cx}
-            cy={cy}
-            r={r}
+            key={i}
+            cx={echo.cx}
+            cy={echo.cy}
+            r={ring.r}
             fill="none"
             stroke={i % 2 === 0 ? tintA : tintB}
-            strokeWidth={2.5 - i * 0.4}
-            opacity={0.42 - i * 0.09}
+            strokeWidth={ring.sw}
+            opacity={ring.op}
           />
         ))}
       </>
@@ -225,6 +290,7 @@ export const AuroraCover: React.FC<AuroraCoverProps> = ({ variant, seed, title, 
     const p = (auroraSeedVariant(seed, 4) + 1) as 1 | 2 | 3 | 4;
     const tintA = `var(--aurora-cover-disc-${p}a)`;
     const tintB = `var(--aurora-cover-disc-${p}b)`;
+    const ribbon = genRibbon(mulberry32(hash));
     svgBody = (
       <>
         <defs>
@@ -238,10 +304,7 @@ export const AuroraCover: React.FC<AuroraCoverProps> = ({ variant, seed, title, 
           </linearGradient>
         </defs>
         <rect width="200" height="200" fill={`url(#${uid}-night)`} />
-        <path
-          d="M-10 152 C 44 96, 118 176, 210 84 L 210 122 C 118 214, 44 134, -10 192 Z"
-          fill={`url(#${uid}-ribbon)`}
-        />
+        <path d={ribbon.main} fill={`url(#${uid}-ribbon)`} />
         {label && (
           <text
             x="100"
@@ -256,11 +319,7 @@ export const AuroraCover: React.FC<AuroraCoverProps> = ({ variant, seed, title, 
             {label}
           </text>
         )}
-        <path
-          d="M-10 112 C 52 150, 128 84, 210 128 L 210 142 C 128 100, 52 166, -10 128 Z"
-          fill={tintB}
-          opacity="0.16"
-        />
+        <path d={ribbon.cross} fill={tintB} opacity="0.16" />
       </>
     );
   }
