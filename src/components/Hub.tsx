@@ -6,7 +6,7 @@ import type { TrackInfo } from '../utils/fileSystem';
 import type { Playlist, LastOpenedAlbum } from '../store';
 import { useDominantColor } from '../hooks/useDominantColor';
 import { buildRolledCoverGradient } from '../utils/coverGradient';
-import { AuroraCover, wrappedCoverLabel } from './library/AuroraCover';
+import { AuroraCover, wrappedCoverLabel, systemGenreCoverLabel, systemDecadeCoverLabel } from './library/AuroraCover';
 import { LiveConcertsHubSection } from './LiveConcertsHubSection';
 import { HorizontalScrollRail } from './HorizontalScrollRail';
 import { NowPlayingBadge } from './now-playing/NowPlayingBadge';
@@ -574,18 +574,6 @@ function getDaylistCover(): { gradient: string; Icon: React.FC<any> } {
   return { gradient: 'var(--gradient-daylist-night)', Icon: Moon };
 }
 
-function getSystemGenreCoverLabel(title: string): string {
-  return title
-    .replace(/\s+(Heavy Rotation|Rediscovery)$/i, '')
-    .trim();
-}
-
-function getSystemDecadeCoverLabel(title: string): string {
-  return title
-    .replace(/\s+Mix$/i, '')
-    .trim();
-}
-
 interface UniqueCardProps {
   kind: UniqueCardKind;
   title: string;
@@ -648,13 +636,13 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
     );
     badgeLabel = 'radio';
   } else if (kind === 'genre-most-played') {
-    coverContent = <AuroraCover variant="discover" seed={title} label={getSystemGenreCoverLabel(title)} />;
+    coverContent = <AuroraCover variant="favourites" seed={title} label={systemGenreCoverLabel(title)} />;
     badgeLabel = 'most played';
   } else if (kind === 'genre-rediscovery') {
-    coverContent = <AuroraCover variant="discover" seed={title} label={getSystemGenreCoverLabel(title)} />;
+    coverContent = <AuroraCover variant="rediscover" seed={title} label={systemGenreCoverLabel(title)} />;
     badgeLabel = 'rediscover';
   } else if (kind === 'decade') {
-    coverContent = <AuroraCover variant="discover" seed={title} label={getSystemDecadeCoverLabel(title)} />;
+    coverContent = <AuroraCover variant="decade" seed={title} label={systemDecadeCoverLabel(title)} />;
     badgeLabel = 'decade';
   } else if (kind === 'wrapped') {
     coverContent = (
@@ -662,7 +650,7 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
     );
     badgeLabel = 'wrapped';
   } else {
-    coverContent = <AuroraCover variant="discover" seed={title} label={getSystemDecadeCoverLabel(title)} />;
+    coverContent = <AuroraCover variant="decade" seed={title} label={systemDecadeCoverLabel(title)} />;
     badgeLabel = 'decade';
   }
 

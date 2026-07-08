@@ -135,11 +135,22 @@ function formatSystemGenreName(genre: string): string {
     .join(' ');
 }
 
-function formatDecadeLabel(decade: number): string {
-  if (!Number.isFinite(decade) || decade < 1950) {
-    return `${decade}s`;
+// Full-decade form for titles ("2010's"); the cover art derives its short
+// numeral ("10's") from this client-side.
+function formatDecadeTitleLabel(decade: number): string {
+  return `${decade}'s`;
+}
+
+// "With artists like Tiësto, Armin van Buuren, Delerium..." from the mix's own
+// (already relevance-ordered) tracks; falls back when too few distinct artists.
+function topArtistsBlurb(rows: any[], fallback: string): string {
+  const names: string[] = [];
+  for (const r of rows) {
+    const artist = String((r as any)?.artist || '').trim();
+    if (artist && !names.includes(artist)) names.push(artist);
+    if (names.length >= 3) break;
   }
-  return `${String(decade % 100).padStart(2, '0')}'s`;
+  return names.length >= 2 ? `With artists like ${names.join(', ')}...` : fallback;
 }
 
 function getEngineHubGenerationIntervalMs(schedule: string | null | undefined): number | null {
@@ -1824,8 +1835,8 @@ export async function getHubCollections(
       if (systemPlaylistConfig.genreHeavyRotation && mostPlayedRes.rows.length >= systemPlaylistMinTracks) {
         const playlist = await persistSystem(
           `genre-most-${genreSlug}`,
-          `${genreName} Heavy Rotation`,
-          `Your most-played ${genreName} tracks.`,
+          `Your ${genreName} favourites`,
+          topArtistsBlurb(mostPlayedRes.rows, `Your most-played ${genreName} tracks.`),
           mostPlayedRes.rows
         );
         if (playlist) engineHubs.push(playlist);
@@ -1854,8 +1865,8 @@ export async function getHubCollections(
       if (systemPlaylistConfig.genreRediscovery && rediscoveryRes.rows.length >= systemPlaylistMinTracks) {
         const playlist = await persistSystem(
           `genre-stale-${genreSlug}`,
-          `${genreName} Rediscovery`,
-          `Forgotten ${genreName} worth replaying.`,
+          `Rediscover ${genreName}`,
+          topArtistsBlurb(rediscoveryRes.rows, `Forgotten ${genreName} worth replaying.`),
           rediscoveryRes.rows
         );
         if (playlist) engineHubs.push(playlist);
@@ -1887,7 +1898,6 @@ export async function getHubCollections(
       .filter((decade: number) => Number.isFinite(decade));
 
     for (const decade of systemPlaylistConfig.decadeMixes ? decadeValues : []) {
-      const decadeLabel = formatDecadeLabel(decade);
       const decadeRes = await queryWithRetry(`
         SELECT t.*, COALESCE(ups.play_count, 0) AS play_count, ups.last_played_at AS user_last_played
         FROM tracks t
@@ -1900,8 +1910,8 @@ export async function getHubCollections(
       if (decadeRes.rows.length >= systemPlaylistMinTracks) {
         const playlist = await persistSystem(
           `decade-${decade}`,
-          `${decadeLabel} Mix`,
-          `A run through the ${decadeLabel}.`,
+          `The ${formatDecadeTitleLabel(decade)}`,
+          `A decade mix from the ${formatDecadeTitleLabel(decade)}.`,
           decadeRes.rows
         );
         if (playlist) engineHubs.push(playlist);
@@ -1952,7 +1962,6 @@ export async function getHubCollections(
         if (!Number.isFinite(decade) || !rawGenre || seenDecadeGenreSlugs.has(slug)) continue;
         seenDecadeGenreSlugs.add(slug);
 
-        const decadeLabel = formatDecadeLabel(decade);
         const genreName = formatSystemGenreName(rawGenre);
         const decadeGenreTracksRes = await queryWithRetry(`
           SELECT t.*, COALESCE(ups.play_count, 0) AS play_count, ups.last_played_at AS user_last_played
@@ -1968,8 +1977,8 @@ export async function getHubCollections(
         if (decadeGenreTracksRes.rows.length >= systemPlaylistMinTracks) {
           const playlist = await persistSystem(
             `decade-genre-${slug}`,
-            `${decadeLabel} ${genreName}`,
-            `${genreName} from the ${decadeLabel}.`,
+            `${genreName} from the ${formatDecadeTitleLabel(decade)}`,
+            `A decade mix with ${genreName} from the ${formatDecadeTitleLabel(decade)}.`,
             decadeGenreTracksRes.rows
           );
           if (playlist) engineHubs.push(playlist);

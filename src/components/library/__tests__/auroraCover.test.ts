@@ -1,4 +1,10 @@
-import { auroraSeedVariant, wrappedCoverPalette, wrappedCoverLabel } from '../AuroraCover';
+import {
+  auroraSeedVariant,
+  wrappedCoverPalette,
+  wrappedCoverLabel,
+  systemGenreCoverLabel,
+  systemDecadeCoverLabel,
+} from '../AuroraCover';
 
 describe('wrappedCoverPalette', () => {
   test('season titles map to their seasonal palette', () => {
@@ -27,6 +33,34 @@ describe('wrappedCoverLabel', () => {
   });
   test('empty/null → empty string', () => {
     expect(wrappedCoverLabel(null)).toBe('');
+  });
+});
+
+describe('systemGenreCoverLabel', () => {
+  test('new favourites titles → genre', () => {
+    expect(systemGenreCoverLabel('Your Trance favourites')).toBe('Trance');
+    expect(systemGenreCoverLabel('Your Hip-Hop favourites')).toBe('Hip-Hop');
+  });
+  test('new rediscover titles → genre', () => {
+    expect(systemGenreCoverLabel('Rediscover Trance')).toBe('Trance');
+  });
+  test('legacy titles (until playlists regenerate) → genre', () => {
+    expect(systemGenreCoverLabel('Trance Heavy Rotation')).toBe('Trance');
+    expect(systemGenreCoverLabel('Trance Rediscovery')).toBe('Trance');
+  });
+});
+
+describe('systemDecadeCoverLabel', () => {
+  test('new full-decade titles → short numeral', () => {
+    expect(systemDecadeCoverLabel("The 2010's")).toBe("10's");
+    expect(systemDecadeCoverLabel("Trance from the 1990's")).toBe("90's");
+  });
+  test('legacy short-decade titles pass through', () => {
+    expect(systemDecadeCoverLabel("90's Mix")).toBe("90's");
+    expect(systemDecadeCoverLabel("90's Pop")).toBe("90's");
+  });
+  test('unparseable falls back to a trimmed title', () => {
+    expect(systemDecadeCoverLabel('Oldies Mix')).toBe('Oldies');
   });
 });
 

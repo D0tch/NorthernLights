@@ -12,7 +12,7 @@ import {
   type PlaylistMenuTrigger,
 } from './PlaylistContextMenu';
 import { prefetchPlaylistDetail } from '../../utils/routePrefetch';
-import { AuroraCover, wrappedCoverLabel } from './AuroraCover';
+import { AuroraCover, wrappedCoverLabel, type AuroraCoverVariant } from './AuroraCover';
 import type { PlaylistHeroState } from '../../utils/heroState';
 import { HorizontalScrollRail } from '../HorizontalScrollRail';
 import CreatePlaylistModal from './CreatePlaylistModal';
@@ -29,7 +29,7 @@ const PlaylistCard: React.FC<{
   /** Hide the kebab menu for playlists the current user can't manage. */
   showMenu?: boolean;
   /** Render a procedural AuroraCover instead of the track-art collage. */
-  coverVariant?: 'wrapped' | 'discover';
+  coverVariant?: AuroraCoverVariant;
   /** Render a single full-bleed image (e.g. artist image for radios) instead of the collage. */
   coverImageUrl?: string;
 }> = ({ playlist, onOpen, onMenuOpen, onPlay, ownerName, showMenu = true, coverVariant, coverImageUrl }) => {
@@ -427,7 +427,7 @@ export const Playlists: React.FC = () => {
 
   const renderCard = (
     pl: Playlist,
-    opts?: { ownerName?: string; showMenu?: boolean; coverVariant?: 'wrapped' | 'discover'; coverImageUrl?: string }
+    opts?: { ownerName?: string; showMenu?: boolean; coverVariant?: AuroraCoverVariant; coverImageUrl?: string }
   ) => (
     <div key={pl.id ?? pl.title} className="shrink-0 snap-start w-[min(52vw,200px)] sm:w-[190px]">
       <PlaylistCard
@@ -446,7 +446,7 @@ export const Playlists: React.FC = () => {
   const renderRail = (
     title: string,
     items: Playlist[],
-    opts?: { subtitle?: string; discover?: boolean; coverVariant?: 'wrapped' | 'discover'; radios?: boolean }
+    opts?: { subtitle?: string; discover?: boolean; coverVariant?: AuroraCoverVariant; radios?: boolean }
   ) =>
     items.length > 0 ? (
       <PlaylistRail key={title} title={title} subtitle={opts?.subtitle}>
