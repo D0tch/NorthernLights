@@ -260,6 +260,22 @@ QUIC)** under *Network* in the dashboard — it's on by default for most zones �
 so the browser↔Cloudflare hop is multiplexed regardless of your origin's
 protocol.
 
+**Chromecast must be allowed through bot protection.** A Chromecast is a
+cookie-less client with a bot-looking user agent, and it fetches everything
+through Cloudflare: the receiver page (`/receiver.html` or `/cast-receiver`),
+stream audio, HLS segments, and artwork. If **Bot Fight Mode** or any JS
+challenge intercepts those requests, the device receives a challenge page
+instead of the receiver, and every cast launch times out with
+`SESSION_START_FAILED` — while the sender UI still discovers the device
+normally, which makes the failure look like a receiver bug. Allow the
+Chromecast through: disable Bot Fight Mode for the zone, or add a WAF
+exception that skips bot checks for the receiver and `/api/` paths.
+
+Related: Aurora's CSP locks inline scripts to known hashes, which also blocks
+the JS-detection beacon Cloudflare injects into HTML responses — so
+challenge-based bot scoring never completes for any client. Another reason to
+keep JS challenges off this host entirely.
+
 Then set:
 
 ```bash
@@ -347,3 +363,4 @@ Common issues:
 - Database unavailable: start or recreate the container from the setup/database screen, or check Podman/Docker permissions.
 - Analysis returns simulated features: check `.venv`, `essentia-tensorflow`, FFmpeg, and model download status.
 - Cast fails from another network: make sure the Chromecast can reach your HTTPS domain and any custom receiver origin is allowed.
+- Cast launches time out with `SESSION_START_FAILED` even though the device is discovered: if the domain is behind Cloudflare, allow the Chromecast through Bot Fight Mode / JS challenges — see [Behind Cloudflare](#behind-cloudflare).
