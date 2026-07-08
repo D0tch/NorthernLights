@@ -94,5 +94,28 @@ export function buildCoverMeshGradient(seed: string, palette: string[], fallback
     `radial-gradient(circle at ${x3}% ${y3}%, ${hexToRgba(c3, 0.70)} 0%, ${hexToRgba(c3, 0.30)} 28%, transparent 62%)`,
     `conic-gradient(from ${angle}deg at 50% 40%, ${hexToRgba(c4, 0.50)}, ${hexToRgba(c2, 0.42)}, ${hexToRgba(c1, 0.50)}, ${hexToRgba(c3, 0.46)}, ${hexToRgba(c4, 0.50)})`,
     `linear-gradient(${(angle + 90) % 360}deg, ${hexToRgba(c1, 0.55)}, ${hexToRgba(c4, 0.40)})`,
+    // Opaque base baked into every layer (formerly the now-playing shell's own
+    // background). Each stacked layer then fully covers the one beneath, so a
+    // track-to-track morph is pure opacity compositing on the GPU — nothing
+    // full-screen underneath has to repaint mid-fade.
+    `radial-gradient(circle at 18% 12%, ${hexToRgba(colors[0], 0.26)}, transparent 22rem)`,
+    `radial-gradient(circle at 82% 18%, color-mix(in srgb, var(--aurora-teal) 15%, transparent), transparent 20rem)`,
+    `radial-gradient(circle at 50% 5%, color-mix(in srgb, var(--color-primary) 12%, transparent), transparent 32rem)`,
+    'var(--color-bg-primary)',
+  ].join(', ');
+}
+
+// Bottom scrim backing the now-playing controls: transparent up top so the
+// mesh shows through (tinted by the cover color), ramping to fully-opaque page
+// background by 63% — above the video band's 75vh bottom edge — to mask that
+// edge. Built as a string so the sheet can cross-fade whole rasterized scrim
+// layers by opacity instead of transitioning the tint color, which would
+// repaint the full screen on every frame of the 2.5s morph.
+export function buildScrimGradient(tint: string): string {
+  return [
+    'linear-gradient(180deg, transparent 0%',
+    `color-mix(in srgb, color-mix(in srgb, var(--color-bg-primary) 46%, transparent) 50%, ${tint}) 45%`,
+    `color-mix(in srgb, var(--color-bg-primary) 60%, ${tint}) 63%`,
+    'var(--color-bg-primary) 100%)',
   ].join(', ');
 }

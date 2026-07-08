@@ -115,27 +115,81 @@ function getPalette(imageUrl: string, quality: number, crossOrigin: string): Pro
   return promise;
 }
 
+// Palette-extraction quality used for the mobile now-playing backdrop. The mini
+// player prefetches with the same value so the cache key matches and the sheet
+// mounts with its colors already resolved (no fallback→derived fade on open).
+export const NOW_PLAYING_PALETTE_QUALITY = 12;
+
+// Warm the palette cache ahead of need (e.g. from the always-mounted mini
+// player, so opening now-playing paints the cover colors on its first frame).
+export function prefetchPalette(imageUrl: string, options?: { crossOrigin?: string; quality?: number }): void {
+  void getPalette(imageUrl, options?.quality ?? 10, options?.crossOrigin ?? 'Anonymous');
+}
+
+type DominantColorState = {
+  bgColor: string;
+  // One dominant color per track (cross-track, e.g. Hub tiles).
+  palette: string[];
+  // The multi-color palette of the primary cover (single image), for vibrant
+  // gradients built from one artwork (e.g. now-playing background).
+  colors: string[];
+};
+
+const EMPTY_COLOR_STATE: DominantColorState = { bgColor: FALLBACK_COLOR, palette: [], colors: [] };
+
+function deriveColorState(palettes: string[][]): DominantColorState {
+  const dominantPerTrack = Array.from(new Set(palettes.map(p => p[0]).filter(Boolean)));
+  return {
+    bgColor: dominantPerTrack[0] || FALLBACK_COLOR,
+    palette: dominantPerTrack,
+    colors: palettes[0] ?? [],
+  };
+}
+
+function sameColorState(a: DominantColorState, b: DominantColorState): boolean {
+  return a.bgColor === b.bgColor
+    && a.palette.join('|') === b.palette.join('|')
+    && a.colors.join('|') === b.colors.join('|');
+}
+
+// Every palette straight from the cache, or null if any is missing.
+function peekPalettes(artUrls: string[], quality: number, crossOrigin: string): string[][] | null {
+  if (artUrls.length === 0) return null;
+  const cached = artUrls.map(url => dominantColorCache.get(getCacheKey(url, quality, crossOrigin)));
+  return cached.every(Boolean) ? (cached as string[][]) : null;
+}
+
 export const useDominantColor = (tracks: TrackInfo[], options?: { crossOrigin?: string; quality?: number }) => {
   const artUrls = useMemo(
     () => Array.from(new Set(tracks.map(t => t.artUrl).filter(Boolean) as string[])).slice(0, 4),
     [tracks]
   );
   const primaryArt = artUrls[0] || '';
-  const [bgColor, setBgColor] = useState<string>(FALLBACK_COLOR);
-  // `palette` = one dominant color per track (cross-track, e.g. Hub tiles).
-  const [palette, setPalette] = useState<string[]>([]);
-  // `colors` = the multi-color palette of the primary cover (single image),
-  // for vibrant gradients built from one artwork (e.g. now-playing background).
-  const [colors, setColors] = useState<string[]>([]);
   const quality = options?.quality ?? 10;
   const crossOrigin = options?.crossOrigin ?? 'Anonymous';
   const paletteKey = artUrls.join('|');
 
+  // Derive synchronously whenever every palette is already cached (the common
+  // case — the mini player prefetches the current track's palette). A track
+  // change then updates the colors in the SAME render as the track itself, so
+  // downstream backdrops start ONE cross-fade instead of a second one a beat
+  // later, and a fresh mount (reopening the now-playing sheet) paints the real
+  // colors on its first frame instead of fading in from the fallback.
+  const resolved = useMemo(() => {
+    const cached = peekPalettes(artUrls, quality, crossOrigin);
+    return cached ? deriveColorState(cached) : null;
+    // artUrls is keyed by paletteKey.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [paletteKey, quality, crossOrigin]);
+
+  // Async fallback: the last extracted colors. Read only while the current
+  // urls aren't all cached yet — i.e. it keeps the PREVIOUS track's colors up
+  // while a cold cover extracts, then hands over to the cache-derived value.
+  const [state, setState] = useState<DominantColorState>(EMPTY_COLOR_STATE);
+
   useEffect(() => {
     if (!primaryArt) {
-      setBgColor(FALLBACK_COLOR);
-      setPalette([]);
-      setColors([]);
+      setState(prev => (sameColorState(prev, EMPTY_COLOR_STATE) ? prev : EMPTY_COLOR_STATE));
       return;
     }
 
@@ -143,14 +197,17 @@ export const useDominantColor = (tracks: TrackInfo[], options?: { crossOrigin?: 
     Promise.all(artUrls.map((url) => getPalette(url, quality, crossOrigin)))
       .then(palettes => {
         if (cancelled) return;
-        const dominantPerTrack = Array.from(new Set(palettes.map(p => p[0]).filter(Boolean)));
-        setBgColor(dominantPerTrack[0] || FALLBACK_COLOR);
-        setPalette(dominantPerTrack);
-        setColors(palettes[0] ?? []);
+        setState(prev => {
+          const next = deriveColorState(palettes);
+          // Bail on identical values (e.g. the cache-seeded initial state) so
+          // consumers' memos keep their identity and no cross-fade is kicked off.
+          return sameColorState(prev, next) ? prev : next;
+        });
       });
 
     return () => { cancelled = true; };
   }, [primaryArt, paletteKey, quality, crossOrigin]);
 
-  return { artUrls, primaryArt, bgColor, palette, colors };
+  const effective = resolved ?? state;
+  return { artUrls, primaryArt, bgColor: effective.bgColor, palette: effective.palette, colors: effective.colors };
 };

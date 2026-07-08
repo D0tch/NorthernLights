@@ -5699,9 +5699,14 @@ a:focus-visible > .genre-card .genre-card__label {
   animation: spin 0.8s linear infinite;
 }
 
-/* Registered so the cover colour can be *transitioned* — otherwise it snaps on
-   track change (base tint, scrim tint, art border, title shadow all jump) while
-   the mesh/ambient cross-fade smoothly. With this it morphs in step with them. */
+/* Registered so the cover colour can be *transitioned* — otherwise the small
+   art-tinted accents (art border, title shadow, chips, buttons) snap on track
+   change while the backdrops cross-fade smoothly. IMPORTANT: only small
+   elements may read this variable. The full-screen surfaces (shell base, mesh,
+   scrim) cross-fade stacked opaque layers by opacity instead — a custom
+   property transition animates on the main thread, and a screen-sized
+   color-mix gradient re-painting on every frame of the 2.5s morph is what made
+   real devices stutter and flicker. */
 @property --mobile-now-art-color {
   syntax: "<color>";
   inherits: true;
@@ -5718,11 +5723,8 @@ a:focus-visible > .genre-card .genre-card__label {
      and pops. Delay vs. playback is intentional — smoothness over immediacy. */
   --mnp-fade: 2500ms;
   --mnp-ease: var(--ease-in-out);
-  /* Colour tinting the scrim behind the controls. The cover's colour normally,
-     but neutral (the page background) while a video plays — see the video rule
-     below. */
-  --mnp-scrim-tint: var(--mobile-now-art-color);
-  /* Morph the cover colour over the same window as the backdrop cross-fades. */
+  /* Morph the accent tint over the same window as the backdrop cross-fades.
+     Only small elements read the variable, so per-frame repaints stay tiny. */
   transition: --mobile-now-art-color var(--mnp-fade) var(--mnp-ease);
   position: fixed;
   inset: 0;
@@ -5731,12 +5733,9 @@ a:focus-visible > .genre-card .genre-card__label {
   flex-direction: column;
   isolation: isolate;
   overflow: hidden;
-  background-color: var(--color-bg-primary);
-  background:
-    radial-gradient(circle at 18% 12%, color-mix(in srgb, var(--mobile-now-art-color) 26%, transparent), transparent 22rem),
-    radial-gradient(circle at 82% 18%, color-mix(in srgb, var(--aurora-teal) 15%, transparent), transparent 20rem),
-    radial-gradient(circle at 50% 5%, color-mix(in srgb, var(--color-primary) 12%, transparent), transparent 32rem),
-    var(--color-bg-primary);
+  /* Static. The tinted radial base lives inside each mesh layer (see
+     buildCoverMeshGradient), so per-track morphs never repaint this surface. */
+  background: var(--color-bg-primary);
   will-change: transform, opacity;
 }
 
@@ -5762,7 +5761,9 @@ a:focus-visible > .genre-card .genre-card__label {
   will-change: opacity;
 }
 
-/* One layer per palette. Opacity-only → GPU-composited, cheap. */
+/* One layer per palette, fully opaque (the tinted base is baked into the
+   gradient string) so the newcomer completely covers the old layer and the
+   cross-fade is opacity-only → GPU-composited, cheap. */
 .mobile-now-playing-mesh-layer {
   position: absolute;
   inset: 0;
@@ -5787,20 +5788,28 @@ a:focus-visible > .genre-card .genre-card__label {
 
 .mobile-now-playing-ambient-layer {
   position: absolute;
-  inset: 0;
-  inline-size: 100%;
-  block-size: 100%;
+  top: 0;
+  left: 0;
+  inline-size: 25%;
+  block-size: 25%;
   object-fit: cover;
-  /* Pre-blurred per layer so the cross-fade is plain opacity compositing of two
-     cached bitmaps — no per-frame re-rasterization of the blur. */
-  filter: blur(46px) saturate(1.3);
+  /* Rasterized at quarter resolution and scaled up 4x by the compositor: the
+     blur runs on a 16x-smaller surface (a huge win on phone GPUs — full-res
+     blur(46px) at 3x DPR was ~25MB of texture per layer) and upscaling an
+     already-blurred bitmap is invisible; blur(12px) at 25% ≈ blur(48px) at
+     full size. Pre-blurred per layer so the cross-fade is plain opacity
+     compositing of two cached bitmaps — no per-frame re-rasterization. */
+  transform: scale(4);
+  transform-origin: 0 0;
+  filter: blur(12px) saturate(1.3);
 }
 
 /* A layer added on a track change mounts on top at opacity 0 and fades in over
    the previous one. The first layer (sheet open) skips this so the background
-   doesn't lag behind the opening sheet. Shared by the mesh and ambient layers. */
+   doesn't lag behind the opening sheet. Shared by mesh, ambient and scrim. */
 .mobile-now-playing-mesh-layer--fade,
-.mobile-now-playing-ambient-layer--fade {
+.mobile-now-playing-ambient-layer--fade,
+.mobile-now-playing-scrim-layer--fade {
   will-change: opacity;
   animation: mobile-now-layer-in var(--mnp-fade) var(--mnp-ease) both;
 }
@@ -5873,36 +5882,29 @@ a:focus-visible > .genre-card .genre-card__label {
   opacity: 0.35;
 }
 
-/* While a video plays, drop the cover-colour tint from the scrim so the panel
-   behind the controls reads as a neutral page-background dark over the video. */
-.mobile-now-playing-shell[data-video="visible"] {
-  --mnp-scrim-tint: var(--color-bg-primary);
-}
-
-/* Single, PERMANENT scrim — deliberately not tied to video state. The dark
-   panel behind the controls must stay put across track changes, so the scrim
-   never fades in/out (and never cross-dissolves, which would dip through a
-   translucent midpoint); only the video/mesh/art behind it animate. Built on
-   --color-bg-primary so it adapts to light/dark (it's the near-black #030208 in
-   dark mode). FULLY transparent up top so the colour mesh shows through, tinting
-   through --mnp-scrim-tint and ramping to FULLY opaque by 63% — above the
-   video's 75vh (≈75%) bottom edge — to mask that edge and back the controls. */
-.mobile-now-playing-shell::after {
-  content: "";
+/* Single, PERMANENT scrim — the dark panel behind the controls must stay put
+   across track changes, so the scrim container never fades in/out. Its tint
+   (cover colour normally, neutral page background while a video plays) morphs
+   by cross-fading stacked layers: the newcomer fades in OVER the still-opaque
+   previous layer, so the panel never dips through a translucent midpoint —
+   and each layer is a one-off rasterized gradient (opacity-only animation)
+   instead of a full-screen repaint per frame. The gradient itself is built in
+   buildScrimGradient(): transparent up top so the colour mesh shows through,
+   fully opaque by 63% — above the video's 75vh (≈75%) bottom edge — to mask
+   that edge and back the controls. */
+.mobile-now-playing-scrim {
   position: absolute;
   inset: 0;
   z-index: 2;
   pointer-events: none;
-  background: linear-gradient(
-    180deg,
-    transparent 0%,
-    color-mix(in srgb, color-mix(in srgb, var(--color-bg-primary) 46%, transparent) 50%, var(--mnp-scrim-tint)) 45%,
-    color-mix(in srgb, var(--color-bg-primary) 60%, var(--mnp-scrim-tint)) 63%,
-    var(--color-bg-primary) 100%
-  );
 }
 
-.mobile-now-playing-shell > :not(.mobile-now-playing-ambient):not(.mobile-now-playing-mesh):not(.mobile-now-video):not(.mobile-now-bg-veil) {
+.mobile-now-playing-scrim-layer {
+  position: absolute;
+  inset: 0;
+}
+
+.mobile-now-playing-shell > :not(.mobile-now-playing-ambient):not(.mobile-now-playing-mesh):not(.mobile-now-video):not(.mobile-now-bg-veil):not(.mobile-now-playing-scrim) {
   position: relative;
   z-index: 3;
 }

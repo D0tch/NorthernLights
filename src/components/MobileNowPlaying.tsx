@@ -8,8 +8,8 @@ import { LyricsPanel } from './LyricsPanel';
 import { LoveButton } from './LoveButton';
 import { CastButton } from './cast/CastButton';
 import { IconNext, IconPause, IconPlay, IconPrev, IconRepeatAll, IconRepeatOne, IconShuffle } from './icons/PlayerIcons';
-import { useDominantColor } from '../hooks/useDominantColor';
-import { buildCoverMeshGradient } from '../utils/coverGradient';
+import { useDominantColor, NOW_PLAYING_PALETTE_QUALITY } from '../hooks/useDominantColor';
+import { buildCoverMeshGradient, buildScrimGradient } from '../utils/coverGradient';
 import { useTrackMusicVideo } from '../hooks/useTrackMusicVideo';
 import MobileNowPlayingVideo, { type VideoPhase } from './MobileNowPlayingVideo';
 
@@ -21,17 +21,23 @@ interface MobileNowPlayingProps {
 type CrossfadeLayer = { key: number; value: string; animate: boolean };
 
 // Stacked-layer cross-fade: when `value` changes, fade a new layer in over the
-// previous one so a backdrop morphs from track to track instead of hard-cutting.
+// previous ones so a backdrop morphs from track to track instead of hard-cutting.
 // The first layer shows instantly; `prune(key)` drops the covered layers once
 // the incoming one is fully faded in.
 //
-// Invariant: layers[0] is always fully opaque (the initial instant layer, or a
-// layer whose fade-in has completed). We keep it as the base and fade the
-// newcomer in over it — never dropping it until a new layer has fully faded in
-// to replace it (via prune). That's what stops the background flashing to
-// transparent: a skip re-derives `value` twice (track id, then async colour
-// extraction), and the old code's blunt cap could drop the opaque base while the
-// incoming layer was barely faded in, leaving nothing opaque for a moment.
+// Invariants that keep the backdrop from ever popping:
+// - layers[0] is always fully opaque (the initial instant layer, or a layer
+//   whose fade-in completed). It never leaves until a newer layer has fully
+//   faded in over it.
+// - A change mid-fade STACKS ([base, oldest-fading, newcomer] max) instead of
+//   discarding the fading layer — discarding hard-cut its partial opacity away
+//   (visible when skipping a track and straight back). When a fourth value
+//   lands, the NEWEST intermediate is the one replaced: it has barely faded in,
+//   while the oldest fading layer may be near-opaque.
+// - prune ignores keys that are no longer mounted: an animationend can race a
+//   value change within one React batch, and blindly filtering by key could
+//   strip the opaque base from under a barely-visible newcomer — the whole
+//   surface (e.g. the bottom scrim) blinked away, then slowly faded back.
 function useCrossfadeLayers(value: string | null | undefined) {
   const keyRef = useRef(0);
   const lastRef = useRef(value);
@@ -47,12 +53,20 @@ function useCrossfadeLayers(value: string | null | undefined) {
     setLayers((prev) => {
       // First layer ever (e.g. art arrives after mount) is an instant, opaque base.
       if (prev.length === 0) return [{ key, value, animate: false }];
-      // Keep the opaque base and fade the newcomer in over it, discarding any
-      // still-fading intermediate. Two layers max; the base never leaves a gap.
-      return [prev[0], { key, value, animate: true }];
+      // Opaque base and the oldest still-fading layer stay put (their animations
+      // keep running — same keys, so React preserves the elements); the newcomer
+      // fades in on top. Any newer intermediate (prev[2]) is the one replaced.
+      return [...prev.slice(0, 2), { key, value, animate: true }];
     });
   }, [value]);
-  const prune = (key: number) => setLayers((prev) => prev.filter((l) => l.key >= key));
+  const prune = (key: number) =>
+    setLayers((prev) => {
+      // Stale event for a layer that was replaced mid-fade — never prune by a
+      // key that isn't mounted, it could drop the opaque base under a
+      // just-mounted transparent newcomer.
+      if (!prev.some((l) => l.key === key)) return prev;
+      return prev.filter((l) => l.key >= key);
+    });
   return [layers, prune] as const;
 }
 
@@ -99,7 +113,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
   const currentTrack = currentIndex !== null ? playlist[currentIndex] : null;
   const trackIdentity = currentTrack?.queueEntryId || currentTrack?.id || currentTrack?.path || 'current-track';
   const colorSeedTracks = useMemo(() => currentTrack ? [currentTrack] : [], [currentTrack]);
-  const { bgColor, colors } = useDominantColor(colorSeedTracks, { quality: 12 });
+  const { bgColor, colors } = useDominantColor(colorSeedTracks, { quality: NOW_PLAYING_PALETTE_QUALITY });
   const meshGradient = useMemo(
     () => buildCoverMeshGradient(trackIdentity, colors, bgColor),
     [trackIdentity, colors, bgColor],
@@ -128,6 +142,15 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
   const [videoPhase, setVideoPhase] = useState<VideoPhase>('none');
   // New track → drop back to the cover until its video (if any) buffers in.
   useEffect(() => { setVideoPhase('none'); }, [trackIdentity]);
+
+  // The scrim behind the controls, tinted by the cover colour (neutral while a
+  // video plays). Cross-faded as whole rasterized layers — like the mesh — so
+  // the tint morph is opacity compositing, not a per-frame gradient repaint.
+  const scrimGradient = useMemo(
+    () => buildScrimGradient(videoPhase === 'visible' ? 'var(--color-bg-primary)' : bgColor),
+    [videoPhase, bgColor],
+  );
+  const [scrimLayers, pruneScrim] = useCrossfadeLayers(scrimGradient);
 
   useEffect(() => {
     const unsubscribe = castManager.addStateChangeListener((state) => {
@@ -179,9 +202,9 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
             key={layer.key}
             className={`mobile-now-playing-mesh-layer${layer.animate ? ' mobile-now-playing-mesh-layer--fade' : ''}`}
             style={{ background: layer.value }}
-            // Once a faded-in layer is fully opaque, drop everything beneath it —
-            // the mesh has translucent regions, so a lingering older layer would
-            // bleed through. At rest only the current palette remains.
+            // Once a faded-in layer is fully opaque, drop everything beneath it
+            // (each layer is opaque, so covered layers are invisible; pruning
+            // frees their compositor textures). Only the current palette remains.
             onAnimationEnd={() => pruneMesh(layer.key)}
           />
         ))}
@@ -213,6 +236,21 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
           <MobileNowPlayingVideo key={trackIdentity} videoId={videoId} onPhaseChange={setVideoPhase} />
         </div>
       )}
+
+      {/* Single, PERMANENT scrim backing the controls — the dark panel must
+          stay put across track changes. A tint change fades a new layer in OVER
+          the still-opaque previous one (never dipping through a translucent
+          midpoint), and each layer rasterizes once — only opacity animates. */}
+      <div className="mobile-now-playing-scrim" aria-hidden="true">
+        {scrimLayers.map((layer) => (
+          <div
+            key={layer.key}
+            className={`mobile-now-playing-scrim-layer${layer.animate ? ' mobile-now-playing-scrim-layer--fade' : ''}`}
+            style={{ background: layer.value }}
+            onAnimationEnd={() => pruneScrim(layer.key)}
+          />
+        ))}
+      </div>
 
       {/* Safe area top spacer */}
       <div style={{ height: 'var(--safe-area-top)' }} />

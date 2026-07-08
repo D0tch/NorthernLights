@@ -5,6 +5,7 @@ import { useSwipe } from '../hooks/useSwipe';
 import MobileNowPlaying from './MobileNowPlaying';
 import { CastButton } from './cast/CastButton';
 import { castManager } from '../utils/CastManager';
+import { prefetchPalette, NOW_PLAYING_PALETTE_QUALITY } from '../hooks/useDominantColor';
 import { IconNext, IconPause, IconPlay } from './icons/PlayerIcons';
 
 const MobileMiniPlayer = () => {
@@ -50,6 +51,15 @@ const MobileMiniPlayer = () => {
 
     return unsubscribe;
   }, []);
+
+  // Warm the cover-palette cache while the sheet is closed: the now-playing
+  // sheet seeds its colors synchronously from this cache on mount, so opening
+  // it paints the derived backdrop on the first frame instead of fading in
+  // from the defaults.
+  const currentArtUrl = currentTrack?.artUrl;
+  useEffect(() => {
+    if (currentArtUrl) prefetchPalette(currentArtUrl, { quality: NOW_PLAYING_PALETTE_QUALITY });
+  }, [currentArtUrl]);
 
   const handlePlayPause = (e: React.MouseEvent) => {
     e.stopPropagation();
