@@ -66,6 +66,41 @@
   --gradient-cover-decade-genre:      linear-gradient(135deg, #2f343f, #4f463c);
   --gradient-cover-wrapped:           linear-gradient(135deg, #4c1d95, #9333ea, #f59e0b);
 
+  /* Aurora procedural covers (AuroraCover.tsx) — theme-stable like all cover art.
+     Wrapped: sky (upper gradient) over field (wave-split lower gradient), seasonal.
+     Discover: night base with translucent aurora-curtain tints. Soft, matte stops —
+     chroma restrained toward the extremes so nothing reads neon. */
+  --aurora-cover-spring-sky-a:   #143a3c;
+  --aurora-cover-spring-sky-b:   #2d7a67;
+  --aurora-cover-spring-field-a: #3fae8b;
+  --aurora-cover-spring-field-b: #8fd7bd;
+  --aurora-cover-summer-sky-a:   #6d3a54;
+  --aurora-cover-summer-sky-b:   #d98a66;
+  --aurora-cover-summer-field-a: #e8a95c;
+  --aurora-cover-summer-field-b: #cf6272;
+  --aurora-cover-autumn-sky-a:   #3b2440;
+  --aurora-cover-autumn-sky-b:   #7a4460;
+  --aurora-cover-autumn-field-a: #b35b3e;
+  --aurora-cover-autumn-field-b: #d9925a;
+  --aurora-cover-winter-sky-a:   #131c3d;
+  --aurora-cover-winter-sky-b:   #2c4a7c;
+  --aurora-cover-winter-field-a: #3e6ea8;
+  --aurora-cover-winter-field-b: #9fc4de;
+  --aurora-cover-year-sky-a:     #241a4a;
+  --aurora-cover-year-sky-b:     #23446b;
+  --aurora-cover-year-field-a:   #1f8a70;
+  --aurora-cover-year-field-b:   #64d0a8;
+  --aurora-cover-night-a:        #10182b;
+  --aurora-cover-night-b:        #1d2a44;
+  --aurora-cover-disc-1a:        #3ecf9a;
+  --aurora-cover-disc-1b:        #2dd4bf;
+  --aurora-cover-disc-2a:        #2dd4bf;
+  --aurora-cover-disc-2b:        #38a5e0;
+  --aurora-cover-disc-3a:        #4d8fe0;
+  --aurora-cover-disc-3b:        #8b6fd4;
+  --aurora-cover-disc-4a:        #e06a92;
+  --aurora-cover-disc-4b:        #9d6fd4;
+
   /* Hub cover gradients — JumpTile fallbacks (when art is unavailable) */
   --gradient-jump-tile-album:    linear-gradient(135deg, #92400e, #d97706, #f59e0b);
   --gradient-jump-tile-playlist: linear-gradient(135deg, #047857, #10b981, #14b8a6);
@@ -454,6 +489,13 @@ body {
   background: var(--color-primary-dark);
   border-color: var(--color-primary-dark);
   color: white;
+}
+
+/* Aurora CTA background (Generate/Create/Setup buttons). Referenced across
+   modals but was never defined — those buttons rendered with no background.
+   Reuses the play-button gradient so all emerald actions share one signature. */
+.bg-aurora-gradient {
+  background-image: var(--aurora-play-gradient);
 }
 
 /* Danger — outlined red warning */

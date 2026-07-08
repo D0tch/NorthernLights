@@ -6,6 +6,7 @@ import type { TrackInfo } from '../utils/fileSystem';
 import type { Playlist, LastOpenedAlbum } from '../store';
 import { useDominantColor } from '../hooks/useDominantColor';
 import { buildRolledCoverGradient } from '../utils/coverGradient';
+import { AuroraCover, wrappedCoverLabel } from './library/AuroraCover';
 import { LiveConcertsHubSection } from './LiveConcertsHubSection';
 import { HorizontalScrollRail } from './HorizontalScrollRail';
 import { NowPlayingBadge } from './now-playing/NowPlayingBadge';
@@ -585,18 +586,11 @@ function getSystemDecadeCoverLabel(title: string): string {
     .trim();
 }
 
-// "2025 Wrapped" → "2025" (badge already says "wrapped"); seasons like
-// "Summer 2024" pass through unchanged.
-function getWrappedCoverLabel(title: string): string {
-  return title.replace(/\s+Wrapped$/i, '').trim();
-}
-
 interface UniqueCardProps {
   kind: UniqueCardKind;
   title: string;
   subtitle?: string;
   imageUrl?: string | null;
-  tracks?: TrackInfo[];
   onClick: () => void;
   onPlay?: () => void;
   loading?: boolean;
@@ -609,7 +603,6 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
   title,
   subtitle,
   imageUrl,
-  tracks = [],
   onClick,
   onPlay,
   loading = false,
@@ -618,52 +611,6 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
 }) => {
   let coverContent: React.ReactNode;
   let badgeLabel: string;
-  const shouldUseMosaic =
-    kind === 'genre-most-played' ||
-    kind === 'genre-rediscovery' ||
-    kind === 'decade' ||
-    kind === 'decade-genre' ||
-    kind === 'wrapped';
-  const { artUrls } = useDominantColor(shouldUseMosaic ? tracks : []);
-  const mosaicCovers = artUrls.slice(0, 4);
-  const mosaicGridClass =
-    mosaicCovers.length <= 1
-      ? 'grid-cols-1'
-      : mosaicCovers.length === 2
-        ? 'grid-cols-2 grid-rows-1'
-        : 'grid-cols-2 grid-rows-2';
-
-  const renderMosaicCover = (fallbackGradient: string, Icon: React.FC<any>, coverLabel?: string) => (
-    <>
-      {mosaicCovers.length > 0 ? (
-        <div
-          className={`absolute inset-0 grid bg-[var(--color-surface-variant)] ${mosaicGridClass}`}
-        >
-          {mosaicCovers.map((url, index) => (
-            <img
-              key={`${url}-${index}`}
-              src={url}
-              alt=""
-              className={`h-full w-full object-cover ${
-                mosaicCovers.length === 3 && index === 2 ? 'col-span-2' : ''
-              }`}
-            />
-          ))}
-        </div>
-      ) : (
-        <div className="absolute inset-0" style={{ background: fallbackGradient }} />
-      )}
-      <div className="absolute inset-0 bg-black/[0.16]" />
-      <div className="absolute inset-x-0 bottom-0 h-1/2 bg-gradient-to-t from-black/35 to-transparent" />
-      {coverLabel ? (
-        <span className="absolute inset-x-3 bottom-3 line-clamp-2 text-left text-2xl font-black leading-none tracking-normal text-white drop-shadow-[0_2px_8px_rgba(0,0,0,0.6)]">
-          {coverLabel}
-        </span>
-      ) : (
-        <Icon className="absolute right-4 bottom-4 w-10 h-10 text-white/80 drop-shadow" strokeWidth={1.5} />
-      )}
-    </>
-  );
 
   if (kind === 'daylist') {
     const { gradient, Icon } = getDaylistCover();
@@ -701,19 +648,21 @@ const UniqueCard: React.FC<UniqueCardProps> = ({
     );
     badgeLabel = 'radio';
   } else if (kind === 'genre-most-played') {
-    coverContent = renderMosaicCover('var(--gradient-cover-genre-most)', Repeat, getSystemGenreCoverLabel(title));
+    coverContent = <AuroraCover variant="discover" seed={title} label={getSystemGenreCoverLabel(title)} />;
     badgeLabel = 'most played';
   } else if (kind === 'genre-rediscovery') {
-    coverContent = renderMosaicCover('var(--gradient-cover-genre-rediscovery)', Rewind, getSystemGenreCoverLabel(title));
+    coverContent = <AuroraCover variant="discover" seed={title} label={getSystemGenreCoverLabel(title)} />;
     badgeLabel = 'rediscover';
   } else if (kind === 'decade') {
-    coverContent = renderMosaicCover('var(--gradient-cover-decade)', Disc3, getSystemDecadeCoverLabel(title));
+    coverContent = <AuroraCover variant="discover" seed={title} label={getSystemDecadeCoverLabel(title)} />;
     badgeLabel = 'decade';
   } else if (kind === 'wrapped') {
-    coverContent = renderMosaicCover('var(--gradient-cover-wrapped)', Sparkles, getWrappedCoverLabel(title));
+    coverContent = (
+      <AuroraCover variant="wrapped" seed={title} title={title} label={wrappedCoverLabel(title) || undefined} />
+    );
     badgeLabel = 'wrapped';
   } else {
-    coverContent = renderMosaicCover('var(--gradient-cover-decade-genre)', Disc3, getSystemDecadeCoverLabel(title));
+    coverContent = <AuroraCover variant="discover" seed={title} label={getSystemDecadeCoverLabel(title)} />;
     badgeLabel = 'decade';
   }
 
@@ -1585,7 +1534,6 @@ export const Hub: React.FC = () => {
                     kind="wrapped"
                     title={displayWrapped.title || 'Wrapped'}
                     subtitle={displayWrapped.description || undefined}
-                    tracks={displayWrapped.tracks}
                     onClick={() => handleOpenSmartPlaylist(displayWrapped)}
                     onPlay={() => handlePlayCollection(displayWrapped.tracks)}
                     loading={openingSmartPlaylistId === displayWrapped.id}
@@ -1605,7 +1553,6 @@ export const Hub: React.FC = () => {
                     kind="wrapped"
                     title={displayWrapped.title || 'Wrapped'}
                     subtitle={displayWrapped.description || undefined}
-                    tracks={displayWrapped.tracks}
                     onClick={() => handleOpenSmartPlaylist(displayWrapped)}
                     onPlay={() => handlePlayCollection(displayWrapped.tracks)}
                     loading={openingSmartPlaylistId === displayWrapped.id}
@@ -1724,7 +1671,6 @@ export const Hub: React.FC = () => {
                     kind={getSystemUniqueCardKind(displayCollection)}
                     title={displayCollection.title || 'system mix'}
                     subtitle={displayCollection.description || undefined}
-                    tracks={displayCollection.tracks}
                     onClick={() => displayCollection.id && navigate(`/playlists/${displayCollection.id}`, { state: buildPlaylistHero(displayCollection) })}
                     onPlay={() => handlePlayCollection(displayCollection.tracks)}
                     coverMotionClassName={getTileMotionClassName(phase)}

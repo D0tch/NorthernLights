@@ -12,6 +12,7 @@ import {
   type PlaylistMenuTrigger,
 } from './PlaylistContextMenu';
 import { prefetchPlaylistDetail } from '../../utils/routePrefetch';
+import { AuroraCover, wrappedCoverLabel } from './AuroraCover';
 import type { PlaylistHeroState } from '../../utils/heroState';
 import { HorizontalScrollRail } from '../HorizontalScrollRail';
 import CreatePlaylistModal from './CreatePlaylistModal';
@@ -27,8 +28,13 @@ const PlaylistCard: React.FC<{
   ownerName?: string;
   /** Hide the kebab menu for playlists the current user can't manage. */
   showMenu?: boolean;
-}> = ({ playlist, onOpen, onMenuOpen, onPlay, ownerName, showMenu = true }) => {
-  const { artUrls } = useDominantColor(playlist.tracks);
+  /** Render a procedural AuroraCover instead of the track-art collage. */
+  coverVariant?: 'wrapped' | 'discover';
+  /** Render a single full-bleed image (e.g. artist image for radios) instead of the collage. */
+  coverImageUrl?: string;
+}> = ({ playlist, onOpen, onMenuOpen, onPlay, ownerName, showMenu = true, coverVariant, coverImageUrl }) => {
+  // Skip art extraction when a generated/explicit cover replaces the collage.
+  const { artUrls } = useDominantColor(coverVariant || coverImageUrl ? [] : playlist.tracks);
   const covers = artUrls.slice(0, 4);
   // Collage thumbnails render small, so request the smallest pre-encoded art
   // bucket (256) instead of the server default (640).
@@ -53,9 +59,19 @@ const PlaylistCard: React.FC<{
       }}
       aria-label={`Open ${playlist.title}`}
     >
-      {/* Square art cover — 2×2 collage of track covers */}
+      {/* Square cover — AuroraCover (wrapped/discover), full-bleed image (radios),
+          or the default 2×2 collage of track covers */}
       <div className="relative aspect-square w-full mb-3 rounded-2xl border border-black/5 dark:border-white/5 bg-white/5 dark:bg-black/20 shadow-md overflow-hidden transition-transform duration-300 group-hover:scale-[1.02] motion-reduce:transition-none motion-reduce:group-hover:scale-100">
-        {covers.length > 1 ? (
+        {coverVariant ? (
+          <AuroraCover
+            variant={coverVariant}
+            seed={playlist.id || playlist.title}
+            title={playlist.title}
+            label={coverVariant === 'wrapped' ? (wrappedCoverLabel(playlist.title) || undefined) : undefined}
+          />
+        ) : coverImageUrl ? (
+          <img src={coverImageUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+        ) : covers.length > 1 ? (
           <div className="grid h-full w-full grid-cols-2 grid-rows-2 gap-px">
             {[0, 1, 2, 3].map((i) => {
               const url = covers[i];
@@ -307,6 +323,7 @@ export const Playlists: React.FC = () => {
   const {
     playlists,
     discoverPlaylists,
+    artists,
     setPlaylist,
     deletePlaylist,
     togglePin,
@@ -395,12 +412,30 @@ export const Playlists: React.FC = () => {
     backLabel: 'Back to Playlists',
   });
 
-  const renderCard = (pl: Playlist, opts?: { ownerName?: string; showMenu?: boolean }) => (
+  // Artist images for the Radios rail (title "<Artist> Radio" → artists entity
+  // image, same source the Artists grid uses). Falls back to the track collage.
+  const artistImageByName = React.useMemo(() => {
+    const map = new Map<string, string>();
+    for (const a of artists as any[]) {
+      const img = a?.image_url || a?.artwork_url;
+      if (a?.name && img && !map.has(a.name.toLowerCase())) map.set(a.name.toLowerCase(), img);
+    }
+    return map;
+  }, [artists]);
+  const radioArtistImage = (pl: Playlist): string | undefined =>
+    artistImageByName.get(pl.title.replace(/\s+Radio$/i, '').trim().toLowerCase());
+
+  const renderCard = (
+    pl: Playlist,
+    opts?: { ownerName?: string; showMenu?: boolean; coverVariant?: 'wrapped' | 'discover'; coverImageUrl?: string }
+  ) => (
     <div key={pl.id ?? pl.title} className="shrink-0 snap-start w-[min(52vw,200px)] sm:w-[190px]">
       <PlaylistCard
         playlist={pl}
         ownerName={opts?.ownerName}
         showMenu={opts?.showMenu ?? true}
+        coverVariant={opts?.coverVariant}
+        coverImageUrl={opts?.coverImageUrl}
         onOpen={() => navigate(`/playlists/${pl.id}`, { state: buildHero(pl) })}
         onPlay={() => { if (pl.tracks.length > 0) setPlaylist(pl.tracks, 0); }}
         onMenuOpen={(x, y) => openMenu(pl, x, y)}
@@ -411,14 +446,14 @@ export const Playlists: React.FC = () => {
   const renderRail = (
     title: string,
     items: Playlist[],
-    opts?: { subtitle?: string; discover?: boolean }
+    opts?: { subtitle?: string; discover?: boolean; coverVariant?: 'wrapped' | 'discover'; radios?: boolean }
   ) =>
     items.length > 0 ? (
       <PlaylistRail key={title} title={title} subtitle={opts?.subtitle}>
         {items.map((pl) =>
           opts?.discover
-            ? renderCard(pl, { ownerName: pl.ownerUsername || undefined, showMenu: false })
-            : renderCard(pl)
+            ? renderCard(pl, { ownerName: pl.ownerUsername || undefined, showMenu: false, coverVariant: opts?.coverVariant })
+            : renderCard(pl, { coverVariant: opts?.coverVariant, coverImageUrl: opts?.radios ? radioArtistImage(pl) : undefined })
         )}
       </PlaylistRail>
     ) : null;
@@ -520,8 +555,8 @@ export const Playlists: React.FC = () => {
         <div className="space-y-8">
           {renderRail('Your playlists', userPlaylists)}
           {renderRail('AI playlists', llmPlaylists)}
-          {renderRail('Wrapped', wrappedPlaylists)}
-          {renderRail('Radios', radioPlaylists)}
+          {renderRail('Wrapped', wrappedPlaylists, { coverVariant: 'wrapped' })}
+          {renderRail('Radios', radioPlaylists, { radios: true })}
           {renderRail('Curated for you', curatedPlaylists)}
           {renderRail('By other listeners', discoverPlaylists, {
             subtitle: 'Playlists shared across your household',

@@ -35,6 +35,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { AlbumArt } from '../AlbumArt';
+import { AuroraCover, wrappedCoverLabel } from './AuroraCover';
 import { LoveButton } from '../LoveButton';
 import { BackButton } from './BackButton';
 import { useToast } from '../../hooks/useToast';
@@ -868,19 +869,30 @@ export const PlaylistDetail: React.FC = () => {
           <div
             className="w-48 h-48 md:w-60 md:h-60 shrink-0 rounded-2xl border border-black/10 dark:border-white/10 shadow-2xl relative overflow-hidden bg-black/10 dark:bg-white/5"
           >
-            <div className="grid h-full w-full grid-cols-2 gap-0.5">
-              {(heroArtUrls.length > 0 ? heroArtUrls.slice(0, 4) : [null, null, null, null]).map((artUrl, index) => (
-                <div key={`${artUrl || 'fallback'}-${index}`} className="overflow-hidden bg-black/10 dark:bg-white/10">
-                  {artUrl ? (
-                    <img src={artUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
-                  ) : (
-                    <div className="flex h-full w-full items-center justify-center">
-                      <Disc3 className="h-8 w-8 text-[var(--color-text-muted)] opacity-40" />
-                    </div>
-                  )}
-                </div>
-              ))}
-            </div>
+            {playlist.generationSource === 'wrapped' ? (
+              // Wrapped identity carries into the detail page (the art backdrop
+              // above still shows the recap's actual content).
+              <AuroraCover
+                variant="wrapped"
+                seed={playlist.id || playlist.title}
+                title={playlist.title}
+                label={wrappedCoverLabel(playlist.title) || undefined}
+              />
+            ) : (
+              <div className="grid h-full w-full grid-cols-2 gap-0.5">
+                {(heroArtUrls.length > 0 ? heroArtUrls.slice(0, 4) : [null, null, null, null]).map((artUrl, index) => (
+                  <div key={`${artUrl || 'fallback'}-${index}`} className="overflow-hidden bg-black/10 dark:bg-white/10">
+                    {artUrl ? (
+                      <img src={artUrl} alt="" loading="lazy" decoding="async" className="h-full w-full object-cover" />
+                    ) : (
+                      <div className="flex h-full w-full items-center justify-center">
+                        <Disc3 className="h-8 w-8 text-[var(--color-text-muted)] opacity-40" />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
           <div className="flex flex-col justify-end items-center md:items-start max-w-full">
