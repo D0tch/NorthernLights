@@ -51,13 +51,15 @@ describe('systemGenreCoverLabel', () => {
 });
 
 describe('systemDecadeCoverLabel', () => {
-  test('new full-decade titles → short numeral', () => {
-    expect(systemDecadeCoverLabel("The 2010's")).toBe("10's");
-    expect(systemDecadeCoverLabel("Trance from the 1990's")).toBe("90's");
+  test('new full-decade titles → full numeral', () => {
+    expect(systemDecadeCoverLabel("The 2010's")).toBe('2010');
+    expect(systemDecadeCoverLabel("Trance from the 1990's")).toBe('1990');
   });
-  test('legacy short-decade titles pass through', () => {
-    expect(systemDecadeCoverLabel("90's Mix")).toBe("90's");
-    expect(systemDecadeCoverLabel("90's Pop")).toBe("90's");
+  test('legacy short-decade titles expand to the full decade', () => {
+    expect(systemDecadeCoverLabel("90's Mix")).toBe('1990');
+    expect(systemDecadeCoverLabel("90's Pop")).toBe('1990');
+    expect(systemDecadeCoverLabel("00's Mix")).toBe('2000');
+    expect(systemDecadeCoverLabel("10's Mix")).toBe('2010');
   });
   test('unparseable falls back to a trimmed title', () => {
     expect(systemDecadeCoverLabel('Oldies Mix')).toBe('Oldies');

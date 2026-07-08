@@ -78,15 +78,17 @@ export function systemGenreCoverLabel(title: string | null | undefined): string 
 }
 
 /**
- * Short decade numeral for the cover from an engine-mix title: "The 2010's" /
- * "Trance from the 2010's" → "10's"; legacy "90's Mix" / "90's Pop" → "90's".
+ * Full decade numeral for the cover from an engine-mix title: "The 2010's" /
+ * "Trance from the 2010's" → "2010"; legacy "90's Mix" / "90's Pop" → "1990"
+ * (two-digit decades ≥ 50 are 19xx, below are 20xx — the library's year floor
+ * is 1950).
  */
 export function systemDecadeCoverLabel(title: string | null | undefined): string {
   const t = (title || '').trim();
-  const full = /\b(?:19|20)(\d0)'?s\b/.exec(t);
-  if (full) return `${full[1]}'s`;
+  const full = /\b((?:19|20)\d0)'?s\b/.exec(t);
+  if (full) return full[1];
   const short = /\b(\d0)'s\b/.exec(t);
-  if (short) return `${short[1]}'s`;
+  if (short) return `${Number(short[1]) >= 50 ? 19 : 20}${short[1]}`;
   return t.replace(/\s+Mix$/i, '').trim();
 }
 
