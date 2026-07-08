@@ -105,16 +105,19 @@ const WAVE_PATHS = [
 // ─── Favourites: aurora curtains (generated) ───────────────────────────
 // 2–4 gently swaying full-height bands; the vertical gradient does the fading
 // so the path stays simple. Positions/widths/sway/peak all seeded per cover.
+// Bands roam freely (they may overlap — overlaps blend like layered light) and
+// range from slim streaks to broad sheets; the wider the band, the softer its
+// peak so fat overlaps never go blocky.
 interface Curtain { x: number; w: number; sway: number; peak: number; peakAt: number }
 
 function genCurtains(rnd: () => number): Curtain[] {
   const count = 2 + Math.floor(rnd() * 3); // 2–4
-  const slot = 200 / count;
-  return Array.from({ length: count }, (_, i) => {
-    const w = lerp(rnd, 18, 40);
-    const x = slot * i + lerp(rnd, 4, Math.max(8, slot - w - 4));
+  return Array.from({ length: count }, () => {
+    const w = lerp(rnd, 18, 90);
+    const x = lerp(rnd, -12, 210 - w); // slight offscreen bleed allowed
     const sway = (rnd() < 0.5 ? -1 : 1) * lerp(rnd, 6, 16);
-    return { x, w, sway, peak: lerp(rnd, 0.38, 0.6), peakAt: lerp(rnd, 0.2, 0.45) };
+    const peak = lerp(rnd, 0.38, 0.6) * (1 - ((w - 18) / 72) * 0.3);
+    return { x, w, sway, peak, peakAt: lerp(rnd, 0.2, 0.45) };
   });
 }
 
