@@ -126,10 +126,14 @@ app.use(compression({
 // Content-Security-Policy (enforcing). The only inline scripts we serve are
 // index.html's Cast bootstrap plus the optional window.__CAST_APP_ID injection,
 // so script-src drops 'unsafe-inline' in favour of sha256 hashes computed from the
-// exact served HTML at startup (see the dist block below). The Cast receiver page
-// (receiver.html / /cast-receiver) has its own inline bootstrap script, so those
-// responses get a receiver-specific CSP — served with the index-derived hashes the
-// receiver script is blocked and every launch dies in SESSION_START_FAILED.
+// exact served HTML at startup (see the dist block below).
+//
+// The Cast receiver page (receiver.html / /cast-receiver) is served with NO CSP
+// at all. It only ever runs inside a Cast device's runtime, whose media player
+// needs its own inline bootstrap script AND eval/WebAssembly at media-load time —
+// under the app CSP the receiver either fails to boot (SESSION_START_FAILED) or
+// boots and then fails every LOAD with a bare error 905. It is a static page with
+// no user-generated content, so a CSP buys nothing there.
 // External script hosts:
 //   - www.gstatic.com (scheme-less, NOT https://): the Cast SDK lazy-loads its
 //     framework over http:// on insecure origins (http://localhost / LAN IP). A
@@ -155,14 +159,14 @@ const sha256Base64 = (s: string) => crypto.createHash('sha256').update(s, 'utf8'
 
 // inlineScriptSources are sha256 hashes (or a keyword like 'unsafe-inline') allowed
 // to run as inline scripts.
-const buildCsp = (inlineScriptSources: string[], extraConnectSrc: string[] = []) => [
+const buildCsp = (inlineScriptSources: string[]) => [
   "default-src 'self'",
   `script-src ${["'self'", ...inlineScriptSources, 'www.gstatic.com', 'https://www.youtube.com', 'https://s.ytimg.com'].join(' ')}`,
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' https://fonts.gstatic.com",
   "img-src 'self' data: blob: https:",
   "media-src 'self' blob: data:",
-  `connect-src ${["'self'", 'www.gstatic.com', 'https://nominatim.openstreetmap.org', 'https://fonts.googleapis.com', 'https://fonts.gstatic.com', ...extraConnectSrc].join(' ')}`,
+  "connect-src 'self' www.gstatic.com https://nominatim.openstreetmap.org https://fonts.googleapis.com https://fonts.gstatic.com",
   "frame-src https://www.youtube.com https://www.youtube-nocookie.com",
   "worker-src 'self' blob:",
   "object-src 'none'",
@@ -209,25 +213,16 @@ const distPath = path.join(__dirname, '../dist');
 if (fs.existsSync(distPath)) {
   console.log(`[Server] Serving static files from ${distPath}`);
 
-  // Receiver-specific CSP: receiver.html carries its own inline bootstrap script,
-  // so it needs its own script-src hashes. ws:/wss: are allowed only here because
-  // the CAF SDK registers with the Chromecast platform over a local WebSocket,
-  // which the page CSP can block on some firmware.
+  // The Cast receiver page gets NO CSP (see the CSP comment above): the Cast
+  // runtime's media player needs eval/WebAssembly and its own inline script, and
+  // an app CSP on this page has broken casting twice (boot, then every LOAD).
   const receiverPath = path.join(distPath, 'receiver.html');
-  let receiverCspHeader: string | null = null;
-  try {
-    const receiverHashes = inlineScriptHashes(fs.readFileSync(receiverPath, 'utf8'));
-    receiverCspHeader = buildCsp(receiverHashes, ['ws:', 'wss:']);
-    console.log(`[Server] CSP: receiver script-src locked to ${receiverHashes.length} inline hash(es)`);
-  } catch {
-    // No receiver.html in dist — nothing to override.
-  }
 
   app.use(express.static(distPath, {
     index: false,
     setHeaders: (res, filePath) => {
-      if (receiverCspHeader && filePath === receiverPath) {
-        res.setHeader('Content-Security-Policy', receiverCspHeader);
+      if (filePath === receiverPath) {
+        res.removeHeader('Content-Security-Policy');
       }
     },
   }));
@@ -235,9 +230,7 @@ if (fs.existsSync(distPath)) {
   // Serve custom Cast receiver HTML at /cast-receiver
   if (fs.existsSync(receiverPath)) {
     app.get('/cast-receiver', (_req, res) => {
-      if (receiverCspHeader) {
-        res.setHeader('Content-Security-Policy', receiverCspHeader);
-      }
+      res.removeHeader('Content-Security-Policy');
       res.sendFile(receiverPath);
     });
     console.log('[Server] Cast receiver available at /cast-receiver');
