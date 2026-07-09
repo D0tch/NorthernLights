@@ -1321,6 +1321,31 @@
       context.addEventListener(cast.framework.system.EventType.READY, function() {
         suppressDefaultCastUi();
         logAndPost('ok', LOG_TAG, 'Receiver started, forced codec: ' + FORCED_CAST_CODEC);
+        // Post the device's own claims about lossless progressive support, so
+        // SRC_NOT_SUPPORTED (104) failures can be told apart from fetch-level
+        // problems: if the platform says "no flac" here, it rejects the source
+        // without ever hitting the network.
+        try {
+          var audioProbe = document.createElement('audio');
+          var canDisplay = function(mime) {
+            try {
+              return context.canDisplayType && context.canDisplayType(mime) ? 'yes' : 'no';
+            } catch (probeError) {
+              return 'err';
+            }
+          };
+          var caps = [
+            'playFlac=' + (audioProbe.canPlayType('audio/flac') || 'no'),
+            'playXFlac=' + (audioProbe.canPlayType('audio/x-flac') || 'no'),
+            'playWav=' + (audioProbe.canPlayType('audio/wav') || 'no'),
+            'displayFlac=' + canDisplay('audio/flac'),
+            'displayWav=' + canDisplay('audio/wav'),
+            'mseFmp4Flac=' + (window.MediaSource && MediaSource.isTypeSupported('audio/mp4; codecs="flac"') ? 'yes' : 'no')
+          ];
+          postDiagnosticMarker('receiver-media-caps', caps.join(' '));
+        } catch (capsError) {
+          postDiagnosticMarker('receiver-media-caps', 'probe-failed');
+        }
         setPlayerState('IDLE');
         syncUi(true);
       });

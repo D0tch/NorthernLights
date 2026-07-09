@@ -529,6 +529,11 @@ router.all('/stream', async (req, res) => {
   setCorsHeaders(req, res);
   if (req.method === 'OPTIONS') return res.sendStatus(204);
 
+  // Raw passthrough is only requested by source-quality playback (local
+  // bit-perfect or Cast lossless), so this stays quiet in normal use. The UA
+  // tells Cast-device fetches apart from browser ones when debugging casts.
+  console.log(`[Stream] raw ${req.method} ua="${String(req.headers['user-agent'] || '').slice(0, 100)}" range=${String(req.headers.range || 'none')}`);
+
   const b64Path = req.query.pathB64 as string;
   const rawPath = req.query.path as string;
 
