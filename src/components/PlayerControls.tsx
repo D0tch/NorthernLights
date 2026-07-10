@@ -322,6 +322,13 @@ export const PlayerControls: React.FC = () => {
     }
   }, []);
 
+  const handleVolumeWheel = React.useCallback((e: React.WheelEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const state = usePlayerStore.getState();
+    const delta = e.deltaY > 0 ? -0.05 : 0.05;
+    state.setVolume(Math.min(1, Math.max(0, state.volume + delta)));
+  }, []);
+
   React.useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -338,10 +345,10 @@ export const PlayerControls: React.FC = () => {
           state.prevTrack();
           break;
         case 'KeyM':
-          state.setVolume(Math.min(1, state.volume + 0.05));
+          state.setVolume(Math.max(0, state.volume - 0.05));
           break;
         case 'Comma':
-          state.setVolume(Math.max(0, state.volume - 0.05));
+          state.setVolume(Math.min(1, state.volume + 0.05));
           break;
         case 'KeyS':
           state.toggleShuffle();
@@ -534,7 +541,7 @@ export const PlayerControls: React.FC = () => {
       </div>
 
       {/* VOLUME (hover-revealed slider) */}
-      <div className="player-volume">
+      <div className="player-volume" onWheel={handleVolumeWheel}>
         <span className="player-volume-icon" aria-hidden="true">
           <IconVolume />
         </span>
