@@ -9,8 +9,8 @@ const shortcuts: Shortcut[] = [
   { key: 'Space', description: 'Play/Pause' },
   { key: '←', description: 'Previous Track' },
   { key: '→', description: 'Next Track' },
-  { key: 'M', description: 'Volume Up' },
-  { key: ',', description: 'Volume Down' },
+  { key: 'M', description: 'Volume Down' },
+  { key: ',', description: 'Volume Up' },
   { key: 'S', description: 'Toggle Shuffle' },
   { key: 'R', description: 'Cycle Repeat' },
 ];
