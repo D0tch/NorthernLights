@@ -67,55 +67,32 @@ export function buildRolledCoverGradient(seed: string, palette: string[], fallba
   ].join(', ');
 }
 
-// Full-bleed, punchier mesh for the mobile now-playing background. Higher
-// alphas and three radial hotspots so the cover's colors read vividly across
-// the whole screen (the "very vibrant" no-video state).
-export function buildCoverMeshGradient(seed: string, palette: string[], fallbackColor: string): string {
+// Aurora bloom for the mobile now-playing backdrop: a few large, soft radial
+// glows rolled from the cover's palette, laid over the blurred art. Deliberately
+// restrained — fewer, larger, softer hotspots than a mesh, and no conic layer
+// (banding + raster cost). The glows live in the upper two-thirds; the bottom
+// belongs to the static neutral scrim. Vibrancy is bounded by construction: the
+// bloom container's fixed envelope opacity plus that scrim guarantee text
+// contrast for any cover, so no adaptive veil/tint machinery is needed.
+export function buildBloomGradient(seed: string, palette: string[], fallbackColor: string): string {
   const colors = normalizePalette(seed, palette, fallbackColor);
 
-  const roll = hashString(`${seed}:mesh:${colors.join('|')}`);
+  const roll = hashString(`${seed}:bloom:${colors.join('|')}`);
   const pick = (offset: number) => colors[(roll + offset) % colors.length];
-  const angle = roll % 360;
-  const x1 = 12 + (roll % 30);
-  const y1 = 6 + ((roll >> 4) % 26);
-  const x2 = 58 + ((roll >> 8) % 34);
-  const y2 = 8 + ((roll >> 12) % 28);
-  const x3 = 28 + ((roll >> 16) % 44);
-  const y3 = 52 + ((roll >> 20) % 30);
+  const x1 = 8 + (roll % 34);
+  const y1 = 4 + ((roll >> 4) % 20);
+  const x2 = 56 + ((roll >> 8) % 36);
+  const y2 = 14 + ((roll >> 12) % 24);
+  const x3 = 24 + ((roll >> 16) % 50);
+  const y3 = 40 + ((roll >> 20) % 22);
 
   const c1 = pick(0);
   const c2 = pick(1);
   const c3 = pick(2);
-  const c4 = pick(3);
 
   return [
-    `radial-gradient(circle at ${x1}% ${y1}%, ${hexToRgba(c1, 0.85)} 0%, ${hexToRgba(c1, 0.45)} 26%, transparent 60%)`,
-    `radial-gradient(circle at ${x2}% ${y2}%, ${hexToRgba(c2, 0.78)} 0%, ${hexToRgba(c2, 0.36)} 24%, transparent 58%)`,
-    `radial-gradient(circle at ${x3}% ${y3}%, ${hexToRgba(c3, 0.70)} 0%, ${hexToRgba(c3, 0.30)} 28%, transparent 62%)`,
-    `conic-gradient(from ${angle}deg at 50% 40%, ${hexToRgba(c4, 0.50)}, ${hexToRgba(c2, 0.42)}, ${hexToRgba(c1, 0.50)}, ${hexToRgba(c3, 0.46)}, ${hexToRgba(c4, 0.50)})`,
-    `linear-gradient(${(angle + 90) % 360}deg, ${hexToRgba(c1, 0.55)}, ${hexToRgba(c4, 0.40)})`,
-    // Opaque base baked into every layer (formerly the now-playing shell's own
-    // background). Each stacked layer then fully covers the one beneath, so a
-    // track-to-track morph is pure opacity compositing on the GPU — nothing
-    // full-screen underneath has to repaint mid-fade.
-    `radial-gradient(circle at 18% 12%, ${hexToRgba(colors[0], 0.26)}, transparent 22rem)`,
-    `radial-gradient(circle at 82% 18%, color-mix(in srgb, var(--aurora-teal) 15%, transparent), transparent 20rem)`,
-    `radial-gradient(circle at 50% 5%, color-mix(in srgb, var(--color-primary) 12%, transparent), transparent 32rem)`,
-    'var(--color-bg-primary)',
-  ].join(', ');
-}
-
-// Bottom scrim backing the now-playing controls: transparent up top so the
-// mesh shows through (tinted by the cover color), ramping to fully-opaque page
-// background by 63% — above the video band's 75vh bottom edge — to mask that
-// edge. Built as a string so the sheet can cross-fade whole rasterized scrim
-// layers by opacity instead of transitioning the tint color, which would
-// repaint the full screen on every frame of the 2.5s morph.
-export function buildScrimGradient(tint: string): string {
-  return [
-    'linear-gradient(180deg, transparent 0%',
-    `color-mix(in srgb, color-mix(in srgb, var(--color-bg-primary) 46%, transparent) 50%, ${tint}) 45%`,
-    `color-mix(in srgb, var(--color-bg-primary) 60%, ${tint}) 63%`,
-    'var(--color-bg-primary) 100%)',
+    `radial-gradient(90% 70% at ${x1}% ${y1}%, ${hexToRgba(c1, 0.55)} 0%, ${hexToRgba(c1, 0.22)} 42%, transparent 74%)`,
+    `radial-gradient(80% 65% at ${x2}% ${y2}%, ${hexToRgba(c2, 0.48)} 0%, ${hexToRgba(c2, 0.18)} 40%, transparent 70%)`,
+    `radial-gradient(100% 80% at ${x3}% ${y3}%, ${hexToRgba(c3, 0.38)} 0%, transparent 64%)`,
   ].join(', ');
 }

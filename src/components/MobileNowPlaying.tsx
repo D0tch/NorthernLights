@@ -1,6 +1,6 @@
 import { usePlayerStore } from '../store/index';
-import { useState, useEffect, useMemo, useRef, type CSSProperties } from 'react';
-import { X, Infinity as InfinityIcon, ListMusic, FileText, Speaker } from 'lucide-react';
+import { useState, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
+import { X, Infinity as InfinityIcon, ListMusic, ListX, ChevronUp, FileText, Speaker } from 'lucide-react';
 import ProgressBar from './ProgressBar';
 import { useSwipe } from '../hooks/useSwipe';
 import { castManager } from '../utils/CastManager';
@@ -9,9 +9,11 @@ import { LoveButton } from './LoveButton';
 import { CastButton } from './cast/CastButton';
 import { IconNext, IconPause, IconPlay, IconPrev, IconRepeatAll, IconRepeatOne, IconShuffle } from './icons/PlayerIcons';
 import { useDominantColor, NOW_PLAYING_PALETTE_QUALITY } from '../hooks/useDominantColor';
-import { buildCoverMeshGradient, buildScrimGradient } from '../utils/coverGradient';
+import { buildBloomGradient } from '../utils/coverGradient';
 import { useTrackMusicVideo } from '../hooks/useTrackMusicVideo';
 import MobileNowPlayingVideo, { type VideoPhase } from './MobileNowPlayingVideo';
+import { QueueList, useClearQueueWithUndo, type QueueListHandle } from './QueueList';
+import { hardwareKeysControlCastVolume } from '../utils/castVolumeKeys';
 
 interface MobileNowPlayingProps {
   onClose: () => void;
@@ -70,16 +72,35 @@ function useCrossfadeLayers(value: string | null | undefined) {
   return [layers, prune] as const;
 }
 
-// Relative luminance (0..1, sRGB) of a #rrggbb colour; null if not parseable
-// (e.g. the var(--color-primary) fallback when no art colour was extracted).
-function hexLuminance(hex: string): number | null {
-  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
-  if (!m) return null;
-  const lin = (h: string) => {
-    const c = parseInt(h, 16) / 255;
-    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
-  };
-  return 0.2126 * lin(m[1]) + 0.7152 * lin(m[2]) + 0.0722 * lin(m[3]);
+// How long a track must stay current before the backdrop starts morphing to
+// its colors. Rapid skips reset the hold, so no cross-fade even begins until
+// the user settles — the slow cinematic morph never has to survive skipping.
+const BLOOM_HOLD_MS = 1000;
+
+// Hold a changing value until it has been stable for `holdMs`. The initial
+// value passes through immediately (the sheet paints its colors on the very
+// first frame); later changes wait out the hold. The hold also absorbs the
+// async palette landing a beat after a cold (never-extracted) cover.
+function useSettledValue<T>(value: T, holdMs: number): T {
+  const [settled, setSettled] = useState(value);
+  useEffect(() => {
+    if (Object.is(value, settled)) return;
+    const timer = window.setTimeout(() => setSettled(value), holdMs);
+    return () => window.clearTimeout(timer);
+  }, [value, settled, holdMs]);
+  return settled;
+}
+
+// The bloom cross-fades art + glows together as ONE layer, so both travel in a
+// single string value. artUrl never contains a newline; the gradient is a
+// single-line CSS string.
+function packBloomValue(artUrl: string, gradient: string): string {
+  return `${artUrl}\n${gradient}`;
+}
+
+function unpackBloomValue(value: string): [artUrl: string, gradient: string] {
+  const split = value.indexOf('\n');
+  return [value.slice(0, split), value.slice(split + 1)];
 }
 
 const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = true }) => {
@@ -97,7 +118,6 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
   const cycleRepeat = usePlayerStore((s) => s.cycleRepeat);
   const isInfinityMode = usePlayerStore((s) => s.isInfinityMode);
   const toggleInfinityMode = usePlayerStore((s) => s.toggleInfinityMode);
-  const setIsSidebarOpen = usePlayerStore((s) => s.setIsSidebarOpen);
   const audioOutputSupported = usePlayerStore((s) => s.audioOutputSupported);
   const audioOutputActive = usePlayerStore((s) => s.audioOutputActive);
   const audioOutputDeviceLabel = usePlayerStore((s) => s.audioOutputDeviceLabel);
@@ -105,7 +125,6 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
   const selectAudioOutput = usePlayerStore((s) => s.selectAudioOutput);
   const volume = usePlayerStore((s) => s.volume);
   const setVolume = usePlayerStore((s) => s.setVolume);
-  const theme = usePlayerStore((s) => s.theme);
 
   const [castConnected, setCastConnected] = useState(castManager.isConnected());
   const [castDeviceName, setCastDeviceName] = useState(() => castManager.isConnected() ? castManager.getCastDeviceName() : '');
@@ -114,43 +133,22 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
   const trackIdentity = currentTrack?.queueEntryId || currentTrack?.id || currentTrack?.path || 'current-track';
   const colorSeedTracks = useMemo(() => currentTrack ? [currentTrack] : [], [currentTrack]);
   const { bgColor, colors } = useDominantColor(colorSeedTracks, { quality: NOW_PLAYING_PALETTE_QUALITY });
-  const meshGradient = useMemo(
-    () => buildCoverMeshGradient(trackIdentity, colors, bgColor),
-    [trackIdentity, colors, bgColor],
+
+  // The one animated colored surface: blurred cover art + palette glows, packed
+  // into a single value so they always morph together. Held for BLOOM_HOLD_MS
+  // after a track change, then cross-faded once as a whole opaque layer.
+  const bloomValue = useMemo(
+    () => packBloomValue(currentTrack?.artUrl ?? '', buildBloomGradient(trackIdentity, colors, bgColor)),
+    [currentTrack?.artUrl, trackIdentity, colors, bgColor],
   );
-
-  // Cross-fade the two colour backdrops from track to track instead of cutting:
-  // the procedural cover mesh, and the blurred cover art washed behind it. A new
-  // palette/image fades in over the previous one (the gradient also re-fades when
-  // colour extraction finishes for the current track).
-  const [meshLayers, pruneMesh] = useCrossfadeLayers(meshGradient);
-  const [ambientLayers, pruneAmbient] = useCrossfadeLayers(currentTrack?.artUrl);
-
-  // Readability veil: near-white covers (or near-black in light mode) make the
-  // themed text wash out over the vibrant backdrop. Push the backdrop toward the
-  // theme background as the cover's luminance approaches the text colour. 0 for
-  // normal art so vibrancy is untouched; grows for extremes (capped).
-  const veilOpacity = useMemo(() => {
-    const lum = hexLuminance(bgColor);
-    if (lum == null) return 0;
-    const deficit = theme === 'dark' ? lum - 0.45 : 0.55 - lum;
-    return Math.max(0, Math.min(0.8, deficit * 1.9));
-  }, [bgColor, theme]);
+  const settledBloom = useSettledValue(bloomValue, BLOOM_HOLD_MS);
+  const [bloomLayers, pruneBloom] = useCrossfadeLayers(settledBloom);
 
   // Matched YouTube music video for the current track (mobile-only, gated).
   const { videoId } = useTrackMusicVideo(currentTrack);
   const [videoPhase, setVideoPhase] = useState<VideoPhase>('none');
   // New track → drop back to the cover until its video (if any) buffers in.
   useEffect(() => { setVideoPhase('none'); }, [trackIdentity]);
-
-  // The scrim behind the controls, tinted by the cover colour (neutral while a
-  // video plays). Cross-faded as whole rasterized layers — like the mesh — so
-  // the tint morph is opacity compositing, not a per-frame gradient repaint.
-  const scrimGradient = useMemo(
-    () => buildScrimGradient(videoPhase === 'visible' ? 'var(--color-bg-primary)' : bgColor),
-    [videoPhase, bgColor],
-  );
-  const [scrimLayers, pruneScrim] = useCrossfadeLayers(scrimGradient);
 
   useEffect(() => {
     const unsubscribe = castManager.addStateChangeListener((state) => {
@@ -165,11 +163,23 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
     return unsubscribe;
   }, []);
 
+  // On modern Android the phone's hardware volume keys reach the receiver, so
+  // the sheet stays sliderless while casting. Everywhere else (older/unpatched
+  // Android, no UA-CH, desktop) show an on-screen cast volume slider.
+  const [showCastVolume, setShowCastVolume] = useState(false);
+  useEffect(() => {
+    if (!castConnected) {
+      setShowCastVolume(false);
+      return;
+    }
+    let cancelled = false;
+    void hardwareKeysControlCastVolume().then((keysWork) => {
+      if (!cancelled) setShowCastVolume(!keysWork);
+    });
+    return () => { cancelled = true; };
+  }, [castConnected]);
+
   const isPlaying = playbackState === 'playing';
-  const mobileNowStyle = {
-    '--mobile-now-art-color': bgColor,
-    '--mnp-veil-opacity': veilOpacity,
-  } as CSSProperties;
 
   const handlePlayPause = () => {
     if (playlist.length === 0) return;
@@ -178,10 +188,56 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
     else resume();
   };
 
-  const swipeRef = useSwipe<HTMLDivElement>({
-    onSwipeDown: onClose,
+  // The sheet's content is a two-page scroller: page 1 = now playing, page 2 =
+  // the queue panel below the fold. The swipe-down-to-close gesture only fires
+  // while the scroller sits at its top page — inside the queue a downward
+  // flick is a scroll, never a dismiss.
+  const scrollerRef = useSwipe<HTMLDivElement>({
+    onSwipeDown: () => {
+      if ((scrollerRef.current?.scrollTop ?? 0) <= 8) onClose();
+    },
     threshold: 80,
   });
+  const pageRef = useRef<HTMLDivElement>(null);
+  const queueListWrapRef = useRef<HTMLDivElement>(null);
+  const queueListRef = useRef<QueueListHandle>(null);
+  const clearQueue = useClearQueueWithUndo();
+
+  // Offset of the queue list inside the scroller (≈ page 1's height) — the
+  // virtualizer needs it as scrollMargin. Re-measure when page 1 resizes
+  // (rotation, short screens where the controls overflow one viewport).
+  const [queueOffset, setQueueOffset] = useState(0);
+  useLayoutEffect(() => {
+    const measure = () => setQueueOffset(queueListWrapRef.current?.offsetTop ?? 0);
+    measure();
+    const page = pageRef.current;
+    if (!page || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(page);
+    return () => observer.disconnect();
+  }, []);
+
+  const prefersReducedMotion = () =>
+    typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  const scrollToNowPlaying = () => {
+    scrollerRef.current?.scrollTo({ top: 0, behavior: prefersReducedMotion() ? 'auto' : 'smooth' });
+  };
+
+  // Queue button: jump between the two pages. Landing centers the current
+  // track so it clears the queue panel's sticky header.
+  const handleQueueButton = () => {
+    const scroller = scrollerRef.current;
+    if (!scroller) return;
+    const behavior: ScrollBehavior = prefersReducedMotion() ? 'auto' : 'smooth';
+    if (scroller.scrollTop > scroller.clientHeight / 2) {
+      scroller.scrollTo({ top: 0, behavior });
+    } else if (currentIndex !== null) {
+      queueListRef.current?.scrollToIndex(currentIndex, { align: 'center', behavior });
+    } else {
+      scroller.scrollTo({ top: queueOffset, behavior });
+    }
+  };
 
   if (!currentTrack) return null;
 
@@ -192,43 +248,30 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
       data-buffering={isBuffering}
       data-state={isOpen ? 'open' : 'closing'}
       data-video={videoPhase}
-      style={mobileNowStyle}
     >
-      {/* Vibrant cover-color mesh — the no-video background. Stacked layers
-          cross-fade the palette from track to track. */}
-      <div className="mobile-now-playing-mesh" aria-hidden="true">
-        {meshLayers.map((layer) => (
-          <div
-            key={layer.key}
-            className={`mobile-now-playing-mesh-layer${layer.animate ? ' mobile-now-playing-mesh-layer--fade' : ''}`}
-            style={{ background: layer.value }}
-            // Once a faded-in layer is fully opaque, drop everything beneath it
-            // (each layer is opaque, so covered layers are invisible; pruning
-            // frees their compositor textures). Only the current palette remains.
-            onAnimationEnd={() => pruneMesh(layer.key)}
-          />
-        ))}
-      </div>
-
-      {/* Blurred cover art washed behind the mesh — stacked layers morph the
-          album's real colours from track to track instead of hard-cutting. */}
-      {ambientLayers.length > 0 && (
-        <div className="mobile-now-playing-ambient" aria-hidden="true">
-          {ambientLayers.map((layer) => (
-            <img
+      {/* Aurora bloom — the one animated colored surface: blurred cover art
+          with palette glows, cross-faded as whole opaque layers once per
+          settled track. The container's fixed envelope opacity plus the static
+          neutral scrim (shell ::after) bound its intensity, so no cover can
+          break text contrast. */}
+      <div className="mobile-now-bloom" aria-hidden="true">
+        {bloomLayers.map((layer) => {
+          const [artUrl, gradient] = unpackBloomValue(layer.value);
+          return (
+            <div
               key={layer.key}
-              src={layer.value}
-              alt=""
-              className={`mobile-now-playing-ambient-layer${layer.animate ? ' mobile-now-playing-ambient-layer--fade' : ''}`}
-              onAnimationEnd={() => pruneAmbient(layer.key)}
-            />
-          ))}
-        </div>
-      )}
-
-      {/* Adaptive readability veil over the colour backdrop (opacity set from JS
-          by cover luminance). Sits above the mesh/ambient, below the video. */}
-      <div className="mobile-now-bg-veil" aria-hidden="true" />
+              className={`mobile-now-bloom-layer${layer.animate ? ' mobile-now-bloom-layer--fade' : ''}`}
+              // Once a faded-in layer is fully opaque, drop everything beneath
+              // it (each layer is an opaque composite, so covered layers are
+              // invisible; pruning frees their compositor textures).
+              onAnimationEnd={() => pruneBloom(layer.key)}
+            >
+              {artUrl && <img src={artUrl} alt="" className="mobile-now-bloom-art" />}
+              <div className="mobile-now-bloom-tint" style={{ background: gradient }} />
+            </div>
+          );
+        })}
+      </div>
 
       {/* Full-screen, muted background music video (fades in when buffered) */}
       {videoId && (
@@ -237,20 +280,10 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
         </div>
       )}
 
-      {/* Single, PERMANENT scrim backing the controls — the dark panel must
-          stay put across track changes. A tint change fades a new layer in OVER
-          the still-opaque previous one (never dipping through a translucent
-          midpoint), and each layer rasterizes once — only opacity animates. */}
-      <div className="mobile-now-playing-scrim" aria-hidden="true">
-        {scrimLayers.map((layer) => (
-          <div
-            key={layer.key}
-            className={`mobile-now-playing-scrim-layer${layer.animate ? ' mobile-now-playing-scrim-layer--fade' : ''}`}
-            style={{ background: layer.value }}
-            onAnimationEnd={() => pruneScrim(layer.key)}
-          />
-        ))}
-      </div>
+      {/* Two-page scroller: the now-playing page fills the frame; the queue
+          panel sits below the fold and is revealed by scrolling down. */}
+      <div ref={scrollerRef} className="mobile-now-scroll">
+        <div ref={pageRef} className="mobile-now-page">
 
       {/* Safe area top spacer */}
       <div style={{ height: 'var(--safe-area-top)' }} />
@@ -265,8 +298,19 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
         >
           <X size={18} />
         </button>
+        {/* The heading carries the playback target: plain "Now Playing"
+            locally, "on {device}" when casting or on a selected output. */}
         <div className="mobile-now-playing-heading">
-          <span>Now Playing</span>
+          <span className="mobile-now-heading-line">
+            {castConnected && <span className="mobile-now-heading-dot" aria-hidden="true" />}
+            Now Playing
+            {castConnected && castDeviceName && (
+              <span className="mobile-now-heading-device"> on {castDeviceName}</span>
+            )}
+            {!castConnected && audioOutputActive && (
+              <span className="mobile-now-heading-device"> on {audioOutputDeviceLabel || 'selected output'}</span>
+            )}
+          </span>
         </div>
         {currentTrack ? (
           <LoveButton track={currentTrack} size={18} className="mobile-player-control-btn mobile-player-control-btn-sm mobile-player-love-btn" />
@@ -275,8 +319,8 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
         )}
       </div>
 
-      {/* Scrollable content */}
-      <div ref={swipeRef} className="mobile-now-playing-content">
+      {/* Main content */}
+      <div className="mobile-now-playing-content">
         {/* Album Art or Lyrics */}
         {showLyrics ? (
           <div className="mobile-now-lyrics-card" key={`lyrics-${trackIdentity}`}>
@@ -316,22 +360,6 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
               {currentTrack.album}
             </p>
           )}
-          {castConnected && (
-            <div className="mobile-now-state-chip mobile-now-state-chip-active">
-              <span className="mobile-now-state-dot" aria-hidden="true" />
-              <span>
-                Casting{castDeviceName ? ` to ${castDeviceName}` : ''}
-              </span>
-            </div>
-          )}
-          {!castConnected && audioOutputActive && (
-            <div className="mobile-now-state-chip mobile-now-state-chip-active">
-              <Speaker size={14} aria-hidden="true" />
-              <span className="truncate">
-                Playing on {audioOutputDeviceLabel || 'selected output'}
-              </span>
-            </div>
-          )}
         </div>
 
         {/* Progress Bar */}
@@ -339,7 +367,11 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
           <ProgressBar />
         </div>
 
-        {castConnected && (
+        {/* Cast volume: on modern Android the hardware volume keys reach the
+            receiver (external changes sync back via CastManager's
+            VOLUME_LEVEL_CHANGED listener), so no on-screen control renders.
+            Platforms without that routing get this slider instead. */}
+        {castConnected && showCastVolume && (
           <div className="mobile-now-volume">
             <div className="mobile-now-volume-label">
               <span>Cast volume</span>
@@ -418,8 +450,8 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
         <div className="mobile-now-secondary-controls">
           <button
             type="button"
-            onClick={() => { setIsSidebarOpen(true); }}
-            aria-label="Open play queue"
+            onClick={handleQueueButton}
+            aria-label="Show play queue"
             className="mobile-player-control-btn mobile-player-control-btn-sm"
           >
             <ListMusic size={20} />
@@ -466,6 +498,45 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
 
       {/* Safe area bottom spacer */}
       <div style={{ height: 'var(--safe-area-bottom)' }} />
+
+        </div>
+
+        {/* Queue panel below the fold: an opaque sheet that scrolls up over the
+            bloom/video (snap settles on either page). Virtualized against the
+            outer scroller so long queues stay cheap. */}
+        <section className="mobile-now-queue" aria-label="Play queue">
+          <div className="mobile-now-queue-header">
+            <button
+              type="button"
+              onClick={scrollToNowPlaying}
+              className="mobile-player-control-btn mobile-player-control-btn-sm"
+              aria-label="Back to now playing"
+            >
+              <ChevronUp size={18} />
+            </button>
+            <div className="mobile-now-playing-heading">
+              <span>Up Next ({playlist.length})</span>
+            </div>
+            <button
+              type="button"
+              onClick={clearQueue}
+              disabled={playlist.length === 0}
+              className="mobile-player-control-btn mobile-player-control-btn-sm"
+              aria-label="Clear queue"
+            >
+              <ListX size={18} />
+            </button>
+          </div>
+          <div ref={queueListWrapRef}>
+            <QueueList
+              ref={queueListRef}
+              getScrollElement={() => scrollerRef.current}
+              scrollMargin={queueOffset}
+              listClassName="px-3 pb-2"
+            />
+          </div>
+        </section>
+      </div>
     </div>
   );
 };

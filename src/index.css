@@ -6243,33 +6243,21 @@ a:focus-visible > .genre-card .genre-card__label {
   animation: spin 0.8s linear infinite;
 }
 
-/* Registered so the cover colour can be *transitioned* — otherwise the small
-   art-tinted accents (art border, title shadow, chips, buttons) snap on track
-   change while the backdrops cross-fade smoothly. IMPORTANT: only small
-   elements may read this variable. The full-screen surfaces (shell base, mesh,
-   scrim) cross-fade stacked opaque layers by opacity instead — a custom
-   property transition animates on the main thread, and a screen-sized
-   color-mix gradient re-painting on every frame of the 2.5s morph is what made
-   real devices stutter and flicker. */
-@property --mobile-now-art-color {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: transparent;
-}
-
 .mobile-now-playing-shell {
-  --mobile-now-art-color: var(--color-primary);
   /* Background video occupies the top portion; the scrim covers the rest. */
   --mnp-video-height: 75vh;
   /* Single source of truth for the slow, cohesive backdrop cross-fades (video
-     reveal, mesh dim, ambient fade, cover fade, per-track color crossfade). A
-     gentle ease-in-out reads as a true slow drift; --ease-out is front-loaded
-     and pops. Delay vs. playback is intentional — smoothness over immediacy. */
+     reveal, bloom dim, per-track bloom morph). A gentle ease-in-out reads as a
+     true slow drift; --ease-out is front-loaded and pops. The morph is also
+     HELD ~1s after a track change (BLOOM_HOLD_MS in MobileNowPlaying), so
+     skipping never even starts a fade — smoothness over immediacy, by design. */
   --mnp-fade: 2500ms;
   --mnp-ease: var(--ease-in-out);
-  /* Morph the accent tint over the same window as the backdrop cross-fades.
-     Only small elements read the variable, so per-frame repaints stay tiny. */
-  transition: --mobile-now-art-color var(--mnp-fade) var(--mnp-ease);
+  /* Readability envelope: fixed cap on the bloom's intensity over the page
+     background. Bounded by construction — no cover can blow out the text, so
+     there is no adaptive veil or tint machinery. Frosted daylight in light
+     mode; deeper glow in dark (see the .dark override below). */
+  --mnp-bloom-opacity: 0.62;
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -6277,10 +6265,13 @@ a:focus-visible > .genre-card .genre-card__label {
   flex-direction: column;
   isolation: isolate;
   overflow: hidden;
-  /* Static. The tinted radial base lives inside each mesh layer (see
-     buildCoverMeshGradient), so per-track morphs never repaint this surface. */
+  /* Static — all per-track color lives inside the bloom layers. */
   background: var(--color-bg-primary);
   will-change: transform, opacity;
+}
+
+.dark .mobile-now-playing-shell {
+  --mnp-bloom-opacity: 0.8;
 }
 
 .mobile-now-playing-shell[data-state="open"] {
@@ -6292,84 +6283,117 @@ a:focus-visible > .genre-card .genre-card__label {
   pointer-events: none;
 }
 
-/* Vibrant multi-color mesh built from the cover's colors — the base layer and
-   the whole background when no video is shown. The container owns the video-dim
-   (1 → 0.35); the stacked layers inside own the per-track color cross-fade. */
-.mobile-now-playing-mesh {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 1;
-  transition: opacity var(--mnp-fade) var(--mnp-ease);
-  will-change: opacity;
+/* Two-page vertical scroller: page 1 is the now-playing screen, page 2 the
+   queue panel. Proximity snap settles on whole pages without trapping the
+   scroll inside the long queue; overscroll containment keeps rubber-banding
+   (and pull-to-refresh) inside the sheet. The backdrop (bloom, video, scrim)
+   stays absolutely positioned in the shell and does not scroll. */
+.mobile-now-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-snap-type: y proximity;
+  overscroll-behavior-y: contain;
+  scrollbar-width: none;
 }
 
-/* One layer per palette, fully opaque (the tinted base is baked into the
-   gradient string) so the newcomer completely covers the old layer and the
-   cross-fade is opacity-only → GPU-composited, cheap. */
-.mobile-now-playing-mesh-layer {
-  position: absolute;
-  inset: 0;
+.mobile-now-scroll::-webkit-scrollbar {
+  display: none;
 }
 
-/* Blurred cover art washed behind the mesh — a soft bloom of the album's real
-   colors. The container owns the resting opacity and the video fade-out; the
-   stacked layers inside cross-fade the actual image from track to track (so it
-   morphs with the mesh instead of hard-cutting). */
-.mobile-now-playing-ambient {
-  position: absolute;
-  inset: -18%;
-  z-index: 0;
-  inline-size: 136%;
-  block-size: 136%;
-  opacity: 0.36;
-  transform: scale(1.05);
-  will-change: opacity;
-  pointer-events: none;
-  transition: opacity var(--mnp-fade) var(--mnp-ease);
+/* Page 1 reproduces the pre-scroller shell layout (column of spacers, header,
+   content) at exactly one viewport; on very short screens it grows past 100%
+   and the outer scroller absorbs the overflow. */
+.mobile-now-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  scroll-snap-align: start;
 }
 
-.mobile-now-playing-ambient-layer {
-  position: absolute;
+/* The queue: an opaque panel that scrolls up over the bloom/video, so rows
+   stay readable on any backdrop and the backdrop needs no awareness of it. */
+.mobile-now-queue {
+  min-height: 100%;
+  scroll-snap-align: start;
+  background: var(--color-bg-primary);
+  border-top: 1px solid var(--glass-border);
+  border-radius: 1.25rem 1.25rem 0 0;
+  padding-bottom: calc(1rem + var(--safe-area-bottom));
+}
+
+/* Sticks while browsing the queue. Safe-area padding so the stuck header
+   clears the notch/status bar (the sheet spans the full screen). */
+.mobile-now-queue-header {
+  position: sticky;
   top: 0;
-  left: 0;
-  inline-size: 25%;
-  block-size: 25%;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  padding-top: calc(0.75rem + var(--safe-area-top));
+  background: var(--color-bg-primary);
+  border-radius: 1.25rem 1.25rem 0 0;
+}
+
+/* Aurora bloom — the ONE animated colored surface: blurred cover art with a
+   few soft palette glows, cross-faded as whole opaque layers per settled
+   track. The container owns the fixed readability envelope
+   (--mnp-bloom-opacity) and the video dim; the layers inside own the
+   per-track morph. */
+.mobile-now-bloom {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: var(--mnp-bloom-opacity);
+  transition: opacity var(--mnp-fade) var(--mnp-ease);
+  will-change: opacity;
+}
+
+/* One opaque composite per track (solid base + blurred art + glows), so a
+   newcomer fully covers the layer beneath and the morph is pure opacity
+   compositing on the GPU. */
+.mobile-now-bloom-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--color-bg-primary);
+}
+
+/* A layer added on a track change mounts on top at opacity 0 and fades in over
+   the previous one. The first layer (sheet open) skips this so the background
+   doesn't lag behind the opening sheet. */
+.mobile-now-bloom-layer--fade {
+  will-change: opacity;
+  animation: mobile-now-layer-in var(--mnp-fade) var(--mnp-ease) both;
+}
+
+.mobile-now-bloom-art {
+  position: absolute;
+  /* Oversized bleed (−8% … 108%) hides the blur's transparent edge falloff. */
+  top: -8%;
+  left: -8%;
+  inline-size: 29%;
+  block-size: 29%;
   object-fit: cover;
   /* Rasterized at quarter resolution and scaled up 4x by the compositor: the
      blur runs on a 16x-smaller surface (a huge win on phone GPUs — full-res
-     blur(46px) at 3x DPR was ~25MB of texture per layer) and upscaling an
-     already-blurred bitmap is invisible; blur(12px) at 25% ≈ blur(48px) at
-     full size. Pre-blurred per layer so the cross-fade is plain opacity
-     compositing of two cached bitmaps — no per-frame re-rasterization. */
+     blur(48px) at 3x DPR is ~25MB of texture per layer) and upscaling an
+     already-blurred bitmap is invisible; blur(12px) at quarter size ≈
+     blur(48px) at full size. Pre-blurred per layer so the cross-fade is plain
+     opacity compositing of cached bitmaps — no per-frame re-rasterization. */
   transform: scale(4);
   transform-origin: 0 0;
   filter: blur(12px) saturate(1.3);
 }
 
-/* A layer added on a track change mounts on top at opacity 0 and fades in over
-   the previous one. The first layer (sheet open) skips this so the background
-   doesn't lag behind the opening sheet. Shared by mesh, ambient and scrim. */
-.mobile-now-playing-mesh-layer--fade,
-.mobile-now-playing-ambient-layer--fade,
-.mobile-now-playing-scrim-layer--fade {
-  will-change: opacity;
-  animation: mobile-now-layer-in var(--mnp-fade) var(--mnp-ease) both;
-}
-
-/* Adaptive readability veil. Sits above the mesh/ambient (z 0) but below the
-   video (z 1) and controls, pushing the colour backdrop toward the theme
-   background so themed text stays legible over near-white art (near-black in
-   light mode). Opacity is 0 for normal art — set from JS by cover luminance. */
-.mobile-now-bg-veil {
+.mobile-now-bloom-tint {
   position: absolute;
   inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background: var(--color-bg-primary);
-  opacity: var(--mnp-veil-opacity, 0);
-  transition: opacity var(--mnp-fade) var(--mnp-ease);
 }
 
 /* Full-screen background music video. Hidden until buffered, then cross-faded
@@ -6416,39 +6440,35 @@ a:focus-visible > .genre-card .genre-card__label {
   opacity: 1;
 }
 
-/* When the video is showing, fade the cover-art background out so the video is
-   the primary viewing area. */
-.mobile-now-playing-shell[data-video="visible"] .mobile-now-playing-ambient {
-  opacity: 0;
+/* When the video is showing, dim the bloom right down so the video is the
+   primary viewing area (it keeps a whisper of the palette in the gaps). */
+.mobile-now-playing-shell[data-video="visible"] .mobile-now-bloom {
+  opacity: 0.25;
 }
 
-.mobile-now-playing-shell[data-video="visible"] .mobile-now-playing-mesh {
-  opacity: 0.35;
-}
-
-/* Single, PERMANENT scrim — the dark panel behind the controls must stay put
-   across track changes, so the scrim container never fades in/out. Its tint
-   (cover colour normally, neutral page background while a video plays) morphs
-   by cross-fading stacked layers: the newcomer fades in OVER the still-opaque
-   previous layer, so the panel never dips through a translucent midpoint —
-   and each layer is a one-off rasterized gradient (opacity-only animation)
-   instead of a full-screen repaint per frame. The gradient itself is built in
-   buildScrimGradient(): transparent up top so the colour mesh shows through,
-   fully opaque by 63% — above the video's 75vh (≈75%) bottom edge — to mask
-   that edge and back the controls. */
-.mobile-now-playing-scrim {
+/* Single, PERMANENT, NEUTRAL scrim — never animates and never changes with
+   track or video state, so it needs no layering machinery at all. Built only
+   from --color-bg-primary (adapts to light/dark): a light top band keeps the
+   header buttons legible over a bright video or bloom; the middle stays clear
+   so the bloom reads; fully opaque by 63% — above the video's 75vh (≈75%)
+   bottom edge — to mask that edge and back the text and controls. */
+.mobile-now-playing-shell::after {
+  content: "";
   position: absolute;
   inset: 0;
   z-index: 2;
   pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-bg-primary) 45%, transparent) 0%,
+    transparent 14%,
+    transparent 34%,
+    color-mix(in srgb, var(--color-bg-primary) 55%, transparent) 50%,
+    var(--color-bg-primary) 63%
+  );
 }
 
-.mobile-now-playing-scrim-layer {
-  position: absolute;
-  inset: 0;
-}
-
-.mobile-now-playing-shell > :not(.mobile-now-playing-ambient):not(.mobile-now-playing-mesh):not(.mobile-now-video):not(.mobile-now-bg-veil):not(.mobile-now-playing-scrim) {
+.mobile-now-playing-shell > :not(.mobile-now-bloom):not(.mobile-now-video) {
   position: relative;
   z-index: 3;
 }
@@ -6467,12 +6487,41 @@ a:focus-visible > .genre-card .genre-card__label {
   flex-direction: column;
   align-items: center;
   gap: 0.45rem;
+  min-inline-size: 0;
   color: var(--color-text-muted);
   font-size: 0.7rem;
   font-weight: 750;
   letter-spacing: 0.14em;
   line-height: 1;
   text-transform: uppercase;
+}
+
+/* Single line, truncated: "Now Playing" grows into "Now Playing on {device}"
+   when casting or playing on a selected output. */
+.mobile-now-heading-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-inline-size: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-now-heading-device {
+  color: var(--color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Live-cast state dot in the heading (replaces the old state chip). */
+.mobile-now-heading-dot {
+  inline-size: 0.4rem;
+  block-size: 0.4rem;
+  flex: 0 0 0.4rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  box-shadow: 0 0 0.6rem color-mix(in srgb, var(--color-primary) 60%, transparent);
 }
 
 .mobile-now-playing-content {
@@ -6494,7 +6543,7 @@ a:focus-visible > .genre-card .genre-card__label {
   block-size: min(66vw, 16rem);
   flex: 0 0 auto;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--mobile-now-art-color) 28%, var(--glass-border));
+  border: 1px solid var(--glass-border);
   border-radius: clamp(1.25rem, 5vw, 1.75rem);
   background: var(--glass-bg);
   box-shadow: 0 1.5rem 4rem color-mix(in srgb, var(--color-text-primary) 18%, transparent);
@@ -6550,7 +6599,9 @@ a:focus-visible > .genre-card .genre-card__label {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-primary);
-  text-shadow: 0 0.75rem 2.5rem color-mix(in srgb, var(--mobile-now-art-color) 24%, transparent);
+  /* Neutral separation shadow: lifts the title off a bright bloom or video
+     without per-track color machinery. */
+  text-shadow: 0 0.5rem 1.5rem color-mix(in srgb, var(--color-bg-primary) 55%, transparent);
   font-size: clamp(1.35rem, 5.4vw, 1.9rem);
   font-weight: 760;
   letter-spacing: -0.045em;
@@ -6572,34 +6623,9 @@ a:focus-visible > .genre-card .genre-card__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: color-mix(in srgb, var(--mobile-now-art-color) 46%, var(--color-primary));
+  color: color-mix(in srgb, var(--color-primary) 40%, var(--color-text-muted));
   font-size: 0.78rem;
   font-weight: 650;
-}
-
-.mobile-now-state-chip {
-  display: inline-flex;
-  align-items: center;
-  max-inline-size: 100%;
-  gap: 0.45rem;
-  margin-top: 0.9rem;
-  padding: 0.45rem 0.75rem;
-  border-radius: var(--radius-pill);
-  border: 1px solid color-mix(in srgb, var(--mobile-now-art-color) 30%, var(--glass-border));
-  background: color-mix(in srgb, var(--mobile-now-art-color) 12%, transparent);
-  color: var(--color-primary);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.mobile-now-state-dot {
-  inline-size: 0.45rem;
-  block-size: 0.45rem;
-  flex: 0 0 0.45rem;
-  border-radius: var(--radius-pill);
-  background: currentColor;
-  box-shadow: 0 0 0.75rem color-mix(in srgb, var(--color-primary) 60%, transparent);
 }
 
 .mobile-now-progress {
@@ -6608,18 +6634,19 @@ a:focus-visible > .genre-card .genre-card__label {
   animation: mobile-now-enter-soft 240ms var(--ease-out) 110ms both;
 }
 
+/* Cast volume card — only rendered on platforms whose hardware volume keys
+   don't reach the receiver (see castVolumeKeys.ts); modern Android stays
+   sliderless while casting. */
 .mobile-now-volume {
   inline-size: min(100%, 24rem);
   margin-top: 1rem;
   padding: 0.85rem 1rem;
   border: 1px solid var(--glass-border);
   border-radius: 1.25rem;
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--mobile-now-art-color) 8%, transparent), transparent 62%),
-    color-mix(in srgb, var(--color-surface) 55%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, var(--color-surface-variant) 44%, transparent),
-    0 1rem 2.75rem color-mix(in srgb, var(--mobile-now-art-color) 10%, transparent);
+    0 1rem 2.75rem color-mix(in srgb, var(--color-bg-primary) 35%, transparent);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   animation: mobile-now-enter-soft 220ms var(--ease-out) both;
@@ -6629,7 +6656,7 @@ a:focus-visible > .genre-card .genre-card__label {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: color-mix(in srgb, var(--mobile-now-art-color) 24%, var(--color-text-muted));
+  color: var(--color-text-muted);
   font-size: 0.68rem;
   font-weight: 750;
   letter-spacing: 0.14em;
@@ -6645,45 +6672,11 @@ a:focus-visible > .genre-card .genre-card__label {
   border-radius: var(--radius-pill);
   background: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--mobile-now-art-color) 22%, transparent),
-    color-mix(in srgb, var(--color-primary) 20%, transparent)
+    color-mix(in srgb, var(--color-primary) 22%, transparent),
+    color-mix(in srgb, var(--aurora-teal) 30%, transparent)
   );
   accent-color: var(--color-primary);
   outline: none;
-}
-
-/* Frosted glass background so the buttons stay legible whether they sit over
-   the video (header) or on the solid panel (transport/secondary). Uses a
-   text-primary tint (contrasts on both the bg-primary panel and the video) plus
-   a blur and soft shadow. `color` is deliberately left untouched so the active /
-   loved icon colors are preserved. */
-.mobile-now-playing-shell .mobile-player-control-btn,
-.mobile-now-playing-shell .mobile-player-pill-btn {
-  border-color: color-mix(in srgb, var(--mobile-now-art-color) 22%, var(--glass-border));
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--mobile-now-art-color) 14%, transparent), transparent 72%),
-    color-mix(in srgb, var(--color-text-primary) 20%, transparent);
-  box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--color-bg-primary) 40%, transparent);
-  backdrop-filter: blur(16px) saturate(1.2);
-  -webkit-backdrop-filter: blur(16px) saturate(1.2);
-}
-
-.mobile-now-playing-shell .mobile-player-control-btn:hover,
-.mobile-now-playing-shell .mobile-player-pill-btn:hover {
-  border-color: color-mix(in srgb, var(--mobile-now-art-color) 30%, var(--glass-border));
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--mobile-now-art-color) 18%, transparent), transparent 72%),
-    color-mix(in srgb, var(--color-text-primary) 26%, transparent);
-}
-
-.mobile-now-playing-shell .mobile-player-control-btn.is-active,
-.mobile-now-playing-shell .mobile-player-pill-btn.is-active {
-  color: var(--color-primary);
-  border-color: color-mix(in srgb, var(--mobile-now-art-color) 34%, var(--color-primary));
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--mobile-now-art-color) 16%, transparent), transparent 62%),
-    color-mix(in srgb, var(--color-primary) 8%, transparent);
-  box-shadow: 0 0 1rem color-mix(in srgb, var(--mobile-now-art-color) 14%, transparent);
 }
 
 .mobile-now-volume-slider::-webkit-slider-thumb {
@@ -6703,6 +6696,35 @@ a:focus-visible > .genre-card .genre-card__label {
   border: 0;
   background: var(--color-primary);
   box-shadow: 0 0 1rem color-mix(in srgb, var(--color-primary) 34%, transparent);
+}
+
+/* NEUTRAL frosted glass — identical on every cover, so the buttons are always
+   instantly identifiable whether they sit over the video (header) or on the
+   solid panel (transport/secondary). A text-primary tint contrasts on both the
+   bg-primary panel and a bright video, with a hairline border, blur, and soft
+   shadow. `color` is deliberately left untouched so the active / loved icon
+   colors are preserved. Active state is the aurora emerald. */
+.mobile-now-playing-shell .mobile-player-control-btn,
+.mobile-now-playing-shell .mobile-player-pill-btn {
+  border-color: color-mix(in srgb, var(--color-text-primary) 16%, var(--glass-border));
+  background: color-mix(in srgb, var(--color-text-primary) 20%, transparent);
+  box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--color-bg-primary) 40%, transparent);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+}
+
+.mobile-now-playing-shell .mobile-player-control-btn:hover,
+.mobile-now-playing-shell .mobile-player-pill-btn:hover {
+  border-color: color-mix(in srgb, var(--color-text-primary) 26%, var(--glass-border));
+  background: color-mix(in srgb, var(--color-text-primary) 26%, transparent);
+}
+
+.mobile-now-playing-shell .mobile-player-control-btn.is-active,
+.mobile-now-playing-shell .mobile-player-pill-btn.is-active {
+  color: var(--color-primary);
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--glass-border));
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--color-primary) 25%, transparent);
 }
 
 .mobile-now-transport {
@@ -6762,9 +6784,10 @@ a:focus-visible > .genre-card .genre-card__label {
 }
 
 @media (max-height: 720px) {
+  /* Short screens: let the content flow past one viewport — the sheet's outer
+     two-page scroller absorbs the overflow (no nested scrolling). */
   .mobile-now-playing-content {
     justify-content: flex-start;
-    overflow-y: auto;
     padding-bottom: calc(1rem + var(--safe-area-bottom));
   }
 
@@ -6879,9 +6902,9 @@ a:focus-visible > .genre-card .genre-card__label {
   }
 }
 
-/* A freshly-mounted backdrop layer (mesh or ambient art) fades in over the
-   previous one. Within the ambient container its resting opacity is scaled down,
-   so this 0 → 1 still cross-fades correctly. */
+/* A freshly-mounted bloom layer fades in over the previous one. The container
+   scales the resting opacity (the readability envelope), so this 0 → 1 still
+   cross-fades correctly. */
 @keyframes mobile-now-layer-in {
   from {
     opacity: 0;
