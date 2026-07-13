@@ -1270,6 +1270,7 @@ class PlaybackManager {
         this.audio.src = '';
         audioOutputManager.unregisterElement(this.audio);
         if (this.audioContext) {
+            audioOutputManager.unregisterContext(this.audioContext);
             this.audioContext.close();
             this.audioContext = null;
         }
@@ -1288,6 +1289,10 @@ class PlaybackManager {
         try {
             if (!this.audioContext) {
                 this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+                // The loudness graph outputs via ctx.destination, bypassing
+                // element-level sinks — the context must follow the selected
+                // output device too. Applies any already-active selection.
+                audioOutputManager.registerContext(this.audioContext);
             }
             // Wire (or re-point to) the active element's loudness chain. Idempotent
             // per element; also covers a post-promotion element that was created

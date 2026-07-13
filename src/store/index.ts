@@ -9,7 +9,7 @@ import { cloneTrackForQueue, ensureQueueEntryIds } from '../utils/queue';
 import { preloadManager } from '../utils/PreloadManager';
 import { setPlaybackDebugLogging } from '../utils/playbackDebug';
 import { savePlaybackContinuitySnapshot } from '../utils/playbackContinuity';
-import { audioOutputManager, type AudioOutputDevice } from '../utils/AudioOutputManager';
+import { audioOutputManager, type AudioOutputDevice, type AudioOutputPermission } from '../utils/AudioOutputManager';
 import {
   getPlaybackTimeSnapshot,
   setPlaybackCurrentTime,
@@ -509,13 +509,14 @@ export interface PlayerState {
   isBuffering: boolean;
   castConnected: boolean;
   audioOutputSupported: boolean;
-  audioOutputPickerSupported: boolean;
   audioOutputDevices: AudioOutputDevice[];
   audioOutputDeviceId: string;
   audioOutputDeviceLabel: string;
   audioOutputActive: boolean;
   audioOutputSelecting: boolean;
   audioOutputError: string | null;
+  audioOutputPermission: AudioOutputPermission;
+  audioOutputRequestingAccess: boolean;
   playbackTelemetry: PlaybackTelemetry;
 
   // Settings State (Persisted)
@@ -709,8 +710,7 @@ export interface PlayerState {
   cancelSleepTimer: () => void;
   selectAudioOutput: () => Promise<void>;
   setAudioOutputDevice: (deviceId: string) => Promise<void>;
-  refreshAudioOutputs: () => Promise<void>;
-  clearAudioOutput: () => Promise<void>;
+  ensureAudioOutputAccess: () => Promise<void>;
   toggleShuffle: () => void;
   cycleRepeat: () => void;
   setCastConnected: (connected: boolean) => void;
@@ -927,25 +927,27 @@ export const usePlayerStore = create<PlayerState>()(
         );
         set({
           audioOutputSupported: initialAudioOutput.supported,
-          audioOutputPickerSupported: initialAudioOutput.pickerSupported,
           audioOutputDevices: initialAudioOutput.devices,
           audioOutputDeviceId: initialAudioOutput.deviceId,
           audioOutputDeviceLabel: initialAudioOutput.label,
           audioOutputActive: initialAudioOutput.active,
           audioOutputSelecting: initialAudioOutput.selecting,
           audioOutputError: initialAudioOutput.error,
+          audioOutputPermission: initialAudioOutput.permission,
+          audioOutputRequestingAccess: initialAudioOutput.requestingAccess,
         });
 
         audioOutputManager.subscribe((audioOutput) => {
           set({
             audioOutputSupported: audioOutput.supported,
-            audioOutputPickerSupported: audioOutput.pickerSupported,
             audioOutputDevices: audioOutput.devices,
             audioOutputDeviceId: audioOutput.deviceId,
             audioOutputDeviceLabel: audioOutput.label,
             audioOutputActive: audioOutput.active,
             audioOutputSelecting: audioOutput.selecting,
             audioOutputError: audioOutput.error,
+            audioOutputPermission: audioOutput.permission,
+            audioOutputRequestingAccess: audioOutput.requestingAccess,
           });
         });
       }, 0);
@@ -1048,13 +1050,14 @@ export const usePlayerStore = create<PlayerState>()(
         isBuffering: false as boolean,
         castConnected: false as boolean,
         audioOutputSupported: false,
-        audioOutputPickerSupported: false,
         audioOutputDevices: [{ deviceId: '', label: 'System default', isDefault: true }],
         audioOutputDeviceId: '',
         audioOutputDeviceLabel: '',
         audioOutputActive: false,
         audioOutputSelecting: false,
         audioOutputError: null,
+        audioOutputPermission: 'unknown' as AudioOutputPermission,
+        audioOutputRequestingAccess: false,
         playbackTelemetry: {
           lastUpdatedAt: null,
           loadPath: 'none',
@@ -2759,16 +2762,9 @@ export const usePlayerStore = create<PlayerState>()(
           }
         },
 
-        refreshAudioOutputs: async () => {
-          const output = await audioOutputManager.refreshDevices();
-          if (output.error) {
-            get().addToast(output.error, 'error');
-          }
-        },
-
-        clearAudioOutput: async () => {
-          await playbackManager.clearAudioOutputDevice();
-          get().addToast('Using system default audio output.', 'info');
+        ensureAudioOutputAccess: async () => {
+          // Denials/errors render inline in the Output settings tab — no toasts.
+          await audioOutputManager.ensureDeviceAccess();
         },
 
         toggleShuffle: () => set((state: PlayerState) => ({ shuffle: !state.shuffle })),

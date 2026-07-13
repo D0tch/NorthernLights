@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { usePlayerStore } from '../../store/index';
 import { useNetworkInfo } from '../../hooks/useNetworkInfo';
-import { Check, RefreshCw, RotateCcw, Speaker } from 'lucide-react';
+import { Speaker } from 'lucide-react';
 
 const formatTelemetryTime = (timestamp: number | null): string => {
     if (!timestamp) return 'No data yet';
@@ -57,27 +57,28 @@ export const PlaybackTab: React.FC = () => {
     const cancelSleepTimer = usePlayerStore(state => state.cancelSleepTimer);
     const castConnected = usePlayerStore(state => state.castConnected);
     const audioOutputSupported = usePlayerStore(state => state.audioOutputSupported);
-    const audioOutputPickerSupported = usePlayerStore(state => state.audioOutputPickerSupported);
     const audioOutputDevices = usePlayerStore(state => state.audioOutputDevices);
     const audioOutputDeviceId = usePlayerStore(state => state.audioOutputDeviceId);
     const audioOutputActive = usePlayerStore(state => state.audioOutputActive);
     const audioOutputDeviceLabel = usePlayerStore(state => state.audioOutputDeviceLabel);
     const audioOutputSelecting = usePlayerStore(state => state.audioOutputSelecting);
     const audioOutputError = usePlayerStore(state => state.audioOutputError);
-    const selectAudioOutput = usePlayerStore(state => state.selectAudioOutput);
+    const audioOutputPermission = usePlayerStore(state => state.audioOutputPermission);
+    const audioOutputRequestingAccess = usePlayerStore(state => state.audioOutputRequestingAccess);
     const setAudioOutputDevice = usePlayerStore(state => state.setAudioOutputDevice);
-    const refreshAudioOutputs = usePlayerStore(state => state.refreshAudioOutputs);
-    const clearAudioOutput = usePlayerStore(state => state.clearAudioOutput);
+    const ensureAudioOutputAccess = usePlayerStore(state => state.ensureAudioOutputAccess);
     const networkInfo = useNetworkInfo();
     
     const [playbackTab, setPlaybackTab] = useState<'streaming' | 'output' | 'infinity' | 'llm'>('streaming');
     const [showLlmAdvanced, setShowLlmAdvanced] = useState(false);
 
+    // Opening the Output tab triggers the one-time device-access prompt (if
+    // needed) and refreshes the device list.
     useEffect(() => {
         if (playbackTab === 'output') {
-            void refreshAudioOutputs();
+            void ensureAudioOutputAccess();
         }
-    }, [playbackTab, refreshAudioOutputs]);
+    }, [playbackTab, ensureAudioOutputAccess]);
 
     // Tick once a second while a sleep timer is active to show the countdown.
     const [sleepNow, setSleepNow] = useState(() => Date.now());
@@ -446,138 +447,69 @@ export const PlaybackTab: React.FC = () => {
             {playbackTab === 'output' && (
                 <div>
                     <p className="text-sm text-[var(--color-text-muted)] mb-6">
-                        Choose the local audio output used by browser playback. Chromecast has its own route and takes priority while connected.
+                        Choose which speaker browser playback uses. Chromecast has its own route and takes priority while connected.
                     </p>
 
-                    <div className="mb-6 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-4">
-                        <div className="flex items-start justify-between gap-4">
-                            <div className="min-w-0">
-                                <p className="text-sm font-medium text-[var(--color-text-primary)]">Audio Output</p>
-                                <div className="mt-2 flex items-center gap-2 min-w-0">
-                                    <Speaker
-                                        size={18}
-                                        className="flex-shrink-0"
-                                        style={{
-                                            color: audioOutputActive ? 'var(--color-primary)' : 'var(--color-text-muted)',
-                                            filter: audioOutputActive ? 'drop-shadow(0 0 4px var(--color-primary))' : 'none',
-                                        }}
-                                    />
-                                    <span className="text-sm text-[var(--color-text-primary)] truncate">
-                                        {audioOutputActive
-                                            ? audioOutputDeviceLabel || 'Selected output'
-                                            : audioOutputDeviceLabel
-                                            ? `${audioOutputDeviceLabel} saved`
-                                            : 'System default'}
-                                    </span>
-                                </div>
-                                <p className="text-xs text-[var(--color-text-muted)] mt-2">
-                                    {audioOutputSupported
-                                        ? castConnected
-                                            ? 'Disconnect Chromecast to choose a local output.'
-                                            : audioOutputActive
-                                            ? 'Browser playback is routed to the selected local output.'
-                                            : 'System default is active. Select another exposed output below when available.'
-                                        : 'System default is active. This browser has not exposed app-level routing for other outputs.'}
+                    <div className="mb-6">
+                        <label className="flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                            <Speaker
+                                size={16}
+                                className="flex-shrink-0"
+                                style={{ color: audioOutputActive ? 'var(--color-primary)' : 'var(--color-text-muted)' }}
+                            />
+                            Speaker
+                        </label>
+                        <select
+                            value={audioOutputActive ? audioOutputDeviceId : ''}
+                            onChange={e => { void setAudioOutputDevice(e.target.value); }}
+                            disabled={castConnected || audioOutputSelecting || !audioOutputSupported || audioOutputPermission === 'denied'}
+                            className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none disabled:opacity-60"
+                        >
+                            <option value="">{audioOutputDevices.find(d => d.isDefault)?.label || 'System default'}</option>
+                            {audioOutputDevices.filter(d => !d.isDefault).map(device => (
+                                <option key={device.deviceId} value={device.deviceId}>{device.label}</option>
+                            ))}
+                        </select>
+
+                        {audioOutputSupported && !castConnected && audioOutputPermission === 'denied' ? (
+                            <div className="mt-3 p-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)]">
+                                <p className="text-sm text-[var(--color-text-primary)]">
+                                    Aurora needs one-time microphone permission to name your speakers and route audio to them. Audio is never recorded.
                                 </p>
-                                {audioOutputError && (
-                                    <p className="text-xs text-amber-500 mt-2">{audioOutputError}</p>
-                                )}
-                            </div>
-
-                            <div className="flex flex-col sm:flex-row gap-2 flex-shrink-0">
-                                {audioOutputPickerSupported && (
-                                    <button
-                                        type="button"
-                                        onClick={() => { void selectAudioOutput(); }}
-                                        disabled={!audioOutputSupported || castConnected || audioOutputSelecting}
-                                        className="btn btn-primary btn-sm flex items-center gap-1.5 disabled:opacity-50"
-                                    >
-                                        <Speaker size={14} />
-                                        {audioOutputSelecting ? 'Choosing...' : 'Picker'}
-                                    </button>
-                                )}
                                 <button
                                     type="button"
-                                    onClick={() => { void refreshAudioOutputs(); }}
-                                    disabled={audioOutputSelecting}
-                                    className="btn btn-ghost btn-sm flex items-center gap-1.5 disabled:opacity-50"
+                                    onClick={() => { void ensureAudioOutputAccess(); }}
+                                    className="btn btn-primary btn-sm mt-3"
                                 >
-                                    <RefreshCw size={14} />
-                                    Refresh
+                                    Allow access
                                 </button>
-                                <button
-                                    type="button"
-                                    onClick={() => { void clearAudioOutput(); }}
-                                    disabled={!audioOutputSupported || !audioOutputActive || audioOutputSelecting}
-                                    className="btn btn-ghost btn-sm flex items-center gap-1.5 disabled:opacity-50"
-                                >
-                                    <RotateCcw size={14} />
-                                    Default
-                                </button>
+                                <p className="text-xs text-[var(--color-text-muted)] mt-3">
+                                    No prompt appearing? Enable the microphone permission for this site in your browser settings, then reopen this tab.
+                                </p>
                             </div>
-                        </div>
-                    </div>
-
-                    <div className="mb-6 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-4">
-                        <div className="flex items-center justify-between gap-3 mb-3">
-                            <p className="text-sm font-medium text-[var(--color-text-primary)]">Available Outputs</p>
-                            <span className="text-xs text-[var(--color-text-muted)]">{audioOutputDevices.length} shown</span>
-                        </div>
-                        <div className="space-y-2">
-                            {audioOutputDevices.map((device) => {
-                                const selected = device.isDefault
-                                    ? !audioOutputActive
-                                    : audioOutputActive && audioOutputDeviceId === device.deviceId;
-                                const disabled = castConnected || audioOutputSelecting || (!device.isDefault && !audioOutputSupported);
-                                return (
-                                    <button
-                                        key={device.isDefault ? 'default' : device.deviceId}
-                                        type="button"
-                                        onClick={() => { void setAudioOutputDevice(device.deviceId); }}
-                                        disabled={disabled}
-                                        className="w-full flex items-center justify-between gap-3 p-3 rounded-lg border border-[var(--glass-border)] bg-[var(--color-bg-secondary)] text-left transition-ui hover:border-[var(--color-primary)]/40 disabled:opacity-60 disabled:hover:border-[var(--glass-border)]"
-                                    >
-                                        <span className="min-w-0 flex items-center gap-2">
-                                            <Speaker
-                                                size={17}
-                                                className="flex-shrink-0"
-                                                style={{ color: selected ? 'var(--color-primary)' : 'var(--color-text-muted)' }}
-                                            />
-                                            <span className="min-w-0">
-                                                <span className="block text-sm text-[var(--color-text-primary)] truncate">{device.label}</span>
-                                                <span className="block text-xs text-[var(--color-text-muted)]">
-                                                    {device.isDefault ? 'Operating system default' : audioOutputSupported ? 'Browser-exposed output' : 'Visible, routing unavailable'}
-                                                </span>
-                                            </span>
-                                        </span>
-                                        {selected && <Check size={17} className="flex-shrink-0 text-[var(--color-primary)]" />}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                        {!audioOutputSupported && (
-                            <p className="text-xs text-[var(--color-text-muted)] mt-3">
-                                Aurora will keep using the system default output. Pair or switch headphones/speakers through the operating system audio controls.
+                        ) : audioOutputSupported && audioOutputPermission === 'unavailable' ? (
+                            <p className="text-xs text-[var(--color-text-muted)] mt-1.5">
+                                No microphone was found, so this browser won't reveal speaker names or allow routing. Audio follows the system default output.
+                            </p>
+                        ) : (
+                            <p className="text-xs text-[var(--color-text-muted)] mt-1.5">
+                                {castConnected
+                                    ? 'Chromecast is active — disconnect to choose a local speaker.'
+                                    : !audioOutputSupported
+                                    ? "This browser can't route playback to a specific device. Audio follows the operating system's default output."
+                                    : audioOutputRequestingAccess
+                                    ? 'Requesting device access…'
+                                    : audioOutputSelecting
+                                    ? 'Switching…'
+                                    : audioOutputActive
+                                    ? `Playing on ${audioOutputDeviceLabel || 'selected output'}.`
+                                    : 'Using the system default output.'}
                             </p>
                         )}
-                    </div>
 
-                    <div className="p-3 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)]">
-                        <p className="text-xs font-medium text-[var(--color-text-muted)] mb-2">Routing Priority</p>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                            <div className="rounded-lg border border-[var(--glass-border)] bg-[var(--color-bg-secondary)] p-3">
-                                <span className="block text-[var(--color-text-muted)]">Chromecast</span>
-                                <span className="block mt-1 font-medium text-[var(--color-text-primary)]">{castConnected ? 'Active' : 'Inactive'}</span>
-                            </div>
-                            <div className="rounded-lg border border-[var(--glass-border)] bg-[var(--color-bg-secondary)] p-3">
-                                <span className="block text-[var(--color-text-muted)]">Local output</span>
-                                <span className="block mt-1 font-medium text-[var(--color-text-primary)]">{audioOutputActive ? 'Selected' : 'Default'}</span>
-                            </div>
-                            <div className="rounded-lg border border-[var(--glass-border)] bg-[var(--color-bg-secondary)] p-3">
-                                <span className="block text-[var(--color-text-muted)]">Hardware keys</span>
-                                <span className="block mt-1 font-medium text-[var(--color-text-primary)]">Media Session</span>
-                            </div>
-                        </div>
+                        {audioOutputError && (
+                            <p className="text-xs text-amber-500 mt-2">{audioOutputError}</p>
+                        )}
                     </div>
                 </div>
             )}
