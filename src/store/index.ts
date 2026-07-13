@@ -31,6 +31,16 @@ export interface ToastItem {
   onAction?: () => void;
 }
 
+export type SetupStep = 'account' | 'analysis' | 'library';
+
+export type StoreActionResult =
+  | { success: true }
+  | { success: false; error: string };
+
+export interface AddLibraryFolderOptions {
+  scan?: boolean;
+}
+
 // Re-entrancy guard: incremented on each playAtIndex call to discard stale callbacks
 let playGeneration = 0;
 
@@ -129,6 +139,16 @@ function abortInFlightLibraryFetches() {
 
 function isAbortError(e: unknown): boolean {
   return !!e && typeof e === 'object' && (e as { name?: string }).name === 'AbortError';
+}
+
+async function getResponseError(response: Response, fallback: string): Promise<string> {
+  try {
+    const data = await response.json();
+    if (typeof data?.error === 'string' && data.error.trim()) return data.error;
+  } catch {
+    // Preserve the operation-specific fallback for non-JSON responses.
+  }
+  return fallback;
 }
 
 const buildTrackUrls = (trackId: string, path: string, token: string, quality: string = '128k', artHash?: string) => {
@@ -474,7 +494,14 @@ export interface PlayerState {
 
   // Setup State
   needsSetup: boolean | null;
+  setupAdminCreated: boolean | null;
+  setupOnboardingCompleted: boolean | null;
+  setupStep: SetupStep | null;
+  setupStatusError: string | null;
   checkSetupStatus: () => Promise<void>;
+  createSetupAdmin: (username: string, password: string) => Promise<StoreActionResult>;
+  updateSetupProgress: (nextStep: Exclude<SetupStep, 'account'>) => Promise<StoreActionResult>;
+  finalizeSetup: () => Promise<StoreActionResult>;
 
   // Playback State (Transient)
   currentIndex: number | null;
@@ -636,7 +663,7 @@ export interface PlayerState {
   getAuthHeader: () => Record<string, string>;
   /** Build stream/art URLs onto server-fetched tracks using the current token + quality. */
   hydrateTracks: (tracks: TrackInfo[]) => TrackInfo[];
-  addLibraryFolder: (folderPath: string) => Promise<void>;
+  addLibraryFolder: (folderPath: string, options?: AddLibraryFolderOptions) => Promise<StoreActionResult>;
   removeLibraryFolder: (folderName: string) => Promise<void>;
   rescanLibrary: (specificFolder?: string) => Promise<void>;
   addTracksToLibrary: (newTracks: TrackInfo[]) => void;
@@ -1011,6 +1038,10 @@ export const usePlayerStore = create<PlayerState>()(
         scanningFile: null as string | null,
 
         needsSetup: null as boolean | null,
+        setupAdminCreated: null as boolean | null,
+        setupOnboardingCompleted: null as boolean | null,
+        setupStep: null as SetupStep | null,
+        setupStatusError: null as string | null,
 
         currentIndex: null as number | null,
         playbackState: 'stopped' as PlaybackState,
@@ -1157,15 +1188,98 @@ export const usePlayerStore = create<PlayerState>()(
         checkSetupStatus: async () => {
           try {
             const res = await fetch('/api/setup/status');
-            if (res.ok) {
-              const data = await res.json();
-              set({ needsSetup: data.needsSetup });
-            } else {
-              set({ needsSetup: false });
+            if (!res.ok) throw new Error(await getResponseError(res, 'Could not check setup status.'));
+            const data = await res.json();
+            if (typeof data.needsSetup !== 'boolean') {
+              throw new Error(typeof data.error === 'string' ? data.error : 'Setup status was unavailable.');
             }
-          } catch (e) {
-            console.error("Failed to check setup status", e);
-            set({ needsSetup: false }); // Fallback assuming standard boot
+            const nextStep = data.nextStep === 'account' || data.nextStep === 'analysis' || data.nextStep === 'library'
+              ? data.nextStep as SetupStep
+              : null;
+            set({
+              needsSetup: data.needsSetup,
+              setupAdminCreated: typeof data.adminCreated === 'boolean' ? data.adminCreated : null,
+              setupOnboardingCompleted: typeof data.onboardingCompleted === 'boolean' ? data.onboardingCompleted : null,
+              setupStep: nextStep,
+              setupStatusError: null,
+            });
+          } catch (error) {
+            console.error('Failed to check setup status', error);
+            const message = error instanceof Error ? error.message : 'Could not check setup status.';
+            set({ setupStatusError: message });
+          }
+        },
+
+        createSetupAdmin: async (username: string, password: string) => {
+          try {
+            const res = await fetch('/api/setup/complete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: username.trim(), password }),
+            });
+            if (!res.ok) {
+              return { success: false, error: await getResponseError(res, 'Failed to create the admin account.') };
+            }
+
+            const data = await res.json();
+            set({
+              authToken: data.token,
+              mediaAccessToken: data.mediaToken || data.token,
+              sseAccessToken: data.sseToken || data.token,
+              currentUser: data.user || null,
+              needsSetup: true,
+              setupAdminCreated: true,
+              setupOnboardingCompleted: false,
+              setupStep: 'analysis',
+              setupStatusError: null,
+              authExpired: false,
+              authExpiredMessage: null,
+            });
+            return { success: true };
+          } catch (error) {
+            return {
+              success: false,
+              error: error instanceof Error ? error.message : 'Network error while creating the admin account.',
+            };
+          }
+        },
+
+        updateSetupProgress: async (nextStep: Exclude<SetupStep, 'account'>) => {
+          try {
+            const res = await fetch('/api/setup/progress', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json', ...get().getAuthHeader() },
+              body: JSON.stringify({ nextStep }),
+            });
+            if (!res.ok) {
+              return { success: false, error: await getResponseError(res, 'Failed to save setup progress.') };
+            }
+            set({ setupStep: nextStep, setupStatusError: null });
+            return { success: true };
+          } catch (error) {
+            return {
+              success: false,
+              error: error instanceof Error ? error.message : 'Network error while saving setup progress.',
+            };
+          }
+        },
+
+        finalizeSetup: async () => {
+          try {
+            const res = await fetch('/api/setup/finalize', {
+              method: 'POST',
+              headers: get().getAuthHeader(),
+            });
+            if (!res.ok) {
+              return { success: false, error: await getResponseError(res, 'Failed to finish setup.') };
+            }
+            set({ setupOnboardingCompleted: true, setupStatusError: null });
+            return { success: true };
+          } catch (error) {
+            return {
+              success: false,
+              error: error instanceof Error ? error.message : 'Network error while finishing setup.',
+            };
           }
         },
 
@@ -2096,26 +2210,45 @@ export const usePlayerStore = create<PlayerState>()(
           }
         },
 
-        addLibraryFolder: async (folderPath: string) => {
-          const state = get();
-          if (state.libraryFolders.includes(folderPath)) return;
+        addLibraryFolder: async (folderPath: string, options: AddLibraryFolderOptions = {}) => {
+          const normalizedPath = folderPath.trim();
+          if (!normalizedPath) {
+            return { success: false, error: 'Enter an absolute directory path.' };
+          }
 
-          set({ libraryFolders: [...state.libraryFolders, folderPath] });
+          if (get().libraryFolders.includes(normalizedPath)) {
+            if (options.scan !== false) await get().rescanLibrary(normalizedPath);
+            return { success: true };
+          }
 
           try {
-            const authHeaders = (get() as any).getAuthHeader();
-            
-            // Instantly register the folder to the DB so page refreshes don't lose it
-            await fetch('/api/library/add', {
+            const authHeaders = get().getAuthHeader();
+            const response = await fetch('/api/library/add', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', ...authHeaders },
-              body: JSON.stringify({ path: folderPath })
+              body: JSON.stringify({ path: normalizedPath })
             });
+            if (!response.ok) {
+              return {
+                success: false,
+                error: await getResponseError(response, 'Failed to add the directory.'),
+              };
+            }
 
-            // Queue a scan for JUST this newly added folder
-            await get().rescanLibrary(folderPath);
-          } catch (e) {
-            console.error('Failed to add and scan folder', e);
+            set((state: PlayerState) => ({
+              libraryFolders: state.libraryFolders.includes(normalizedPath)
+                ? state.libraryFolders
+                : [...state.libraryFolders, normalizedPath],
+            }));
+
+            if (options.scan !== false) await get().rescanLibrary(normalizedPath);
+            return { success: true };
+          } catch (error) {
+            console.error('Failed to add and scan folder', error);
+            return {
+              success: false,
+              error: error instanceof Error ? error.message : 'Network error while adding the directory.',
+            };
           }
         },
 

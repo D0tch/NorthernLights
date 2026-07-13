@@ -170,19 +170,22 @@ All authenticated requests must include the following header:
 `Authorization: Bearer <your_jwt_token>`
 
 ### [GET] `/api/setup/status`
-Check if the server requires initial setup (first admin creation).
-- **How to use**: Call this upon first launch to determine if you need to redirect to the setup wizard.
+Check whether Aurora needs first-run setup and which step should resume. Existing installations created before resumable onboarding are treated as complete when users already exist.
+- **How to use**: Call this upon launch before choosing between account creation, resumed admin login, or the application shell.
 - **Example Response**:
   ```json
   {
-    "needsSetup": false,
+    "needsSetup": true,
+    "adminCreated": true,
+    "onboardingCompleted": false,
+    "nextStep": "library",
     "dbConnected": true
   }
   ```
 
 ### [POST] `/api/setup/complete`
-Complete initial setup by creating the first admin account.
-- **How to use**: Submit the admin credentials. Only works if `needsSetup` is true.
+Create the first admin account and initialize resumable onboarding.
+- **How to use**: Submit the admin credentials. Only works while no user exists.
 - **Example Request**:
   ```json
   {
@@ -193,10 +196,26 @@ Complete initial setup by creating the first admin account.
 - **Example Response**:
   ```json
   {
-    "status": "completed",
+    "status": "account_created",
+    "nextStep": "analysis",
     "token": "eyJh...",
     "user": { "id": "uuid-v4", "username": "admin", "role": "admin" }
   }
+  ```
+
+### [PUT] `/api/setup/progress`
+Persist the next resumable onboarding step. Requires an authenticated admin JWT.
+- **Example Request**:
+  ```json
+  { "nextStep": "library" }
+  ```
+- Accepted steps are `analysis` and `library`; account creation is derived from whether a user exists.
+
+### [POST] `/api/setup/finalize`
+Mark onboarding complete. Requires an authenticated admin JWT and at least one registered library directory.
+- **Example Response**:
+  ```json
+  { "status": "completed", "onboardingCompleted": true }
   ```
 
 ### [POST] `/api/auth/login`
