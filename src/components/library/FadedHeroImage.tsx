@@ -6,7 +6,7 @@ interface FadedHeroImageProps {
 }
 
 const fadeOverlayStyle: React.CSSProperties = {
-    background: 'linear-gradient(to bottom, color-mix(in srgb, var(--color-bg) 55%, transparent) 0%, color-mix(in srgb, var(--color-bg) 20%, transparent) 35%, color-mix(in srgb, var(--color-bg) 24%, transparent) 55%, color-mix(in srgb, var(--color-bg) 88%, transparent) 78%, var(--color-bg) 100%)',
+    background: 'linear-gradient(to bottom, color-mix(in srgb, var(--color-background) 55%, transparent) 0%, color-mix(in srgb, var(--color-background) 20%, transparent) 35%, color-mix(in srgb, var(--color-background) 24%, transparent) 55%, color-mix(in srgb, var(--color-background) 88%, transparent) 78%, var(--color-background) 100%)',
 };
 
 const wideMaskStyle: React.CSSProperties = {
@@ -30,9 +30,9 @@ export const FadedHeroImage: React.FC<FadedHeroImageProps> = ({ src, variant = '
             />
             {isWide ? (
                 <>
-                    <div className="absolute inset-0 bg-gradient-to-b from-[var(--color-bg)]/12 via-transparent via-12% to-transparent" />
-                    <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent via-24% to-[var(--color-bg)]/80" />
-                    <div className="absolute bottom-0 left-0 h-44 md:h-56 w-full bg-gradient-to-t from-[var(--color-bg)] via-[var(--color-bg)]/94 via-46% to-transparent" />
+                    <div className="absolute inset-0 bg-gradient-to-b from-background/12 via-transparent via-12% to-transparent" />
+                    <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent via-24% to-background/80" />
+                    <div className="absolute bottom-0 left-0 h-44 md:h-56 w-full bg-gradient-to-t from-background via-background/94 via-46% to-transparent" />
                 </>
             ) : (
                 <div className="absolute inset-0" style={fadeOverlayStyle} />

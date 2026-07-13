@@ -143,14 +143,14 @@ const MiniEventCard: React.FC<{ event: ArtistEvent }> = ({ event }) => {
             border border-[var(--glass-border)]
             rounded-xl
             p-2.5 md:p-3
-            hover:border-[var(--color-primary)]/40 hover:shadow-sm
+            hover:border-primary/40 hover:shadow-sm
             transition-ui
         ">
             {/* Date block — calendar/poster style */}
             <div className="
                 flex flex-col items-center justify-center
                 shrink-0 w-14 md:w-16
-                bg-[var(--color-bg)]
+                bg-background
                 rounded-lg
                 border border-[var(--glass-border)]
                 py-2 px-1
@@ -204,7 +204,7 @@ const MiniEventCard: React.FC<{ event: ArtistEvent }> = ({ event }) => {
                         min-h-[44px] min-w-[44px] px-3
                         rounded-full
                         text-[var(--color-primary)] hover:text-white
-                        bg-[var(--color-primary)]/10 hover:bg-[var(--color-primary)]
+                        bg-primary/10 hover:bg-[var(--color-primary)]
                         transition-colors
                         flex-shrink-0
                     "

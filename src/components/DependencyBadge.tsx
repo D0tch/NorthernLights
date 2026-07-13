@@ -95,7 +95,7 @@ export const DependencyInfoBox: React.FC<DependencyInfoBoxProps> = ({
   icon,
 }) => {
   return (
-    <div className="bg-[var(--color-surface)]/60 rounded-xl border border-[var(--glass-border)] p-4">
+    <div className="bg-surface/60 rounded-xl border border-[var(--glass-border)] p-4">
       <div className="flex items-start gap-3">
         {icon && (
           <div className="text-[var(--color-primary)] mt-0.5">{icon}</div>

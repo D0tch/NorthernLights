@@ -210,7 +210,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                             <input
                                 type="text"
                                 aria-label="Search settings"
-                                className="w-full min-h-11 bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-2xl pl-10 pr-4 py-2.5 text-base text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui placeholder:text-[var(--color-text-muted)]"
+                                className="w-full min-h-11 bg-background border border-[var(--glass-border)] rounded-2xl pl-10 pr-4 py-2.5 text-base text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-primary/50 transition-ui placeholder:text-[var(--color-text-muted)]"
                                 placeholder="Search settings"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -245,7 +245,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                                     clearAuthToken();
                                     handleClose();
                                 }}
-                                className="flex min-h-11 items-center gap-2 px-3.5 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-ui flex-shrink-0 text-[var(--color-error)] bg-[var(--color-error)]/10 hover:bg-[var(--color-error)]/15 ml-auto"
+                                className="flex min-h-11 items-center gap-2 px-3.5 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-ui flex-shrink-0 text-[var(--color-error)] bg-error/10 hover:bg-error/15 ml-auto"
                             >
                                 <LogOut size={14} />
                                 Sign Out
@@ -265,7 +265,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                             <input 
                                 type="text" 
                                 aria-label="Search settings"
-                                className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-full pl-10 pr-4 py-2.5 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui placeholder:text-[var(--color-text-muted)]" 
+                                className="w-full bg-background border border-[var(--glass-border)] rounded-full pl-10 pr-4 py-2.5 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-primary/50 transition-ui placeholder:text-[var(--color-text-muted)]" 
                                 placeholder="Search settings" 
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -310,7 +310,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                             <div className="mt-8 border-t border-[var(--glass-border)] pt-4">
                                 <button 
                                     type="button"
-                                    className="w-full flex items-center px-3 py-2.5 rounded-xl text-sm font-medium text-[var(--color-error)] hover:bg-[var(--color-error)]/10 transition-colors"
+                                    className="w-full flex items-center px-3 py-2.5 rounded-xl text-sm font-medium text-[var(--color-error)] hover:bg-error/10 transition-colors"
                                     onClick={() => {
                                         clearAuthToken();
                                         handleClose();

@@ -385,28 +385,28 @@ export const MetadataTab: React.FC = () => {
                         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
                             <div>
                                 <label className="block text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Artist Images</label>
-                                <select disabled={!lastFmApiKey && !geniusApiKey} value={providerArtistImage} onChange={e => setSettings({ providerArtistImage: e.target.value as 'lastfm' | 'genius' })} className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm shadow-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors disabled:opacity-50">
+                                <select disabled={!lastFmApiKey && !geniusApiKey} value={providerArtistImage} onChange={e => setSettings({ providerArtistImage: e.target.value as 'lastfm' | 'genius' })} className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] text-sm shadow-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors disabled:opacity-50">
                                     <option value="lastfm" disabled={!lastFmApiKey}>Last.fm {!lastFmApiKey && '(Not Configured)'}</option>
                                     <option value="genius" disabled={!geniusApiKey}>Genius {!geniusApiKey && '(Not Configured)'}</option>
                                 </select>
                             </div>
                             <div>
                                 <label className="block text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Artist Artwork</label>
-                                <select value={providerArtistArtwork} onChange={e => setSettings({ providerArtistArtwork: e.target.value as 'genius' | 'none' })} className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm shadow-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors">
+                                <select value={providerArtistArtwork} onChange={e => setSettings({ providerArtistArtwork: e.target.value as 'genius' | 'none' })} className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] text-sm shadow-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors">
                                     <option value="genius" disabled={!geniusApiKey}>Genius {!geniusApiKey && '(Not Configured)'}</option>
                                     <option value="none">None</option>
                                 </select>
                             </div>
                             <div>
                                 <label className="block text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Artist Bios</label>
-                                <select disabled={!lastFmApiKey && !geniusApiKey} value={providerArtistBio} onChange={e => setSettings({ providerArtistBio: e.target.value as 'lastfm' | 'genius' })} className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm shadow-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors disabled:opacity-50">
+                                <select disabled={!lastFmApiKey && !geniusApiKey} value={providerArtistBio} onChange={e => setSettings({ providerArtistBio: e.target.value as 'lastfm' | 'genius' })} className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] text-sm shadow-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors disabled:opacity-50">
                                     <option value="lastfm" disabled={!lastFmApiKey}>Last.fm {!lastFmApiKey && '(Not Configured)'}</option>
                                     <option value="genius" disabled={!geniusApiKey}>Genius {!geniusApiKey && '(Not Configured)'}</option>
                                 </select>
                             </div>
                             <div>
                                 <label className="block text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider mb-2">Album Art</label>
-                                <select disabled={!lastFmApiKey && !geniusApiKey && !musicBrainzEnabled} value={providerAlbumArt} onChange={e => setSettings({ providerAlbumArt: e.target.value as 'lastfm' | 'genius' | 'musicbrainz' })} className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm shadow-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors disabled:opacity-50">
+                                <select disabled={!lastFmApiKey && !geniusApiKey && !musicBrainzEnabled} value={providerAlbumArt} onChange={e => setSettings({ providerAlbumArt: e.target.value as 'lastfm' | 'genius' | 'musicbrainz' })} className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] text-sm shadow-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors disabled:opacity-50">
                                     <option value="lastfm" disabled={!lastFmApiKey}>Last.fm {!lastFmApiKey && '(Not Configured)'}</option>
                                     <option value="genius" disabled={!geniusApiKey}>Genius {!geniusApiKey && '(Not Configured)'}</option>
                                     <option value="musicbrainz" disabled={!musicBrainzEnabled}>MusicBrainz {!musicBrainzEnabled && '(Disabled)'}</option>
@@ -493,14 +493,14 @@ export const MetadataTab: React.FC = () => {
                     </div>
 
                     <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 flex flex-col gap-3 shadow-sm">
-                        <input type="text" value={lastFmApiKey} onChange={e => setLastFmApiKey(e.target.value)} placeholder="API Key" className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
-                        <input type="password" value={lastFmSharedSecret} onChange={e => setLastFmSharedSecret(e.target.value)} placeholder="Shared Secret" className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
+                        <input type="text" value={lastFmApiKey} onChange={e => setLastFmApiKey(e.target.value)} placeholder="API Key" className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
+                        <input type="password" value={lastFmSharedSecret} onChange={e => setLastFmSharedSecret(e.target.value)} placeholder="Shared Secret" className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
                         <div className="flex flex-col gap-2 mt-2 pt-3 border-t border-[var(--glass-border)]">
                             <label className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Callback URL</label>
                             <p className="text-xs text-[var(--color-text-muted)]">
                                 Register this exact URL as the callback URL in your Last.fm API account. Aurora appends one-time auth parameters automatically during connect.
                             </p>
-                            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--glass-border)]">
+                            <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-background border border-[var(--glass-border)]">
                                 <code className="flex-1 text-xs text-[var(--color-text-primary)] break-all font-mono">
                                     {lfmCallbackUri || 'Loading…'}
                                 </code>
@@ -618,7 +618,7 @@ export const MetadataTab: React.FC = () => {
 
                     <div className="bg-[var(--color-surface)] rounded-2xl border border-[var(--glass-border)] p-5 flex flex-col gap-3 shadow-sm">
                         <div className="flex gap-2">
-                            <input type="text" value={geniusApiKey} onChange={e => setGeniusApiKey(e.target.value)} placeholder="Access Token" className="flex-1 p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
+                            <input type="text" value={geniusApiKey} onChange={e => setGeniusApiKey(e.target.value)} placeholder="Access Token" className="flex-1 p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
                             <button onClick={() => testGenius(geniusApiKey)} disabled={geniusStatus === 'testing' || !geniusApiKey} className="btn btn-ghost btn-sm whitespace-nowrap disabled:opacity-50">{geniusStatus === 'testing' ? 'Testing...' : 'Test Connection'}</button>
                         </div>
                         {geniusStatus === 'success' && <span className="text-green-500 font-semibold text-xs">✓ {geniusMessage}</span>}
@@ -733,8 +733,8 @@ export const MetadataTab: React.FC = () => {
 
                         {musicBrainzEnabled && (
                             <div className="flex flex-col gap-3 mt-1 border-t border-[var(--glass-border)] pt-4">
-                                <input type="text" value={musicBrainzClientId} onChange={e => setMusicBrainzClientId(e.target.value)} placeholder="Client ID" className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
-                                <input type="password" value={musicBrainzClientSecret} onChange={e => setMusicBrainzClientSecret(e.target.value)} placeholder="Client Secret" className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
+                                <input type="text" value={musicBrainzClientId} onChange={e => setMusicBrainzClientId(e.target.value)} placeholder="Client ID" className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
+                                <input type="password" value={musicBrainzClientSecret} onChange={e => setMusicBrainzClientSecret(e.target.value)} placeholder="Client Secret" className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors" />
                                 <div className="flex flex-col gap-2 mt-2 pt-3 border-t border-[var(--glass-border)]">
                                     <label className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">Callback / Redirect URI</label>
                                     <p className="text-xs text-[var(--color-text-muted)]">
@@ -742,7 +742,7 @@ export const MetadataTab: React.FC = () => {
                                         <a href="https://musicbrainz.org/account/applications" target="_blank" rel="noreferrer" className="text-[var(--color-primary)] underline">MusicBrainz OAuth application</a>.
                                         Mismatches cause <code>invalid_request: Mismatched redirect URI</code>.
                                     </p>
-                                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[var(--color-bg)] border border-[var(--glass-border)]">
+                                    <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-background border border-[var(--glass-border)]">
                                         <code className="flex-1 text-xs text-[var(--color-text-primary)] break-all font-mono">
                                             {musicBrainzRedirectUri.trim() || mbEffectiveRedirectUri || 'Loading…'}
                                         </code>
@@ -769,7 +769,7 @@ export const MetadataTab: React.FC = () => {
                                             onChange={e => setMusicBrainzRedirectUri(e.target.value)}
                                             placeholder="Override URL (leave blank to use server default)"
                                             autoFocus={mbShowOverride && !musicBrainzRedirectUri}
-                                            className="w-full p-2 text-xs rounded-lg border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                            className="w-full p-2 text-xs rounded-lg border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
                                         />
                                     ) : (
                                         <button
@@ -965,7 +965,7 @@ export const MetadataTab: React.FC = () => {
                                                     <span className="text-2xl font-bold text-[var(--color-text-primary)] tabular-nums">{count.toLocaleString()}</span>
                                                     <span className="text-sm text-[var(--color-text-muted)] tabular-nums">/ {cap.toLocaleString()}</span>
                                                 </div>
-                                                <div className="h-2 w-full rounded-full bg-[var(--color-bg)] overflow-hidden">
+                                                <div className="h-2 w-full rounded-full bg-background overflow-hidden">
                                                     <div className={`h-full ${tone} transition-all duration-300`} style={{ width: `${pct}%` }} />
                                                 </div>
                                                 {pct >= 80 && !stopped && (
@@ -1009,7 +1009,7 @@ export const MetadataTab: React.FC = () => {
                                                 min={1}
                                                 value={jambaseMonthlyCap}
                                                 onChange={e => setSettings({ jambaseMonthlyCap: Math.max(1, parseInt(e.target.value, 10) || 0) })}
-                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
                                             />
                                         </div>
                                         <div>
@@ -1020,7 +1020,7 @@ export const MetadataTab: React.FC = () => {
                                                 max={100}
                                                 value={jambaseMaxSubscriptionsPerUser}
                                                 onChange={e => setSettings({ jambaseMaxSubscriptionsPerUser: Math.max(1, Math.min(100, parseInt(e.target.value, 10) || 0)) })}
-                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
                                             />
                                         </div>
                                         <div>
@@ -1031,7 +1031,7 @@ export const MetadataTab: React.FC = () => {
                                                 max={90}
                                                 value={jambaseCacheTtlDays}
                                                 onChange={e => setSettings({ jambaseCacheTtlDays: Math.max(1, Math.min(90, parseInt(e.target.value, 10) || 0)) })}
-                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
                                             />
                                         </div>
                                     </div>
@@ -1101,7 +1101,7 @@ export const MetadataTab: React.FC = () => {
                                             value={youtubeApiKey}
                                             onChange={e => setSettings({ youtubeApiKey: e.target.value })}
                                             placeholder="YouTube Data API v3 key"
-                                            className="flex-1 p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                            className="flex-1 p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
                                         />
                                         <button
                                             type="button"
@@ -1159,7 +1159,7 @@ export const MetadataTab: React.FC = () => {
                                                     <span className="text-2xl font-bold text-[var(--color-text-primary)] tabular-nums">{count.toLocaleString()}</span>
                                                     <span className="text-sm text-[var(--color-text-muted)] tabular-nums">/ {cap.toLocaleString()} units</span>
                                                 </div>
-                                                <div className="h-2 w-full rounded-full bg-[var(--color-bg)] overflow-hidden">
+                                                <div className="h-2 w-full rounded-full bg-background overflow-hidden">
                                                     <div className={`h-full ${tone} transition-all duration-300`} style={{ width: `${pct}%` }} />
                                                 </div>
                                                 {stopped && (
@@ -1197,7 +1197,7 @@ export const MetadataTab: React.FC = () => {
                                                 min={1}
                                                 value={youtubeDailyQuotaCap}
                                                 onChange={e => setSettings({ youtubeDailyQuotaCap: Math.max(1, parseInt(e.target.value, 10) || 0) })}
-                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
                                             />
                                         </div>
                                         <div>
@@ -1208,7 +1208,7 @@ export const MetadataTab: React.FC = () => {
                                                 max={90}
                                                 value={youtubeCacheTtlDays}
                                                 onChange={e => setSettings({ youtubeCacheTtlDays: Math.max(1, Math.min(90, parseInt(e.target.value, 10) || 0)) })}
-                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                                                className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] text-sm focus:outline-none focus:border-[var(--color-primary)] transition-colors"
                                             />
                                         </div>
                                     </div>

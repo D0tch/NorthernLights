@@ -115,7 +115,7 @@ const TicketCard: React.FC<TicketCardProps> = ({ event }) => {
                     className="relative shrink-0 w-24 sm:w-28 group"
                     aria-label={`Open ${event.artist_name}`}
                 >
-                    <div className="absolute inset-0 bg-[var(--color-bg)]" />
+                    <div className="absolute inset-0 bg-background" />
                     {event.artist_image_url ? (
                         <img
                             src={event.artist_image_url}
@@ -298,7 +298,7 @@ export const LiveConcertsHubSection: React.FC = () => {
                 <LiveConcertsHeader />
                 <div
                     role="alert"
-                    className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-sm font-medium text-[var(--color-error)] flex items-center justify-between gap-3"
+                    className="rounded-lg border border-error/30 bg-error/10 px-4 py-3 text-sm font-medium text-[var(--color-error)] flex items-center justify-between gap-3"
                 >
                     <span>{error}</span>
                     <button onClick={() => void load()} className="btn btn-ghost btn-sm shrink-0">

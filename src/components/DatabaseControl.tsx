@@ -41,7 +41,7 @@ interface DatabaseControlProps {
 
 // Sub-component: Stat Card
 const StatCard = ({ label, value, icon: Icon, colorClass = "text-[var(--color-primary)]" }: { label: string; value: number | string; icon: any; colorClass?: string }) => (
-  <div className="bg-[var(--color-bg-tertiary)]/50 border border-[var(--color-border)] p-3 rounded-xl flex items-center gap-3">
+  <div className="bg-surface-variant/50 border border-[var(--color-border)] p-3 rounded-xl flex items-center gap-3">
     <div className={`p-2 rounded-lg bg-black/10 ${colorClass}`}>
       <Icon className="w-4 h-4" />
     </div>
@@ -250,7 +250,7 @@ export function DatabaseControl({ onReady, inline = false, variant = 'full' }: D
               value={recoveryToken}
               onChange={(event) => setRecoveryToken(event.target.value)}
               placeholder="Set AURORA_DB_RECOVERY_TOKEN on the server"
-              className="w-full bg-[var(--color-bg-tertiary)] border border-[var(--glass-border)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50"
+              className="w-full bg-[var(--color-bg-tertiary)] border border-[var(--glass-border)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-primary/50"
               autoComplete="off"
             />
             <p className="text-xs text-[var(--color-text-muted)]">
@@ -411,7 +411,7 @@ export function DatabaseControl({ onReady, inline = false, variant = 'full' }: D
   if (inline) {
     return (
       <div className="bg-[var(--color-background)] rounded-2xl p-6 border border-[var(--glass-border)] shadow-xl relative overflow-hidden group">
-        <div className="absolute inset-0 bg-gradient-to-br from-[var(--color-primary)]/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
         <div className="relative z-10">
           {renderContent()}
         </div>
@@ -422,10 +422,10 @@ export function DatabaseControl({ onReady, inline = false, variant = 'full' }: D
   return (
     <div className="fixed inset-0 z-[1000] flex items-center justify-center bg-black/60 backdrop-blur-md px-4 animate-in fade-in duration-300">
       <div className="max-w-md w-full p-8 rounded-[2rem] border border-[var(--glass-border)] bg-[var(--color-bg-secondary)] shadow-2xl overflow-hidden relative group">
-        <div className="absolute inset-0 bg-gradient-to-br from-[var(--color-primary)]/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
         <div className="relative z-10">
           <div className="flex items-center justify-center mb-6">
-            <div className="p-4 rounded-2xl bg-[var(--color-primary)]/10 text-[var(--color-primary)] shadow-inner ring-1 ring-[var(--color-primary)]/20">
+            <div className="p-4 rounded-2xl bg-primary/10 text-[var(--color-primary)] shadow-inner ring-1 ring-primary/20">
               <Database className="w-10 h-10" />
             </div>
           </div>
