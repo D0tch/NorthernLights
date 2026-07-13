@@ -24,6 +24,10 @@ export interface CastHealthStatus {
 }
 
 const SESSION_STORAGE_KEY = 'cast_session_id';
+// Receiver volume applied once when a FRESH session hands playback over (some
+// receivers power on reporting 100% and would blast the first track). Never
+// applied when joining or rejoining an ongoing session.
+const FRESH_SESSION_STARTUP_VOLUME = 0.3;
 const CUSTOM_RECEIVER_HLS_CODEC = 'aac';
 type CastLogLevel = 'ok' | 'warn' | 'error';
 
@@ -103,6 +107,9 @@ export class CastManager {
     private freshSessionStartedAt = 0;
     private readonly freshSessionWindowMs = 5000;
     private freshSessionPlaybackPromise: Promise<void> | null = null;
+    // Session id that already received the fresh-session startup volume, so
+    // reconcile retries can't re-clamp after the user adjusts the volume.
+    private startupVolumeSessionId: string | null = null;
     private userSessionIntentTimer: ReturnType<typeof setTimeout> | null = null;
     private staleTransportRecoveryPromise: Promise<boolean> | null = null;
     private mediaStatusRefreshPromise: Promise<any | null> | null = null;
@@ -1608,7 +1615,25 @@ export class CastManager {
             return;
         }
 
+        // Fresh handover (session connected, receiver has no media yet): clamp
+        // the receiver to a safe startup volume before the first load — some
+        // receivers power on reporting 100% and would blast the first track.
+        // Joins/rejoins of an ongoing session (the hydration paths above and
+        // in the session handlers) keep their established volume.
+        this.applyFreshSessionStartupVolume(reason);
+
         await this.handleCastConnected();
+    }
+
+    private applyFreshSessionStartupVolume(reason: string) {
+        const sessionId = this.getCurrentSessionId();
+        if (!sessionId || this.startupVolumeSessionId === sessionId) return;
+        this.startupVolumeSessionId = sessionId;
+        this.setVolume(FRESH_SESSION_STARTUP_VOLUME);
+        // Reflect it in the app immediately; the receiver's VOLUME_LEVEL_CHANGED
+        // confirmation keeps it in sync afterwards.
+        this.onVolumeChange?.(FRESH_SESSION_STARTUP_VOLUME);
+        this.logCast('ok', 'Applied fresh-session startup volume', `volume=${FRESH_SESSION_STARTUP_VOLUME} reason=${reason}`);
     }
 
     private syncCurrentTrackFromSession(mediaSession: any | null = this.getMediaSession()): boolean {
