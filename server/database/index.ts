@@ -1,6 +1,7 @@
 import { Pool } from 'pg';
 import path from 'path';
 import fs from 'fs';
+import { ARTWORK_EXTRACTION_VERSION } from '../services/artworkVersion';
 
 let pool: Pool | null = null;
 let initPromise: Promise<Pool> | null = null;
@@ -192,11 +193,12 @@ export async function initDB(): Promise<Pool> {
 
         DO $$
         BEGIN
-          -- art_hash: NULL = needs processing; '' = processed, no embedded art;
+          -- art_hash: NULL = needs processing; '' = processed, no local art;
           -- otherwise the content hash of the encoded cover (see services/artCache.ts).
           -- file_mtime: epoch ms of the source file, for change detection on re-scan.
           -- file_size: bytes of the source file, surfaced as Subsonic Child.size.
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS art_hash TEXT;
+          ALTER TABLE tracks ADD COLUMN IF NOT EXISTS artwork_version INTEGER;
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS file_mtime BIGINT;
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS file_size BIGINT;
           -- Raw (base64-decoded) path bytes, materialized + indexed so directory
@@ -208,6 +210,19 @@ export async function initDB(): Promise<Pool> {
           WHEN OTHERS THEN null;
         END $$;
         CREATE INDEX IF NOT EXISTS tracks_art_hash_idx ON tracks(art_hash);
+
+        -- One-time targeted artwork backfill. Existing successful covers and
+        -- non-ASF no-art rows are known-good under v1. ASF/audio rows previously
+        -- recorded as artless stay stale so the fixed WM/Picture recovery runs
+        -- on the next sync walk. addTrack stamps every completed attempt, so
+        -- genuinely artless WMA files are not retried forever.
+        UPDATE tracks
+           SET artwork_version = ${ARTWORK_EXTRACTION_VERSION}
+         WHERE artwork_version IS NULL
+           AND NOT (
+             COALESCE(format, '') ILIKE 'ASF/audio%'
+             AND COALESCE(art_hash, '') = ''
+           );
 
         -- Backfill decoded_path for pre-existing rows. Idempotent: matches 0 rows
         -- once populated (addTrack sets it on every insert). Safe on all rows —
@@ -1123,7 +1138,7 @@ const SNAKE_DUP_COLUMNS = [
   'album_artist', 'track_number', 'disc_number', 'release_type', 'is_compilation',
   'play_count', 'last_played_at', 'file_size', 'artist_id', 'album_id', 'genre_id',
   'mb_recording_id', 'mb_track_id', 'mb_album_id', 'mb_artist_id', 'mb_album_artist_id',
-  'mb_release_group_id', 'mb_work_id', 'art_hash', 'playlist_added_at', 'is_loved', 'raw_urls',
+  'mb_release_group_id', 'mb_work_id', 'art_hash', 'artwork_version', 'playlist_added_at', 'is_loved', 'raw_urls',
 ];
 
 function mapTrackRow(row: any) {
@@ -1261,14 +1276,14 @@ export async function getPathsWithMeta(): Promise<Map<string, { mtime: number | 
   // file mtime is unchanged, so a transient failure (a file scanned mid-copy,
   // a cover sharp couldn't decode) self-heals on the next scan instead of
   // staying stranded — undiscoverable — forever.
-  const res = await db.query('SELECT path, file_mtime, art_hash, format FROM tracks');
+  const res = await db.query('SELECT path, file_mtime, art_hash, artwork_version, format FROM tracks');
   const map = new Map<string, { mtime: number | null; artHash: string | null; needsReparse: boolean }>();
   for (const r of res.rows) {
     if (!r.path) continue;
     map.set(r.path, {
       mtime: r.file_mtime != null ? Number(r.file_mtime) : null,
       artHash: r.art_hash ?? null,
-      needsReparse: r.format == null,
+      needsReparse: r.format == null || Number(r.artwork_version || 0) < ARTWORK_EXTRACTION_VERSION,
     });
   }
   return map;
@@ -1287,6 +1302,45 @@ export async function getArtHashForPath(b64Path: string): Promise<string | null>
   const res = await db.query('SELECT art_hash FROM tracks WHERE path = $1 LIMIT 1', [b64Path]);
   if (res.rows.length === 0) return null;
   return res.rows[0].art_hash ?? null;
+}
+
+export interface ArtworkInfo {
+  artHash: string | null;
+  artworkVersion: number;
+  albumId: string | null;
+  album: string | null;
+  artist: string | null;
+  mbAlbumId: string | null;
+  cachedImageUrl: string | null;
+}
+
+export async function getArtworkInfoForPath(b64Path: string): Promise<ArtworkInfo | null> {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT
+      t.art_hash,
+      t.artwork_version,
+      t.album_id,
+      COALESCE(a.title, t.album) AS album,
+      COALESCE(a.artist_name, t.album_artist, t.artist) AS artist,
+      COALESCE(t.mb_album_id, a.mbid) AS mb_album_id,
+      a.image_url
+    FROM tracks t
+    LEFT JOIN albums a ON a.id = t.album_id
+    WHERE t.path = $1
+    LIMIT 1
+  `, [b64Path]);
+  if (res.rows.length === 0) return null;
+  const row = res.rows[0];
+  return {
+    artHash: row.art_hash ?? null,
+    artworkVersion: Number(row.artwork_version || 0),
+    albumId: row.album_id || null,
+    album: row.album || null,
+    artist: row.artist || null,
+    mbAlbumId: row.mb_album_id || null,
+    cachedImageUrl: row.image_url || null,
+  };
 }
 
 // Returns a Buffer array of decoded UTF-8 paths matching a specific directory prefix.
@@ -1345,8 +1399,8 @@ export async function addTrack(track: any) {
   const sanitizeArray = (arr: any) => Array.isArray(arr) ? arr.map(sanitizeString) : arr;
 
   await db.query(`
-    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls, art_hash, file_mtime, file_size, decoded_path, lossless)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, decode($14, 'base64'), $33)
+    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls, art_hash, artwork_version, file_mtime, file_size, decoded_path, lossless)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, decode($14, 'base64'), $34)
     ON CONFLICT (id) DO UPDATE SET
       title = EXCLUDED.title,
       artist = EXCLUDED.artist,
@@ -1379,6 +1433,7 @@ export async function addTrack(track: any) {
       -- COALESCE so a metadata-parse-failure re-insert (which passes no art
       -- fields) never wipes an already-encoded cover.
       art_hash = COALESCE(EXCLUDED.art_hash, tracks.art_hash),
+      artwork_version = COALESCE(EXCLUDED.artwork_version, tracks.artwork_version),
       file_mtime = COALESCE(EXCLUDED.file_mtime, tracks.file_mtime),
       file_size = COALESCE(EXCLUDED.file_size, tracks.file_size),
       decoded_path = EXCLUDED.decoded_path,
@@ -1417,6 +1472,7 @@ export async function addTrack(track: any) {
       -- Trigger the upsert when only the artwork or the file mtime changed, so
       -- a re-tag (identical text metadata, new cover) still records the update.
       (EXCLUDED.art_hash IS NOT NULL AND tracks.art_hash IS DISTINCT FROM EXCLUDED.art_hash) OR
+      (EXCLUDED.artwork_version IS NOT NULL AND tracks.artwork_version IS DISTINCT FROM EXCLUDED.artwork_version) OR
       (EXCLUDED.file_mtime IS NOT NULL AND tracks.file_mtime IS DISTINCT FROM EXCLUDED.file_mtime) OR
       (EXCLUDED.file_size IS NOT NULL AND tracks.file_size IS DISTINCT FROM EXCLUDED.file_size) OR
       (EXCLUDED.lossless IS NOT NULL AND tracks.lossless IS DISTINCT FROM EXCLUDED.lossless)
@@ -1451,6 +1507,7 @@ export async function addTrack(track: any) {
     track.mbWorkId || null,
     track.rawUrls ? JSON.stringify(track.rawUrls) : null,
     track.artHash ?? null,
+    track.artworkVersion ?? null,
     track.fileMtime ?? null,
     track.fileSize ?? null,
     typeof track.lossless === 'boolean' ? track.lossless : null,

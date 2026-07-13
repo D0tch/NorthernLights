@@ -16,6 +16,7 @@ jest.mock('../database', () => ({
   getUserSetting: jest.fn(),
   setUserSetting: jest.fn(),
   getSystemSetting: jest.fn(),
+  getArtworkInfoForPath: jest.fn(),
 }));
 jest.mock('../state', () => ({
   isPathAllowed: jest.fn(),
@@ -41,6 +42,10 @@ jest.mock('../services/lastfm.service', () => ({
 jest.mock('../services/listenbrainz.service', () => ({
   scrobbleTracks: jest.fn(),
   updateNowPlaying: jest.fn(),
+}));
+jest.mock('../services/artworkFallback.service', () => ({
+  providerArtworkProxyPath: jest.fn(),
+  resolveProviderArtworkUrl: jest.fn(),
 }));
 
 import {

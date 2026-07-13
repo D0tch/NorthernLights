@@ -4,9 +4,10 @@ import path from 'path';
 import { spawn } from 'child_process';
 import * as mm from 'music-metadata';
 import { isPathAllowed, pathToBuffer } from '../state';
-import { initDB, getArtHashForPath, getTrackLoudnessByIds, getAlbumLoudness } from '../database';
+import { initDB, getArtworkInfoForPath, getTrackLoudnessByIds, getAlbumLoudness } from '../database';
 import { maybeMeasureLoudnessForUser } from '../services/loudness.service';
-import { artCachePath, isValidArtSize, DEFAULT_ART_SIZE, findImageStart, type ArtSize } from '../services/artCache';
+import { artCachePath, isValidArtSize, DEFAULT_ART_SIZE, resolveArtwork, ARTWORK_EXTRACTION_VERSION, type ArtSize } from '../services/artCache';
+import { providerArtworkProxyPath, resolveProviderArtworkUrl } from '../services/artworkFallback.service';
 import {
   getOrCreateHlsSession,
   getSessionInfo,
@@ -678,15 +679,11 @@ router.get('/art', async (req, res) => {
   if (!b64Path && !rawPath) return res.status(404).send('Not found');
   const dbPathStr = b64Path ? decodeURIComponent(b64Path) : rawPath;
 
-  // ── Path-addressed: resolve the stored art hash ──
-  // hash → serve cache file; '' → processed, no embedded art; null → not yet
-  // processed (pre-backfill) → live extraction below.
-  const artHash = await getArtHashForPath(dbPathStr).catch(() => null);
-  if (artHash) {
-    if (streamArtFile(res, artCachePath(artHash, size))) return;
+  // ── Path-addressed: resolve the stored local art and album fallback ──
+  const artworkInfo = await getArtworkInfoForPath(dbPathStr).catch(() => null);
+  if (artworkInfo?.artHash) {
+    if (streamArtFile(res, artCachePath(artworkInfo.artHash, size))) return;
     // Cache file vanished (cache dir cleared) → fall through to live extraction.
-  } else if (artHash === '') {
-    return res.status(404).send('No art found');
   }
 
   // ── Live raw extraction fallback ──
@@ -702,34 +699,38 @@ router.get('/art', async (req, res) => {
 
   try {
     const utf8Path = fileBuf.toString('utf8');
-    const metadata = await mm.parseFile(utf8Path);
-    const picture = metadata.common.picture?.[0];
+    const shouldParseEmbedded = !artworkInfo ||
+      artworkInfo.artHash === null ||
+      artworkInfo.artworkVersion < ARTWORK_EXTRACTION_VERSION ||
+      !!artworkInfo.artHash;
+    const pictures = shouldParseEmbedded
+      ? (await mm.parseFile(utf8Path, { duration: false })).common.picture
+      : undefined;
+    const artwork = await resolveArtwork(pictures, utf8Path);
 
-    if (picture) {
-      // Sanitize Content-Type: WMA files can embed malformed format strings
-      // containing non-ASCII/control characters that crash Node's setHeader.
-      const validMime = /^[\x20-\x7E]+$/.test(picture.format) ? picture.format : 'image/jpeg';
-
-      // music-metadata 11.x mis-parses WM/Picture in ASF when the description
-      // is non-empty: picture.data starts a few bytes inside the description
-      // string instead of at the image header. Re-align to the first known
-      // image signature when present.
-      let data: Uint8Array = picture.data;
-      const start = findImageStart(data);
-      if (start > 0) {
-        data = data.subarray(start);
-      }
-
-      res.setHeader('Content-Type', validMime);
+    if (artwork) {
+      res.setHeader('Content-Type', artwork.format);
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.send(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
-    } else {
-      res.status(404).send('No art found');
+      return res.send(artwork.data);
     }
   } catch (err: any) {
     console.error('[Art] Error reading embedded art:', err?.message || err);
-    res.status(500).send('Error reading metadata');
   }
+
+  const providerUrl = artworkInfo
+    ? await resolveProviderArtworkUrl({
+        albumId: artworkInfo.albumId,
+        album: artworkInfo.album,
+        artist: artworkInfo.artist,
+        mbAlbumId: artworkInfo.mbAlbumId,
+        cachedImageUrl: artworkInfo.cachedImageUrl,
+      }).catch((err) => {
+        console.warn('[Art] Provider fallback failed:', err?.message || err);
+        return undefined;
+      })
+    : undefined;
+  if (providerUrl) return res.redirect(302, providerArtworkProxyPath(providerUrl));
+  return res.status(404).send('No art found');
 });
 
 export default router;

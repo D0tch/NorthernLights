@@ -133,7 +133,7 @@ GET /rest/getCoverArt.view?id=song:track-id&apiKey=aurora_sub_...
 GET /rest/hls.view?id=song:track-id&apiKey=aurora_sub_...
 ```
 
-`stream` and `download` support HTTP Range requests and do not increment play counts. `hls` returns segment URLs with short-lived scoped `mediaToken` values instead of embedding the primary API key. Use `scrobble` to record playback:
+`stream` and `download` support HTTP Range requests and do not increment play counts. `hls` returns segment URLs with short-lived scoped `mediaToken` values instead of embedding the primary API key. `getCoverArt` uses the same normalized embedded/folder resolver as Aurora and falls back to the configured album-art provider through the allowlisted image proxy. Use `scrobble` to record playback:
 
 ```text
 GET /rest/scrobble.view?id=song:track-id&apiKey=aurora_sub_...
@@ -1022,11 +1022,12 @@ Classic HTTP streaming for non-HLS clients or direct downloads.
 - **Query Params**: `pathB64` or `path` (Base64-encoded file path).
 - **Features**: Full HTTP `Range` support. WMA files auto-transcode to MP3.
 
-### [GET] `/api/media/art`
-Retrieve album artwork. Covers are pre-encoded to AVIF during library scans (see [docs/audio_management.md](./audio_management.md) → Album Artwork Pipeline) and served from a content-hash cache.
+### [GET] `/api/art`
+Retrieve album artwork. Local embedded or conventional folder covers are normalized and pre-encoded to AVIF during library scans (see [docs/audio_management.md](./audio_management.md) → Album Artwork Pipeline), then served from a content-hash cache.
 - **Query Params** (two addressing modes):
   - `hash` + `size` — serve the pre-encoded AVIF directly. `size` ∈ `256 | 640 | 1024` (default `640`). Response is `image/avif`, `Cache-Control: immutable`. This is the URL the client uses once a cover is encoded (shared across all tracks of an album).
-  - `pathB64` or `path` — resolve the track's stored art hash and serve the cache file; for tracks not yet processed, falls back to live raw extraction of the embedded picture.
+  - `pathB64` or `path` — resolve the stored local art hash; if necessary, perform live normalized embedded/folder extraction, then use the configured album-art provider. External results return `302` to `/api/providers/external/proxy-image`; no available artwork returns `404`.
+- **Precedence**: local cached art → live embedded art → conventional folder art → cached/configured metadata provider.
 
 ### [POST] `/api/cast/log`
 Write ChromeCast receiver logs to the server.

@@ -4,7 +4,7 @@ import bcrypt from 'bcrypt';
 import fs from 'fs';
 import path from 'path';
 import * as mm from 'music-metadata';
-import { initDB, touchSubsonicApiKey, getActiveSubsonicApiKeyByPrefix, updateSubsonicApiKeyHash, getPlaylists, getPlaylistTracks, getPlaylistMeta, createPlaylist, addTracksToPlaylist, deletePlaylist, recordPlaybackForUser, setTrackLovedForUser, setTrackRatingForUser, getUserSetting, setUserSetting, getSystemSetting } from '../database';
+import { initDB, touchSubsonicApiKey, getActiveSubsonicApiKeyByPrefix, updateSubsonicApiKeyHash, getPlaylists, getPlaylistTracks, getPlaylistMeta, createPlaylist, addTracksToPlaylist, deletePlaylist, recordPlaybackForUser, setTrackLovedForUser, setTrackRatingForUser, getUserSetting, setUserSetting, getSystemSetting, getArtworkInfoForPath } from '../database';
 import { fetchCandidatePool, computeArtistCentroids } from '../services/candidatePool.service';
 import { isPathAllowed, pathToBuffer } from '../state';
 import { maybeMeasureLoudnessForUser } from '../services/loudness.service';
@@ -16,6 +16,8 @@ import { scrobbleTracks as scrobbleLastFmTracks, updateNowPlaying as updateLastF
 import { scrobbleTracks as scrobbleListenBrainzTracks, updateNowPlaying as updateListenBrainzNowPlaying } from '../services/listenbrainz.service';
 import type { LfmTrack } from '../services/lastfm.service';
 import type { LbTrack } from '../services/listenbrainz.service';
+import { resolveArtwork } from '../services/artCache';
+import { providerArtworkProxyPath, resolveProviderArtworkUrl } from '../services/artworkFallback.service';
 
 const router = Router();
 const SUBSONIC_VERSION = '1.16.1';
@@ -778,42 +780,50 @@ async function streamFile(req: Request, res: Response, id: string, userId: strin
   fs.createReadStream(fileBuf).pipe(res);
 }
 
-function findImageStart(buf: Uint8Array): number {
-  const maxScan = Math.min(buf.length - 12, 4096);
-  for (let i = 0; i <= maxScan; i++) {
-    const b0 = buf[i], b1 = buf[i + 1], b2 = buf[i + 2], b3 = buf[i + 3];
-    if (b0 === 0xFF && b1 === 0xD8 && b2 === 0xFF) return i;
-    if (b0 === 0x89 && b1 === 0x50 && b2 === 0x4E && b3 === 0x47) return i;
-    if (b0 === 0x47 && b1 === 0x49 && b2 === 0x46 && b3 === 0x38) return i;
-    if (b0 === 0x52 && b1 === 0x49 && b2 === 0x46 && b3 === 0x46 && buf[i + 8] === 0x57 && buf[i + 9] === 0x45 && buf[i + 10] === 0x42 && buf[i + 11] === 0x50) return i;
-    if (b0 === 0x42 && b1 === 0x4D) return i;
-  }
-  return -1;
-}
-
 async function sendCoverArt(req: Request, res: Response, id: string, userId: string) {
   let trackId = songId(id);
   const db = await initDB();
   if (id.startsWith('album:')) {
-    const albumTrack = await db.query('SELECT id FROM tracks WHERE album_id = $1 AND path IS NOT NULL ORDER BY disc_number NULLS LAST, track_number NULLS LAST, title LIMIT 1', [albumId(id)]);
+    const albumTrack = await db.query(`
+      SELECT id FROM tracks
+      WHERE album_id = $1 AND path IS NOT NULL
+      ORDER BY (NULLIF(art_hash, '') IS NOT NULL) DESC,
+               disc_number NULLS LAST, track_number NULLS LAST, title
+      LIMIT 1
+    `, [albumId(id)]);
     trackId = albumTrack.rows[0]?.id || '';
   } else if (id.startsWith('artist:')) {
-    const artistTrack = await db.query('SELECT id FROM tracks WHERE artist_id = $1 AND path IS NOT NULL ORDER BY album, disc_number NULLS LAST, track_number NULLS LAST, title LIMIT 1', [artistId(id)]);
+    const artistTrack = await db.query(`
+      SELECT id FROM tracks
+      WHERE artist_id = $1 AND path IS NOT NULL
+      ORDER BY (NULLIF(art_hash, '') IS NOT NULL) DESC,
+               album, disc_number NULLS LAST, track_number NULLS LAST, title
+      LIMIT 1
+    `, [artistId(id)]);
     trackId = artistTrack.rows[0]?.id || '';
   }
-  const { fileBuf } = await resolvePlayableTrack(trackId, userId);
+  const { track, fileBuf } = await resolvePlayableTrack(trackId, userId);
   if (!fs.existsSync(fileBuf)) return res.status(404).send('Not found');
 
-  const metadata = await mm.parseFile(fileBuf.toString('utf8'));
-  const picture = metadata.common.picture?.[0];
-  if (!picture) return res.status(404).send('No art found');
-  let data: Uint8Array = picture.data;
-  const start = findImageStart(data);
-  if (start > 0) data = data.subarray(start);
-  const format = /^[\x20-\x7E]+$/.test(picture.format) ? picture.format : 'image/jpeg';
-  res.setHeader('Content-Type', format);
-  res.setHeader('Cache-Control', 'public, max-age=86400');
-  res.send(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
+  const utf8Path = fileBuf.toString('utf8');
+  const metadata = await mm.parseFile(utf8Path, { duration: false });
+  const artwork = await resolveArtwork(metadata.common.picture, utf8Path);
+  if (artwork) {
+    res.setHeader('Content-Type', artwork.format);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(artwork.data);
+  }
+
+  const artworkInfo = track.path ? await getArtworkInfoForPath(track.path) : null;
+  const providerUrl = artworkInfo ? await resolveProviderArtworkUrl({
+    albumId: artworkInfo.albumId,
+    album: artworkInfo.album,
+    artist: artworkInfo.artist,
+    mbAlbumId: artworkInfo.mbAlbumId,
+    cachedImageUrl: artworkInfo.cachedImageUrl,
+  }) : undefined;
+  if (providerUrl) return res.redirect(302, providerArtworkProxyPath(providerUrl));
+  return res.status(404).send('No art found');
 }
 
 async function sendHls(req: Request, res: Response, id: string, ctx: SubsonicContext) {

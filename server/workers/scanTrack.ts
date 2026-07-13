@@ -1,6 +1,6 @@
 import * as mm from 'music-metadata';
 import sharp from 'sharp';
-import { hashArt, findImageStart, encodeArt, artExists, ART_SIZES } from '../services/artCache';
+import { hashArt, resolveArtwork, encodeArt, artExists, ART_SIZES, ARTWORK_EXTRACTION_VERSION } from '../services/artCache';
 
 // Pin libvips to a single thread per worker. By default sharp uses one thread
 // per CPU *per operation*; with one worker process per CPU (processPool), that
@@ -18,18 +18,14 @@ sharp.concurrency(1);
 // Extract the embedded cover, hash it, and ensure AVIF variants exist on disk.
 // Returns the hash, or '' when the file has no embedded art. Skips re-encoding
 // when the hash matches `knownArtHash` and all sizes already exist.
-async function processArtwork(metadata: mm.IAudioMetadata, knownArtHash?: string | null): Promise<string> {
-  const picture = metadata.common.picture?.[0];
-  if (!picture) return '';
+async function processArtwork(metadata: mm.IAudioMetadata, audioPath: string, knownArtHash?: string | null): Promise<string> {
+  const artwork = await resolveArtwork(metadata.common.picture, audioPath);
+  if (!artwork) return '';
 
-  let data: Uint8Array = picture.data;
-  const start = findImageStart(data);
-  if (start > 0) data = data.subarray(start);
-
-  const hash = hashArt(data);
+  const hash = hashArt(artwork.data);
   const allPresent = ART_SIZES.every((size) => artExists(hash, size));
   if (hash === knownArtHash && allPresent) return hash;
-  if (!allPresent) await encodeArt(data, hash);
+  if (!allPresent) await encodeArt(artwork.data, hash);
   return hash;
 }
 
@@ -377,17 +373,16 @@ process.stdin.on('data', async (chunk: string) => {
       const rawUrls = extractUrlTags(metadata.native || {});
 
       // Artwork encoding is isolated: a cover in a format sharp can't decode
-      // ("unsupported image format") must NOT sink the track's metadata. These
-      // are common in DJ-mix / compilation rips. On failure we treat the track
-      // as art-less (artHash '') and still emit the parsed tags, so the track
-      // gets a real title/artist/album/duration instead of the filename-only
-      // parse-failure fallback.
+      // ("unsupported image format") must NOT sink the track's metadata. Leave
+      // failed artwork unresolved so a transient worker/memory failure retries
+      // on the next walk, while still emitting the parsed tags.
       let artHash: string | undefined = undefined;
+      let artworkVersion: number | undefined = undefined;
       if (msg.processArt) {
         try {
-          artHash = await processArtwork(metadata, msg.knownArtHash);
+          artHash = await processArtwork(metadata, utf8Path, msg.knownArtHash);
+          artworkVersion = ARTWORK_EXTRACTION_VERSION;
         } catch (artErr: any) {
-          artHash = '';
           process.stderr.write(`[scanTrack] art decode failed (${artErr?.message || artErr}), keeping metadata\n`);
         }
       }
@@ -396,6 +391,7 @@ process.stdin.on('data', async (chunk: string) => {
         id: msg.id,
         metadata: {
             artHash,
+            artworkVersion,
             artist: metadata.common.artist || metadata.common.albumartist || null,
             albumartist: metadata.common.albumartist || null,
             title: metadata.common.title || null,
