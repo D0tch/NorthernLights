@@ -15,6 +15,7 @@ import { startMbCreditsEnrichment, getMbCreditsProgress, startGeniusCreditsEnric
 import { enrichArtistImages, enrichArtistImagesInBackground } from '../services/artistImageEnrichment.service';
 import { getCreditsStatus, refreshArtistAudioProfiles, searchLibrary, getExistingTrackIds } from '../database';
 import { createRateLimiter } from '../middleware/rateLimit';
+import { areAnalysisModelsReady } from '../services/downloadModels';
 
 const router = Router();
 
@@ -484,13 +485,14 @@ async function processMetadataBatch(input: Array<Buffer | ScanItem>, concurrency
               mbWorkId: metadata.mbWorkId || null,
               rawUrls: metadata.rawUrls || null,
               artHash: metadata.artHash,
+              artworkVersion: metadata.artworkVersion,
               fileMtime: item.mtime ?? null,
               fileSize: item.size ?? null,
             });
 
             // If a re-tag changed the cover, the previous hash may now be
             // orphaned — queue it for a refcount check after the batch.
-            if (item.knownArtHash && metadata.artHash && item.knownArtHash !== metadata.artHash) {
+            if (item.knownArtHash && metadata.artHash !== undefined && item.knownArtHash !== metadata.artHash) {
               displacedArtHashes.add(item.knownArtHash);
             }
 
@@ -994,7 +996,10 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
 
     // ── Analysis ──
     const tracksNeedingAnalysis = await getTracksWithoutFeatures();
-    if (tracksNeedingAnalysis.length > 0) {
+    const analysisModelsReady = tracksNeedingAnalysis.length > 0
+      ? await areAnalysisModelsReady()
+      : false;
+    if (tracksNeedingAnalysis.length > 0 && analysisModelsReady) {
       scanStatus.phase = 'analysis';
       scanStatus.totalFiles = tracksNeedingAnalysis.length;
       scanStatus.scannedFiles = 0;
@@ -1003,6 +1008,8 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
       const concurrency = await getAnalysisConcurrency();
       await processAnalysisBatch(tracksNeedingAnalysis, concurrency);
       console.log(`[Scanner] Analysis phase complete: ${tracksNeedingAnalysis.length} track(s) analyzed`);
+    } else if (tracksNeedingAnalysis.length > 0) {
+      console.log(`[Scanner] Analysis deferred for ${tracksNeedingAnalysis.length} track(s): ML models are not ready`);
     }
 
     // ── Loudness (EBU R128) — after features so two full-decode passes don't contend.
@@ -1140,6 +1147,13 @@ router.post('/analyze', async (req, res) => {
       error: 'A scan or analysis is already in progress',
       phase: scanStatus.phase,
       detail: `Currently in ${scanStatus.phase} phase. Please wait for it to complete.`
+    });
+  }
+
+  if (!await areAnalysisModelsReady()) {
+    return res.status(409).json({
+      error: 'Audio analysis models are not ready.',
+      detail: 'Download MusiCNN and Discogs-EffNet before starting analysis.',
     });
   }
 
