@@ -2,8 +2,6 @@
 
 Aurora is a self-hosted web music player for local libraries. It scans folders on your server, streams your files through a React web app, enriches metadata from external providers, and builds library-aware AI playlists from your own collection.
 
-The project lives in the `NorthernLights` repository, but the product name in the app is Aurora Media Server / NorthernLights Media Player.
-
 ## Status
 
 Current release: `1.0.0-rc.6`
