@@ -4,6 +4,7 @@ import { applyStreamingQualityToHlsUrl, type StreamingQualityPreset } from './st
 
 type PrewarmOptions = {
     castConnected?: boolean;
+    aheadCount?: 1 | 2;
 };
 
 class PreloadManager {
@@ -26,9 +27,12 @@ class PreloadManager {
         options: PrewarmOptions = {}
     ): void {
         if (currentIndex === null || currentIndex < 0) return;
-        const nextTrack = playlist[currentIndex + 1];
-        if (!nextTrack) return;
-        this.prewarmTrack(nextTrack, streamingQuality, options);
+        const aheadCount = options.aheadCount ?? 1;
+        for (let offset = 1; offset <= aheadCount; offset += 1) {
+            const track = playlist[currentIndex + offset];
+            if (!track) break;
+            this.prewarmTrack(track, streamingQuality, options);
+        }
     }
 
     // Prewarming is a non-essential optimization, so don't spend bandwidth on it

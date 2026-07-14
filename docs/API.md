@@ -1015,28 +1015,44 @@ Get top artist candidates based on play counts.
 
 ## 🎵 Media & Streaming
 
-### [GET] `/api/media/stream/:trackId/playlist.m3u8`
+### [GET] `/api/stream/:trackId/playlist.m3u8`
 The primary streaming endpoint using **HLS (HTTP Live Streaming)**. Returns an M3U8 master playlist.
-- **Query Params**: `quality` (`source`, `320k`, `160k`, `128k`, `64k`), `codec` (e.g. `aac`, `mp3`, `ac3`), `token` (JWT authorization).
+- **Query Params**: `quality` (`auto`, `source`, `320k`, `160k`, `128k`, `64k`), `codec` (e.g. `aac`, `mp3`, `ac3`), `token` (scoped media/JWT authorization), and optional `maxBitrate=64k` when browser Data Saver caps Auto.
+- **Auto behavior**: `quality=auto` returns an audio-only multi-rendition master with 64/128/160/320 kbps AAC variants. Known lossy sources omit variants above the source bitrate; lossless or unknown sources may expose the full ladder. Every variant URI carries the auth token and `adaptive=1` marker.
+- **Cast behavior**: browser Auto does not change the custom receiver contract. Chromecast requests continue to resolve `auto` and `source` to fixed 128 kbps AAC HLS.
 - **Note**: Requires FFmpeg on the host machine.
 
-### [GET] `/api/media/stream/:trackId/media.m3u8`
+### [GET] `/api/stream/:trackId/media.m3u8`
 HLS media playlist segment mapping index.
-- **Query Params**: `quality`, `codec`, `token`.
+- **Fixed Query Params**: `quality`, `codec`, `token`.
+- **Adaptive Query Params**: `quality=auto`, `codec=aac`, `adaptive=1`, canonical `ladder`, validated `rendition`, and `token`. Adaptive segment URLs preserve all of these fields so the server can resolve the exact track, ladder, codec, and rendition session.
 
-### [POST] `/api/media/stream/:trackId/prewarm`
+### [POST] `/api/stream/:trackId/prewarm`
 Start HLS stream slicing/transcoding in the background before playback begins.
-- **Query Params**: `quality`, `codec`.
+- **Query Params**: `quality`, `codec`, and optional `maxBitrate=64k` for a Data Saver Auto package.
+- **Auto behavior**: prepares the complete adaptive package in one FFmpeg process and returns rendition count details. Conservative prebuffering requests one queued track; aggressive prebuffering may request two tracks, still with one process per Auto track.
 - **Example Response**:
   ```json
-  { "ok": true, "segmentCount": 10, "finished": false }
+  {
+    "ok": true,
+    "trackId": "track-id",
+    "quality": "auto",
+    "codec": "aac",
+    "segmentCount": 2,
+    "finished": false,
+    "renditions": [
+      { "name": "64k", "bitrateKbps": 64, "segmentCount": 2 },
+      { "name": "128k", "bitrateKbps": 128, "segmentCount": 2 }
+    ]
+  }
   ```
 
-### [GET] `/api/media/stream/:trackId/:segment.ts`
+### [GET] `/api/stream/:trackId/:segment.ts`
 Retrieve a specific HLS transport stream segment chunk.
-- **Cache Policy**: Segments are cached indefinitely (`max-age=31536000, immutable`).
+- **Adaptive Query Params**: `adaptive=1`, `ladder`, `rendition`, `quality=auto`, `codec=aac`, and `token`. Rendition names and bare segment filenames are validated; only an exact active session/rendition owner can serve the file.
+- **Cache Policy**: Segments are cached indefinitely (`max-age=31536000, immutable`). In the browser PWA, exact adaptive URLs remain the primary cache key; after an offline fetch failure, Workbox may reuse the cached AAC segment for the same track and segment pathname from another aligned rendition. Fixed-quality requests keep exact-query matching.
 
-### [GET] `/api/media/stream` (Legacy)
+### [GET] `/api/stream` (Legacy)
 Classic HTTP streaming for non-HLS clients or direct downloads.
 - **Query Params**: `pathB64` or `path` (Base64-encoded file path).
 - **Features**: Full HTTP `Range` support. WMA files auto-transcode to MP3.

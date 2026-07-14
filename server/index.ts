@@ -477,8 +477,13 @@ checkFfmpegAvailability();
 
 // Clean up HLS sessions on shutdown
 import { cleanupAllSessions as cleanupHlsSessions } from './services/hlsStream.service';
-process.on('SIGINT', () => { cleanupHlsSessions(); });
-process.on('SIGTERM', () => { cleanupHlsSessions(); });
+import { cleanupAllAdaptiveHlsSessions } from './services/adaptiveHlsStream.service';
+const cleanupStreamingSessions = () => {
+  cleanupHlsSessions();
+  cleanupAllAdaptiveHlsSessions();
+};
+process.on('SIGINT', cleanupStreamingSessions);
+process.on('SIGTERM', cleanupStreamingSessions);
 
 // Start container health monitoring (background)
 import { startHealthMonitoring, containerEvents } from './services/containerControl.service';

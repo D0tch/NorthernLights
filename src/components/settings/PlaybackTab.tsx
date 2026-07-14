@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { usePlayerStore } from '../../store/index';
+import { usePlayerStore, type PrebufferPolicy } from '../../store/index';
 import { useNetworkInfo } from '../../hooks/useNetworkInfo';
 import { Speaker } from 'lucide-react';
+import type { StreamingQualityPreset } from '../../utils/streaming';
 
 const formatTelemetryTime = (timestamp: number | null): string => {
     if (!timestamp) return 'No data yet';
@@ -22,6 +23,7 @@ const formatRecoveryPath = (path: string): string => {
     switch (path) {
         case 'normal-hls-after-prepare-failure': return 'Normal HLS after prepare failure';
         case 'normal-hls-after-promotion-failure': return 'Normal HLS after promotion failure';
+        case 'fixed-quality-after-adaptive-failure': return 'Fixed quality after adaptive failure';
         default: return 'None';
     }
 };
@@ -151,10 +153,10 @@ export const PlaybackTab: React.FC = () => {
                         <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Streaming Quality</label>
                         <select
                             value={streamingQuality}
-                            onChange={e => setSettings({ streamingQuality: e.target.value as any })}
+                            onChange={e => setSettings({ streamingQuality: e.target.value as StreamingQualityPreset })}
                             className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
                         >
-                            <option value="auto">Auto (Normal — 128 kbps)</option>
+                            <option value="auto">Auto — Adaptive (64–320 kbps)</option>
                             <option value="64k">Low (64 kbps) — Saves data</option>
                             <option value="128k">Normal (128 kbps) — Good balance</option>
                             <option value="160k">High (160 kbps)</option>
@@ -165,7 +167,7 @@ export const PlaybackTab: React.FC = () => {
                             {streamingQuality === 'source'
                                 ? 'Bit-perfect passthrough when the browser can play the file natively (FLAC, ALAC, WAV, MP3, AAC, Ogg, Opus) — bypasses HLS entirely and streams the raw bytes with Range seek. Falls back to high-bitrate AAC HLS for codecs the browser cannot decode (e.g. WMA). Chromecast still streams 128 kbps AAC HLS regardless of this setting.'
                                 : streamingQuality === 'auto'
-                                ? 'Automatically uses Normal quality (128 kbps AAC). This provides a good balance between quality and bandwidth.'
+                                ? 'Adapts AAC quality between 64 and 320 kbps using measured bandwidth and buffer health. Lossy files do not exceed their known source bitrate, Data Saver caps Auto at 64 kbps, and Chromecast remains fixed at 128 kbps AAC.'
                                 : `Audio will be transcoded to AAC at ${streamingQuality}bps. Both browser playback and Chromecast now honor this bitrate when a track starts. Higher bitrates sound better but use more bandwidth and storage.`
                             }
                         </p>
@@ -175,7 +177,7 @@ export const PlaybackTab: React.FC = () => {
                         <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Prebuffer Policy</label>
                         <select
                             value={prebufferPolicy}
-                            onChange={e => setSettings({ prebufferPolicy: e.target.value as any })}
+                            onChange={e => setSettings({ prebufferPolicy: e.target.value as PrebufferPolicy })}
                             className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
                         >
                             <option value="off">Off — No background preparation</option>
@@ -186,8 +188,8 @@ export const PlaybackTab: React.FC = () => {
                             {prebufferPolicy === 'off'
                                 ? 'Disables HLS prewarm and local prepared audio. Use this if a browser or device behaves badly with background preparation.'
                                 : prebufferPolicy === 'aggressive'
-                                ? 'Currently prepares the immediate next track like Conservative, reserved for deeper prebuffering once proven safe.'
-                                : 'Keeps the current stable behavior: server prewarm plus local prepared audio for the immediate next queued track.'
+                                ? 'Keeps the next track ready for local promotion and also prewarms the following HLS session. Uses more server CPU and temporary storage.'
+                                : 'Prepares only the immediate next track on the server and in the local audio pipeline.'
                             }
                         </p>
                     </div>
@@ -382,7 +384,37 @@ export const PlaybackTab: React.FC = () => {
                                     <span className="text-[var(--color-text-muted)]">Prebuffer</span>
                                     <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.prebufferPolicy}</span>
                                 </div>
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Auto bitrate</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">
+                                        {playbackTelemetry.adaptiveActiveBitrateKbps !== null ? `${playbackTelemetry.adaptiveActiveBitrateKbps} kbps` : 'N/A'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Bandwidth</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">
+                                        {playbackTelemetry.adaptiveBandwidthEstimateKbps !== null ? `${playbackTelemetry.adaptiveBandwidthEstimateKbps} kbps` : 'N/A'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Renditions</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.adaptiveLevelCount || 'N/A'}</span>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Auto switches</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.adaptiveSwitchCount}</span>
+                                </div>
                             </div>
+                            {playbackTelemetry.adaptiveNativePlayback && (
+                                <p className="text-xs text-[var(--color-text-muted)] mt-2">
+                                    Native HLS is selecting Auto quality; the active rendition is not observable in this browser.
+                                </p>
+                            )}
+                            {playbackTelemetry.adaptiveFallbackState !== 'none' && (
+                                <p className="text-xs text-[var(--color-text-muted)] mt-2">
+                                    Auto fallback: <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.adaptiveFallbackState}</span>
+                                </p>
+                            )}
                             {playbackTelemetry.prebufferSkippedReason && (
                                 <p className="text-xs text-[var(--color-text-muted)] mt-2">
                                     Prebuffer skipped: <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.prebufferSkippedReason}</span>
@@ -439,7 +471,7 @@ export const PlaybackTab: React.FC = () => {
                         </div>
                         {networkInfo.type === 'unknown' && (
                             <p className="text-xs text-[var(--color-text-muted)] mt-2 italic">
-                                Network info unavailable (common on iOS). Quality is fixed to your selected preset.
+                                Network info unavailable (common on iOS). Auto starts with a 500 kbps estimate and adapts from playback measurements.
                             </p>
                         )}
                     </div>

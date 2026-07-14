@@ -255,7 +255,7 @@ const hydratePlaylistTracks = (
   authToken: string,
   streamingQuality: PlayerState['streamingQuality']
 ): TrackInfo[] => {
-  const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+  const quality = streamingQuality;
   const libraryById = new Map(library.map((track) => [track.id, track]));
   const existingById = new Map(existingTracks.map((track) => [track.id, track]));
 
@@ -396,8 +396,10 @@ export interface FilterState {
 
 export type PlaybackLoadPath = 'none' | 'cast' | 'direct' | 'prepared-hls' | 'fallback-hls' | 'lossless-passthrough';
 export type PlaybackPrepareStatus = 'idle' | 'preparing' | 'ready' | 'failed';
-export type PlaybackRecoveryPath = 'none' | 'normal-hls-after-prepare-failure' | 'normal-hls-after-promotion-failure';
+export type PlaybackRecoveryPath = 'none' | 'normal-hls-after-prepare-failure' | 'normal-hls-after-promotion-failure' | 'fixed-quality-after-adaptive-failure';
 export type PrebufferPolicy = 'off' | 'conservative' | 'aggressive';
+export type AdaptiveFallbackState = 'none' | 'fixed-64k' | 'fixed-128k';
+const getPrewarmAheadCount = (policy: PrebufferPolicy): 1 | 2 => policy === 'aggressive' ? 2 : 1;
 export type LlmVetoMode = 'hard' | 'adaptive';
 export type QueueMutationOptions = {
   notify?: boolean;
@@ -429,6 +431,12 @@ export interface PlaybackTelemetry {
   recoveryError: string | null;
   prebufferPolicy: PrebufferPolicy;
   prebufferSkippedReason: string | null;
+  adaptiveActiveBitrateKbps: number | null;
+  adaptiveBandwidthEstimateKbps: number | null;
+  adaptiveLevelCount: number;
+  adaptiveSwitchCount: number;
+  adaptiveFallbackState: AdaptiveFallbackState;
+  adaptiveNativePlayback: boolean;
 }
 
 export interface PlayerState {
@@ -915,6 +923,7 @@ export const usePlayerStore = create<PlayerState>()(
           if (state.prebufferPolicy !== 'off') {
             preloadManager.prewarmNext(state.playlist, state.currentIndex, state.streamingQuality, {
               castConnected: castState === 'CONNECTED',
+              aheadCount: getPrewarmAheadCount(state.prebufferPolicy),
             });
           }
         });
@@ -972,6 +981,7 @@ export const usePlayerStore = create<PlayerState>()(
         }
         preloadManager.prewarmNext(state.playlist, currentIndex, state.streamingQuality, {
           castConnected: isActuallyCasting,
+          aheadCount: getPrewarmAheadCount(state.prebufferPolicy),
         });
         if (!isActuallyCasting && nextTrack?.url) {
           playbackManager.prepareNextUrl(
@@ -1083,6 +1093,12 @@ export const usePlayerStore = create<PlayerState>()(
           recoveryError: null,
           prebufferPolicy: 'conservative',
           prebufferSkippedReason: null,
+          adaptiveActiveBitrateKbps: null,
+          adaptiveBandwidthEstimateKbps: null,
+          adaptiveLevelCount: 0,
+          adaptiveSwitchCount: 0,
+          adaptiveFallbackState: 'none',
+          adaptiveNativePlayback: false,
         } as PlaybackTelemetry,
         volume: 1,
         shuffle: false as boolean,
@@ -1430,7 +1446,7 @@ export const usePlayerStore = create<PlayerState>()(
         hydrateTracks: (tracks: TrackInfo[]) => {
           const { mediaAccessToken, authToken, streamingQuality } = get();
           const token = mediaAccessToken || authToken || '';
-          const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+          const quality = streamingQuality;
           return tracks.map((t) => hydrateServerTrack(t, token, quality));
         },
 
@@ -1691,7 +1707,7 @@ export const usePlayerStore = create<PlayerState>()(
               if (data.track) {
                 const { mediaAccessToken, authToken, streamingQuality } = state;
                 const token = mediaAccessToken || authToken || '';
-                const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+                const quality = streamingQuality;
 
                 const track = {
                   ...data.track,
@@ -1756,7 +1772,7 @@ export const usePlayerStore = create<PlayerState>()(
 
               const { mediaAccessToken, authToken, streamingQuality } = get();
               const token = mediaAccessToken || authToken || '';
-              const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+              const quality = streamingQuality;
 
               set((state: PlayerState): Partial<PlayerState> => {
                 const currentTrack = state.currentIndex !== null ? state.playlist[state.currentIndex] : null;
@@ -1851,7 +1867,7 @@ export const usePlayerStore = create<PlayerState>()(
               const data = await res.json();
               const { mediaAccessToken, authToken, streamingQuality } = get();
               const token = mediaAccessToken || authToken || '';
-              const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+              const quality = streamingQuality;
               set({ library: (data.tracks || []).map((t: TrackInfo) => hydrateServerTrack(t, token, quality)) });
             } catch (e) {
               console.error('Failed to load full library on demand', e);
@@ -1886,7 +1902,7 @@ export const usePlayerStore = create<PlayerState>()(
                        const fullTrack = library.find((lt: TrackInfo) => lt.id === t.id);
                        const track = fullTrack ? { ...t, ...fullTrack, playlistAddedAt: t.playlistAddedAt } : t;
                        if (!track.path) return null;
-                       const quality = (get().streamingQuality === 'auto' ? '128k' : get().streamingQuality);
+                       const quality = get().streamingQuality;
                        return {
                          ...track,
                          ...buildTrackUrls(track.id, track.path, token, quality, (track as any).artHash),
@@ -1931,7 +1947,7 @@ export const usePlayerStore = create<PlayerState>()(
                     const fullTrack = library.find((lt: TrackInfo) => lt.id === t.id);
                     const track = fullTrack ? { ...t, ...fullTrack, playlistAddedAt: t.playlistAddedAt } : t;
                     if (!track.path) return null;
-                    const quality = (get().streamingQuality === 'auto' ? '128k' : get().streamingQuality);
+                    const quality = get().streamingQuality;
                     return {
                       ...track,
                       ...buildTrackUrls(track.id, track.path, token, quality, (track as any).artHash),
@@ -1962,7 +1978,7 @@ export const usePlayerStore = create<PlayerState>()(
 
               const { mediaAccessToken, authToken, library, streamingQuality } = get();
               const token = mediaAccessToken || authToken || '';
-              const quality = (streamingQuality === 'auto' ? '128k' : streamingQuality);
+              const quality = streamingQuality;
 
               const mappedTracks = (pl.tracks || []).map((t: any) => {
                  const fullTrack = library.find((lt: TrackInfo) => lt.id === t.id);
@@ -2325,7 +2341,7 @@ export const usePlayerStore = create<PlayerState>()(
               
               const { mediaAccessToken, authToken, streamingQuality } = get();
               const token = mediaAccessToken || authToken || '';
-              const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+              const quality = streamingQuality;
 
               const latestLibrary = data.tracks.map((t: TrackInfo) => hydrateServerTrack(t, token, quality));
               set({
@@ -2520,7 +2536,7 @@ export const usePlayerStore = create<PlayerState>()(
           // path) are left untouched.
           const { mediaAccessToken, authToken, streamingQuality } = get();
           const freshToken = mediaAccessToken || authToken || '';
-          const freshQuality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+          const freshQuality = streamingQuality;
           const playable: TrackInfo = track.path && freshToken
             ? { ...track, ...buildTrackUrls(track.id, track.path, freshToken, freshQuality, (track as any).artHash) }
             : track;
