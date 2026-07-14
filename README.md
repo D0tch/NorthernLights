@@ -6,7 +6,7 @@ The project lives in the `NorthernLights` repository, but the product name in th
 
 ## Status
 
-Current release: `1.0.0-rc.4`
+Current release: `1.0.0-rc.6`
 
 Aurora is ready for early self-hosted production use. Expect fast iteration and occasional migrations before the first stable `1.0.0` release.
 
@@ -60,17 +60,17 @@ Aurora is built to feel like a premium music service that happens to run on your
 
 ### Plays on every screen
 - **Installable PWA** with offline replay of tracks you've already played.
-- **Chromecast** — cast a single track or a whole queue, with an optional custom receiver and automatic session recovery if the connection drops.
+- **Chromecast** — cast a single track or a whole queue, losslessly for FLAC/WAV at Source quality, with an optional custom receiver and automatic session recovery if the connection drops.
 - **OpenSubsonic-compatible API** with per-user, rotatable API keys, so third-party Subsonic clients work out of the box.
 
 ### Connected to the wider ecosystem
 - **Scrobbling and now-playing** to Last.fm and ListenBrainz, with clear feedback if a scrobble fails.
-- **In-app lyrics**, **live-concert discovery** tied to the artists already in your library, and MusicBrainz sign-in.
+- **In-app lyrics**, **live-concert discovery** tied to the artists already in your library, **music videos** on artist pages and the mobile now-playing screen, and MusicBrainz sign-in.
 - **Shareable public playlist links** — send a read-only track list to anyone, no account required.
 
 ### Built for a household, polished for daily use
 - **Multi-user** accounts with roles, invite-based registration, and an admin dashboard; loved tracks, play history, and playlists are all per-user.
-- **A modern interface:** a gesture-driven mobile shell, a waveform scrubber, album-art dominant-color theming, light / dark / glass themes with full reduced-motion support, instant global search, and a drag-to-reorder queue.
+- **A modern interface:** a gesture-driven mobile shell, a waveform scrubber, album-art dominant-color theming, light / dark themes with full reduced-motion support, instant global search, and a drag-to-reorder queue.
 
 ## Requirements
 
