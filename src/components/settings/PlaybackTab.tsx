@@ -57,6 +57,7 @@ export const PlaybackTab: React.FC = () => {
     const cancelSleepTimer = usePlayerStore(state => state.cancelSleepTimer);
     const castConnected = usePlayerStore(state => state.castConnected);
     const audioOutputSupported = usePlayerStore(state => state.audioOutputSupported);
+    const audioOutputPickerSupported = usePlayerStore(state => state.audioOutputPickerSupported);
     const audioOutputDevices = usePlayerStore(state => state.audioOutputDevices);
     const audioOutputDeviceId = usePlayerStore(state => state.audioOutputDeviceId);
     const audioOutputActive = usePlayerStore(state => state.audioOutputActive);
@@ -66,6 +67,7 @@ export const PlaybackTab: React.FC = () => {
     const audioOutputPermission = usePlayerStore(state => state.audioOutputPermission);
     const audioOutputRequestingAccess = usePlayerStore(state => state.audioOutputRequestingAccess);
     const setAudioOutputDevice = usePlayerStore(state => state.setAudioOutputDevice);
+    const selectAudioOutput = usePlayerStore(state => state.selectAudioOutput);
     const ensureAudioOutputAccess = usePlayerStore(state => state.ensureAudioOutputAccess);
     const networkInfo = useNetworkInfo();
     
@@ -503,8 +505,22 @@ export const PlaybackTab: React.FC = () => {
                                     ? 'Switching…'
                                     : audioOutputActive
                                     ? `Playing on ${audioOutputDeviceLabel || 'selected output'}.`
+                                    : audioOutputPickerSupported && audioOutputDevices.length <= 1
+                                    ? 'This browser reveals speakers through its own picker — use "Choose speaker" below.'
                                     : 'Using the system default output.'}
                             </p>
+                        )}
+
+                        {audioOutputSupported && audioOutputPickerSupported && !castConnected && (
+                            <button
+                                type="button"
+                                onClick={() => { void selectAudioOutput(); }}
+                                disabled={audioOutputSelecting}
+                                className="btn btn-ghost btn-sm mt-3 flex items-center gap-1.5 disabled:opacity-50"
+                            >
+                                <Speaker size={14} />
+                                {audioOutputSelecting ? 'Choosing…' : 'Choose speaker…'}
+                            </button>
                         )}
 
                         {audioOutputError && (

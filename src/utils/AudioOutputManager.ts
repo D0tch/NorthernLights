@@ -56,6 +56,7 @@ class AudioOutputManager {
   private state: AudioOutputDeviceState = { ...DEFAULT_STATE };
   private listeners = new Set<AudioOutputListener>();
   private registeredElements = new Set<SinkAudioElement>();
+  private bridgeElements = new Set<SinkAudioElement>();
   private registeredContexts = new Set<SinkAudioContext>();
   private initialized = false;
   private accessRequest: Promise<AudioOutputDeviceState> | null = null;
@@ -115,6 +116,20 @@ class AudioOutputManager {
 
   public unregisterElement(element: HTMLAudioElement): void {
     this.registeredElements.delete(element as SinkAudioElement);
+    this.bridgeElements.delete(element as SinkAudioElement);
+  }
+
+  /**
+   * Register the MediaStream bridge element used on browsers without
+   * AudioContext.setSinkId (Firefox, Safari). All graph audio exits through
+   * it, so its sink is authoritative the way a context sink is on Chromium.
+   */
+  public registerBridgeElement(element: HTMLAudioElement): void {
+    const sinkElement = element as SinkAudioElement;
+    this.bridgeElements.add(sinkElement);
+    if (this.state.active) {
+      void this.applyToElement(sinkElement);
+    }
   }
 
   public registerContext(context: AudioContext): void {
@@ -306,6 +321,13 @@ class AudioOutputManager {
     await this.refreshDevices();
     if (this.state.permission === 'granted') return this.state;
 
+    if (this.isPickerSupported()) {
+      // Firefox grants speaker access per-device through its native
+      // selectAudioOutput picker — a microphone grant reveals nothing there,
+      // so don't prompt. The UI offers the picker instead.
+      return this.state;
+    }
+
     // Skip a prompt the browser would auto-reject, and pick up grants made
     // later through the browser's site settings.
     try {
@@ -366,13 +388,19 @@ class AudioOutputManager {
     const elementResults = await Promise.all(
       Array.from(this.registeredElements, (element) => this.applyToElement(element))
     );
+    const bridgeResults = await Promise.all(
+      Array.from(this.bridgeElements, (element) => this.applyToElement(element))
+    );
     const contextResults = await Promise.all(
       Array.from(this.registeredContexts, (context) => this.applyToContext(context))
     );
-    // Once a context is registered, audio flows through it — captured elements
-    // are silent, and Chrome rejects setSinkId with AbortError on a playing
-    // captured element. Element failures must not revert the selection then.
+    // Whatever the graph exits through is authoritative: the context sink on
+    // Chromium, the bridge element on Firefox/Safari. Media elements captured
+    // into the graph are silent, so their sink failures must not revert the
+    // selection (Chrome rejects setSinkId with AbortError on a playing
+    // captured element).
     if (contextResults.length > 0) return contextResults.every(Boolean);
+    if (bridgeResults.length > 0) return bridgeResults.every(Boolean);
     return elementResults.every(Boolean);
   }
 
@@ -383,9 +411,9 @@ class AudioOutputManager {
       await element.setSinkId?.(this.state.active ? this.state.deviceId : '');
       return true;
     } catch (error) {
-      // Non-fatal while a context routes the audio; don't pollute state.error.
       console.warn('[AudioOutput] element setSinkId failed:', error);
-      return false;
+      // AbortError = the element is WebAudio-captured and silent; non-fatal.
+      return error instanceof DOMException && error.name === 'AbortError';
     }
   }
 
@@ -461,24 +489,26 @@ class AudioOutputManager {
     return normalized;
   }
 
-  private isElementSinkSupported(): boolean {
+  public isElementSinkSupported(): boolean {
     const probe = typeof Audio !== 'undefined' ? (Audio.prototype as SinkAudioElement) : null;
     return typeof probe?.setSinkId === 'function';
   }
 
-  private isContextSinkSupported(): boolean {
+  public isContextSinkSupported(): boolean {
     if (typeof AudioContext === 'undefined') return false;
     return typeof (AudioContext.prototype as SinkAudioContext).setSinkId === 'function';
   }
 
   /**
    * Playback routes through the loudness AudioContext once the first user
-   * gesture lands (PlaybackManager.ensureAudioContext), which bypasses
-   * element-level sinks — so context sink support is required for routing to
-   * actually work. Element sinks only cover the pre-gesture window.
+   * gesture lands (PlaybackManager.ensureAudioContext), which bypasses the
+   * media elements' own sinks. Routing works when the graph's exit can be
+   * re-pointed: directly via AudioContext.setSinkId (Chromium), or via the
+   * MediaStream bridge element PlaybackManager installs when only
+   * element-level setSinkId exists (Firefox 116+, Safari 18.4+).
    */
   private isRoutingSupported(): boolean {
-    return this.isElementSinkSupported() && this.isContextSinkSupported();
+    return this.isContextSinkSupported() || this.isElementSinkSupported();
   }
 
   private isPickerSupported(): boolean {

@@ -41,6 +41,11 @@ class PlaybackManager {
     private webAudioNodes = new WeakMap<HTMLAudioElement, { source: MediaElementAudioSourceNode; gain: GainNode }>();
     private activeGainNode: GainNode | null = null;
     private currentLoudnessGainDb: number | null = null; // null → unity (no normalization)
+    // On browsers without AudioContext.setSinkId (Firefox, Safari) the graph
+    // exits through a MediaStream bridge element whose element-level sink CAN
+    // be routed; on Chromium these stay null and ctx.destination is used.
+    private bridgeDestination: MediaStreamAudioDestinationNode | null = null;
+    private bridgeAudio: HTMLAudioElement | null = null;
     private hls: Hls | null = null;
     private nextAudio: HTMLAudioElement | null = null;
     private nextHls: Hls | null = null;
@@ -1269,6 +1274,13 @@ class PlaybackManager {
         this.audio.pause();
         this.audio.src = '';
         audioOutputManager.unregisterElement(this.audio);
+        if (this.bridgeAudio) {
+            this.bridgeAudio.pause();
+            this.bridgeAudio.srcObject = null;
+            audioOutputManager.unregisterElement(this.bridgeAudio);
+            this.bridgeAudio = null;
+        }
+        this.bridgeDestination = null;
         if (this.audioContext) {
             audioOutputManager.unregisterContext(this.audioContext);
             this.audioContext.close();
@@ -1289,10 +1301,25 @@ class PlaybackManager {
         try {
             if (!this.audioContext) {
                 this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
-                // The loudness graph outputs via ctx.destination, bypassing
-                // element-level sinks — the context must follow the selected
-                // output device too. Applies any already-active selection.
-                audioOutputManager.registerContext(this.audioContext);
+                // The loudness graph bypasses element-level sinks, so its exit
+                // must follow the selected output device. Registration applies
+                // any already-active selection.
+                if (audioOutputManager.isContextSinkSupported()) {
+                    audioOutputManager.registerContext(this.audioContext);
+                } else if (audioOutputManager.isElementSinkSupported()) {
+                    // Firefox/Safari: no AudioContext.setSinkId — exit through a
+                    // MediaStream bridge element and route that element's sink.
+                    this.bridgeDestination = this.audioContext.createMediaStreamDestination();
+                    const bridge = new Audio();
+                    bridge.srcObject = this.bridgeDestination.stream;
+                    audioOutputManager.registerBridgeElement(bridge);
+                    this.bridgeAudio = bridge;
+                }
+            }
+            // ensureAudioContext runs on user gestures and before each play —
+            // both valid moments to (re)start the gesture-gated bridge element.
+            if (this.bridgeAudio && this.bridgeAudio.paused) {
+                void this.bridgeAudio.play().catch((e) => console.warn('[Audio] bridge element play failed:', e));
             }
             // Wire (or re-point to) the active element's loudness chain. Idempotent
             // per element; also covers a post-promotion element that was created
@@ -1324,7 +1351,7 @@ class PlaybackManager {
             const gain = ctx.createGain();
             gain.gain.value = dbToLinear(this.currentLoudnessGainDb); // start correct → no click
             source.connect(gain);
-            gain.connect(ctx.destination);
+            gain.connect(this.bridgeDestination ?? ctx.destination);
             this.webAudioNodes.set(element, { source, gain });
             return gain;
         } catch (e) {

@@ -509,6 +509,7 @@ export interface PlayerState {
   isBuffering: boolean;
   castConnected: boolean;
   audioOutputSupported: boolean;
+  audioOutputPickerSupported: boolean;
   audioOutputDevices: AudioOutputDevice[];
   audioOutputDeviceId: string;
   audioOutputDeviceLabel: string;
@@ -927,6 +928,7 @@ export const usePlayerStore = create<PlayerState>()(
         );
         set({
           audioOutputSupported: initialAudioOutput.supported,
+          audioOutputPickerSupported: initialAudioOutput.pickerSupported,
           audioOutputDevices: initialAudioOutput.devices,
           audioOutputDeviceId: initialAudioOutput.deviceId,
           audioOutputDeviceLabel: initialAudioOutput.label,
@@ -940,6 +942,7 @@ export const usePlayerStore = create<PlayerState>()(
         audioOutputManager.subscribe((audioOutput) => {
           set({
             audioOutputSupported: audioOutput.supported,
+            audioOutputPickerSupported: audioOutput.pickerSupported,
             audioOutputDevices: audioOutput.devices,
             audioOutputDeviceId: audioOutput.deviceId,
             audioOutputDeviceLabel: audioOutput.label,
@@ -1050,6 +1053,7 @@ export const usePlayerStore = create<PlayerState>()(
         isBuffering: false as boolean,
         castConnected: false as boolean,
         audioOutputSupported: false,
+        audioOutputPickerSupported: false,
         audioOutputDevices: [{ deviceId: '', label: 'System default', isDefault: true }],
         audioOutputDeviceId: '',
         audioOutputDeviceLabel: '',
