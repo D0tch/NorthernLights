@@ -2,6 +2,12 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 import path from 'path';
+import {
+  adaptiveAudioChunkFallbackPlugin,
+  adaptivePlaylistFallbackPlugin,
+  isAdaptiveHlsPlaylistRequest,
+  isAdaptiveHlsSegmentRequest,
+} from './src/utils/pwaRuntimeCaching';
 
 export default defineConfig({
   plugins: [
@@ -97,6 +103,19 @@ export default defineConfig({
         navigateFallbackDenylist: [/^\/api\//, /^\/rest\//],
         runtimeCaching: [
           {
+            // Auto can cache different aligned renditions for adjacent segment
+            // numbers. On an exact offline miss, reuse the cached bytes for the
+            // same track/segment path instead of trying an uncached rendition.
+            urlPattern: isAdaptiveHlsSegmentRequest,
+            handler: 'CacheFirst',
+            options: {
+              cacheName: 'nl-audio-chunks-v1',
+              expiration: { maxEntries: 2000, maxAgeSeconds: 604800 }, // 7 days
+              cacheableResponse: { statuses: [0, 200] },
+              plugins: [adaptiveAudioChunkFallbackPlugin]
+            }
+          },
+          {
             // HLS transport stream segments — immutable chunks used by browser playback.
             urlPattern: /\/api\/stream\/.*\.ts(\?.*)?$/i,
             handler: 'CacheFirst',
@@ -104,6 +123,20 @@ export default defineConfig({
               cacheName: 'nl-audio-chunks-v1',
               expiration: { maxEntries: 2000, maxAgeSeconds: 604800 }, // 7 days
               cacheableResponse: { statuses: [0, 200] }
+            }
+          },
+          {
+            // An offline ABR replay may choose a rendition whose media playlist
+            // was never fetched. Every adaptive rendition is segment-aligned, so
+            // a cached playlist with the same pathname is a valid recovery source.
+            urlPattern: isAdaptiveHlsPlaylistRequest,
+            handler: 'NetworkFirst',
+            options: {
+              cacheName: 'nl-audio-playlists-v1',
+              networkTimeoutSeconds: 5,
+              expiration: { maxEntries: 200, maxAgeSeconds: 86400 },
+              cacheableResponse: { statuses: [0, 200] },
+              plugins: [adaptivePlaylistFallbackPlugin]
             }
           },
           {

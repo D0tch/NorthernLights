@@ -1,0 +1,77 @@
+import {
+    isAdaptiveHlsPlaylistRequest,
+    isAdaptiveHlsSegmentRequest,
+    reuseCachedAdaptiveAudioChunk,
+    reuseCachedAdaptivePlaylist,
+} from '../pwaRuntimeCaching';
+
+describe('adaptive HLS runtime caching', () => {
+    const originalCaches = globalThis.caches;
+
+    afterEach(() => {
+        Object.defineProperty(globalThis, 'caches', {
+            configurable: true,
+            value: originalCaches,
+        });
+        jest.restoreAllMocks();
+    });
+
+    it('routes only adaptive segment requests through rendition fallback', () => {
+        expect(isAdaptiveHlsSegmentRequest({
+            url: new URL('https://aurora.test/api/stream/track/segment000.ts?quality=auto&adaptive=1&rendition=320k'),
+        })).toBe(true);
+        expect(isAdaptiveHlsSegmentRequest({
+            url: new URL('https://aurora.test/api/stream/track/segment000.ts?quality=128k'),
+        })).toBe(false);
+    });
+
+    it('routes the Auto master and adaptive media playlists through offline fallback', () => {
+        expect(isAdaptiveHlsPlaylistRequest({
+            url: new URL('https://aurora.test/api/stream/track/playlist.m3u8?quality=auto'),
+        })).toBe(true);
+        expect(isAdaptiveHlsPlaylistRequest({
+            url: new URL('https://aurora.test/api/stream/track/media.m3u8?quality=auto&adaptive=1&rendition=64k'),
+        })).toBe(true);
+        expect(isAdaptiveHlsPlaylistRequest({
+            url: new URL('https://aurora.test/api/stream/track/playlist.m3u8?quality=128k'),
+        })).toBe(false);
+    });
+
+    it.each([
+        ['chunk', 'nl-audio-chunks-v1', reuseCachedAdaptiveAudioChunk, 'segment000.ts'],
+        ['playlist', 'nl-audio-playlists-v1', reuseCachedAdaptivePlaylist, 'media.m3u8'],
+    ] as const)('reuses a cached %s with the same path when an exact rendition misses', async (
+        _kind,
+        cacheName,
+        fallback,
+        filename,
+    ) => {
+        const cachedResponse = { cached: true } as unknown as Response;
+        const match = jest.fn().mockResolvedValue(cachedResponse);
+        const open = jest.fn().mockResolvedValue({ match });
+        Object.defineProperty(globalThis, 'caches', {
+            configurable: true,
+            value: { open },
+        });
+        const request = {
+            url: `https://aurora.test/api/stream/track/${filename}?adaptive=1&rendition=320k`,
+        } as Request;
+
+        await expect(fallback({ request, error: new Error('offline') })).resolves.toBe(cachedResponse);
+        expect(open).toHaveBeenCalledWith(cacheName);
+        expect(match).toHaveBeenCalledWith(request, { ignoreSearch: true });
+    });
+
+    it('preserves the original network failure when no cached rendition exists', async () => {
+        const networkError = new Error('offline');
+        Object.defineProperty(globalThis, 'caches', {
+            configurable: true,
+            value: { open: jest.fn().mockResolvedValue({ match: jest.fn().mockResolvedValue(undefined) }) },
+        });
+        const request = {
+            url: 'https://aurora.test/api/stream/track/segment999.ts?adaptive=1&rendition=320k',
+        } as Request;
+
+        await expect(reuseCachedAdaptiveAudioChunk({ request, error: networkError })).rejects.toBe(networkError);
+    });
+});
