@@ -219,6 +219,115 @@
   --color-bg-hover: rgba(255, 255, 255, 0.06);
 }
 
+/* ─── ADDITIONAL DARK-FAMILY THEMES ───
+   Each layers on top of .dark (inherits its text colors, status colors,
+   and every structural .dark-scoped rule) and only overrides the brand
+   / aurora / glass variables that give the theme its identity. */
+
+.dark[data-theme="midnight"] {
+  /* Icy polar night — blues and cyans */
+  --color-background: #03030a;
+  --color-surface: rgba(6, 10, 24, 0.72);
+  --color-surface-variant: rgba(13, 20, 40, 0.5);
+  --color-primary: #38bdf8;
+  --color-primary-dark: #0ea5e9;
+  --color-secondary: #22d3ee;
+  --color-accent: #818cf8;
+  --color-border: rgba(56, 189, 248, 0.1);
+
+  --aurora-green: #2dd4bf;
+  --aurora-teal: #22d3ee;
+  --aurora-blue: #38bdf8;
+  --aurora-extra-glow: #818cf8;
+  --aurora-pink: #a78bfa;
+
+  --glass-border-hover: rgba(56, 189, 248, 0.18);
+  --shadow-glow: 0 0 30px rgba(56, 189, 248, 0.14);
+
+  --aurora-play-gradient: linear-gradient(145deg, rgba(56, 189, 248, 0.85), rgba(14, 165, 233, 0.9));
+  --aurora-play-border: 1px solid rgba(56, 189, 248, 0.4);
+  --aurora-play-glow: 0 0 24px rgba(56, 189, 248, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  --shadow-fab: 0 8px 24px rgba(56, 189, 248, 0.32), 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.dark[data-theme="solstice"] {
+  /* Warm copper aurora over snow — amber and ember red */
+  --color-background: #0a0503;
+  --color-surface: rgba(24, 14, 6, 0.72);
+  --color-surface-variant: rgba(38, 24, 12, 0.5);
+  --color-primary: #f59e0b;
+  --color-primary-dark: #d97706;
+  --color-secondary: #fb923c;
+  --color-accent: #ef4444;
+  --color-border: rgba(245, 158, 11, 0.1);
+
+  --aurora-green: #fbbf24;
+  --aurora-teal: #fb923c;
+  --aurora-blue: #f59e0b;
+  --aurora-extra-glow: #f97316;
+  --aurora-pink: #ef4444;
+
+  --glass-border-hover: rgba(245, 158, 11, 0.18);
+  --shadow-glow: 0 0 30px rgba(245, 158, 11, 0.14);
+
+  --aurora-play-gradient: linear-gradient(145deg, rgba(245, 158, 11, 0.85), rgba(217, 119, 6, 0.9));
+  --aurora-play-border: 1px solid rgba(245, 158, 11, 0.4);
+  --aurora-play-glow: 0 0 24px rgba(245, 158, 11, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  --shadow-fab: 0 8px 24px rgba(245, 158, 11, 0.32), 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.dark[data-theme="nebula"] {
+  /* Deep violet nebula — purples and magenta */
+  --color-background: #05030f;
+  --color-surface: rgba(16, 8, 30, 0.72);
+  --color-surface-variant: rgba(26, 14, 46, 0.5);
+  --color-primary: #a855f7;
+  --color-primary-dark: #9333ea;
+  --color-secondary: #c084fc;
+  --color-accent: #e879f9;
+  --color-border: rgba(168, 85, 247, 0.1);
+
+  --aurora-green: #c084fc;
+  --aurora-teal: #a855f7;
+  --aurora-blue: #818cf8;
+  --aurora-extra-glow: #9333ea;
+  --aurora-pink: #e879f9;
+
+  --glass-border-hover: rgba(168, 85, 247, 0.18);
+  --shadow-glow: 0 0 30px rgba(168, 85, 247, 0.14);
+
+  --aurora-play-gradient: linear-gradient(145deg, rgba(168, 85, 247, 0.85), rgba(147, 51, 234, 0.9));
+  --aurora-play-border: 1px solid rgba(168, 85, 247, 0.4);
+  --aurora-play-glow: 0 0 24px rgba(168, 85, 247, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  --shadow-fab: 0 8px 24px rgba(168, 85, 247, 0.32), 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
+.dark[data-theme="crimson"] {
+  /* Blood-red aurora — rose and crimson */
+  --color-background: #0a0308;
+  --color-surface: rgba(24, 6, 16, 0.72);
+  --color-surface-variant: rgba(38, 12, 26, 0.5);
+  --color-primary: #fb7185;
+  --color-primary-dark: #f43f5e;
+  --color-secondary: #fda4af;
+  --color-accent: #e11d48;
+  --color-border: rgba(251, 113, 133, 0.1);
+
+  --aurora-green: #fda4af;
+  --aurora-teal: #fb7185;
+  --aurora-blue: #f43f5e;
+  --aurora-extra-glow: #e11d48;
+  --aurora-pink: #fbcfe8;
+
+  --glass-border-hover: rgba(251, 113, 133, 0.18);
+  --shadow-glow: 0 0 30px rgba(251, 113, 133, 0.14);
+
+  --aurora-play-gradient: linear-gradient(145deg, rgba(251, 113, 133, 0.85), rgba(244, 63, 94, 0.9));
+  --aurora-play-border: 1px solid rgba(251, 113, 133, 0.4);
+  --aurora-play-glow: 0 0 24px rgba(251, 113, 133, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  --shadow-fab: 0 8px 24px rgba(251, 113, 133, 0.32), 0 2px 6px rgba(0, 0, 0, 0.15);
+}
+
 /* ─── BASE ─── */
 *,
 *::before,

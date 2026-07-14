@@ -130,7 +130,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         // Also search within common setting labels for this tab
         if (tab.id === 'Scrobbling') return 'scrobble scrobbling lastfm last.fm listenbrainz listen brainz connect account now playing love listening services subsonic opensubsonic bridge symfonium'.includes(query);
         if (tab.id === 'API Keys') return 'api key keys subsonic opensubsonic rest client rotate revoke delete'.includes(query);
-        if (tab.id === 'Appearance') return 'light dark theme'.includes(query);
+        if (tab.id === 'Appearance') return 'light dark theme custom css variables colors'.includes(query);
         if (tab.id === 'Library') return 'folder path scan library stats analysis'.includes(query);
         if (tab.id === 'Artist Entities') return 'artist duplicate merge canonical compound credit identity'.includes(query);
         if (tab.id === 'Metadata') return 'genius musicbrainz lastfm jambase provider album bio image api mapping keys concerts tour live'.includes(query);
@@ -181,7 +181,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
 
     return createPortal(
         <div className={`settings-full-backdrop ${isClosing ? 'closing' : ''}`}>
-            <div className="settings-modal-shell flex w-full h-[100dvh] lg:h-auto lg:max-h-[85vh] lg:w-[90vw] lg:max-w-6xl bg-[var(--color-background)] lg:rounded-3xl shadow-2xl overflow-hidden relative flex-col lg:flex-row border border-[var(--glass-border)]" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" onClick={e => e.stopPropagation()}>
+            <div className="settings-modal-shell flex w-full h-[100dvh] lg:h-[85vh] lg:w-[90vw] lg:max-w-6xl bg-[var(--color-background)] lg:rounded-3xl shadow-2xl overflow-hidden relative flex-col lg:flex-row border border-[var(--glass-border)]" role="dialog" aria-modal="true" aria-labelledby="settings-modal-title" onClick={e => e.stopPropagation()}>
                 
                 {/* Close Button UI */}
                 <div className="settings-close-action absolute top-4 right-4 flex items-center justify-center z-50 group">

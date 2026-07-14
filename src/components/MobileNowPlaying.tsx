@@ -133,7 +133,7 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
   const veilOpacity = useMemo(() => {
     const lum = hexLuminance(bgColor);
     if (lum == null) return 0;
-    const deficit = theme === 'dark' ? lum - 0.45 : 0.55 - lum;
+    const deficit = theme !== 'light' ? lum - 0.45 : 0.55 - lum;
     return Math.max(0, Math.min(0.8, deficit * 1.9));
   }, [bgColor, theme]);
 

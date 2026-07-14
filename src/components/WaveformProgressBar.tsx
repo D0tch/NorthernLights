@@ -156,7 +156,7 @@ const WaveformProgressBarComponent: React.FC<WaveformProgressBarProps> = ({
         ? dbDuration
         : rawDuration;
     const theme = usePlayerStore(state => state.theme);
-    const isDark = theme === 'dark';
+    const isDark = theme !== 'light';
     const reducedMotion = usePlayerStore(state => state.reducedMotion);
     const containerRef = useRef<HTMLDivElement>(null);
     const baseCanvasRef = useRef<HTMLCanvasElement>(null);
