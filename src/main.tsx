@@ -5,13 +5,9 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import './index.css';
 import './utils/pwaInstall';
-import { createBuffer } from './polyfills/buffer';
 import { registerSW } from 'virtual:pwa-register';
 import { usePlayerStore } from './store';
 import { setPwaUpdateHandler } from './utils/pwaUpdate';
-
-// Initialize Buffer polyfill for music-metadata-browser
-createBuffer();
 
 // Auto-recover from stale lazy chunks. After a deploy the hashed route chunks
 // change; a tab still running the old build that navigates to a not-yet-loaded
