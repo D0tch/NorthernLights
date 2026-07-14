@@ -6287,8 +6287,11 @@ a:focus-visible > .genre-card .genre-card__label {
    queue panel. Proximity snap settles on whole pages without trapping the
    scroll inside the long queue; overscroll containment keeps rubber-banding
    (and pull-to-refresh) inside the sheet. The backdrop (bloom, video, scrim)
-   stays absolutely positioned in the shell and does not scroll. */
+   lives inside page 1 and slides up with it as one unit. */
 .mobile-now-scroll {
+  /* offsetParent for the queue-list wrapper's offsetTop → the virtualizer's
+     scrollMargin — do not remove. */
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -6304,16 +6307,22 @@ a:focus-visible > .genre-card .genre-card__label {
 
 /* Page 1 reproduces the pre-scroller shell layout (column of spacers, header,
    content) at exactly one viewport; on very short screens it grows past 100%
-   and the outer scroller absorbs the overflow. */
+   and the outer scroller absorbs the overflow. It is the containing block for
+   the backdrop stack (bloom, video, ::after scrim), and isolation keeps those
+   z-indices internal to the page. */
 .mobile-now-page {
+  position: relative;
+  isolation: isolate;
   display: flex;
   flex-direction: column;
   min-height: 100%;
   scroll-snap-align: start;
 }
 
-/* The queue: an opaque panel that scrolls up over the bloom/video, so rows
-   stay readable on any backdrop and the backdrop needs no awareness of it. */
+/* The queue: an opaque panel that follows page 1 (and its backdrop) up from
+   below the fold, so rows stay readable and the backdrop needs no awareness
+   of it. NOT positioned on purpose — the queue-list wrapper's offsetTop must
+   keep resolving against .mobile-now-scroll (virtualizer scrollMargin). */
 .mobile-now-queue {
   min-height: 100%;
   scroll-snap-align: start;
@@ -6343,7 +6352,8 @@ a:focus-visible > .genre-card .genre-card__label {
    few soft palette glows, cross-faded as whole opaque layers per settled
    track. The container owns the fixed readability envelope
    (--mnp-bloom-opacity) and the video dim; the layers inside own the
-   per-track morph. */
+   per-track morph. Anchored to page 1 (see the page ::after scrim), so it
+   scrolls away with the controls. */
 .mobile-now-bloom {
   position: absolute;
   inset: 0;
@@ -6396,9 +6406,9 @@ a:focus-visible > .genre-card .genre-card__label {
   inset: 0;
 }
 
-/* Full-screen background music video. Hidden until buffered, then cross-faded
-   in. Sits above the cover/mesh, below the scrim and controls. */
-/* Video occupies the top portion of the screen, flush to the top edge. Its
+/* Background music video. Hidden until buffered, then cross-faded in. Sits
+   above the bloom, below the scrim and controls. */
+/* Video occupies the top portion of page 1, flush to its top edge. Its
    bottom edge is hidden under the fully-opaque base of the scrim. */
 .mobile-now-video {
   position: absolute;
@@ -6451,8 +6461,9 @@ a:focus-visible > .genre-card .genre-card__label {
    from --color-bg-primary (adapts to light/dark): a light top band keeps the
    header buttons legible over a bright video or bloom; the middle stays clear
    so the bloom reads; fully opaque by 63% — above the video's 75vh (≈75%)
-   bottom edge — to mask that edge and back the text and controls. */
-.mobile-now-playing-shell::after {
+   bottom edge — to mask that edge and back the text and controls. Lives on
+   page 1 so it scrolls away with the rest of the backdrop. */
+.mobile-now-page::after {
   content: "";
   position: absolute;
   inset: 0;
@@ -6468,7 +6479,9 @@ a:focus-visible > .genre-card .genre-card__label {
   );
 }
 
-.mobile-now-playing-shell > :not(.mobile-now-bloom):not(.mobile-now-video) {
+/* Page-1 content paints above its backdrop stack:
+   bloom (z0) < video (z1) < ::after scrim (z2) < content (z3). */
+.mobile-now-page > :not(.mobile-now-bloom):not(.mobile-now-video) {
   position: relative;
   z-index: 3;
 }

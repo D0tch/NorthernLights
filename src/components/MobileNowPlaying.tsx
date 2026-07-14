@@ -249,11 +249,19 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
       data-state={isOpen ? 'open' : 'closing'}
       data-video={videoPhase}
     >
+      {/* Two-page scroller: the now-playing page fills the frame; the queue
+          panel sits below the fold and is revealed by scrolling down. The
+          backdrop (bloom, video, scrim) lives inside page 1, so the whole
+          page-1 visual slides up as one unit. */}
+      <div ref={scrollerRef} className="mobile-now-scroll">
+        <div ref={pageRef} className="mobile-now-page">
+
       {/* Aurora bloom — the one animated colored surface: blurred cover art
           with palette glows, cross-faded as whole opaque layers once per
           settled track. The container's fixed envelope opacity plus the static
-          neutral scrim (shell ::after) bound its intensity, so no cover can
-          break text contrast. */}
+          neutral scrim (page ::after) bound its intensity, so no cover can
+          break text contrast. Rides inside page 1 and scrolls away with the
+          controls. */}
       <div className="mobile-now-bloom" aria-hidden="true">
         {bloomLayers.map((layer) => {
           const [artUrl, gradient] = unpackBloomValue(layer.value);
@@ -273,17 +281,13 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
         })}
       </div>
 
-      {/* Full-screen, muted background music video (fades in when buffered) */}
+      {/* Muted background music video (fades in when buffered); scrolls with
+          page 1 like the bloom. */}
       {videoId && (
         <div className="mobile-now-video" aria-hidden="true">
           <MobileNowPlayingVideo key={trackIdentity} videoId={videoId} onPhaseChange={setVideoPhase} />
         </div>
       )}
-
-      {/* Two-page scroller: the now-playing page fills the frame; the queue
-          panel sits below the fold and is revealed by scrolling down. */}
-      <div ref={scrollerRef} className="mobile-now-scroll">
-        <div ref={pageRef} className="mobile-now-page">
 
       {/* Safe area top spacer */}
       <div style={{ height: 'var(--safe-area-top)' }} />
@@ -501,9 +505,10 @@ const MobileNowPlaying: React.FC<MobileNowPlayingProps> = ({ onClose, isOpen = t
 
         </div>
 
-        {/* Queue panel below the fold: an opaque sheet that scrolls up over the
-            bloom/video (snap settles on either page). Virtualized against the
-            outer scroller so long queues stay cheap. */}
+        {/* Queue panel below the fold: an opaque panel that follows page 1
+            (and its backdrop) up from below the fold (snap settles on either
+            page). Virtualized against the outer scroller so long queues stay
+            cheap. */}
         <section className="mobile-now-queue" aria-label="Play queue">
           <div className="mobile-now-queue-header">
             <button
