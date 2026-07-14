@@ -25,17 +25,78 @@
 
 ## [Unreleased]
 
-### API
-- **Subsonic Key Rotation**: Added `POST /api/auth/subsonic-api-keys/:id/rotate` to replace a key secret in place and return the new raw key once. `DELETE /api/auth/subsonic-api-keys/:id` now deletes already-revoked key records after the first delete revokes active keys.
-- **OpenSubsonic Service Toggle**: Added the `openSubsonicEnabled` system setting. When disabled from Settings -> System -> Service, `/rest` returns OpenSubsonic error `50` without deleting existing keys.
-- **Genre Canonicalization**: Added admin review, dismiss, transactional group, and restore endpoints for reversible local genre aliases. Active genre lists and OpenSubsonic genre output now aggregate canonical primary and secondary membership.
+## [v1.0.0-rc.6] - 2026-07-14
+
+### Audio & Playback
+- **Adaptive Auto HLS ABR**: Replaced the browser `Auto` → `128 kbps` alias with source-aware adaptive AAC HLS across 64/128/160/320 kbps. One-process FFmpeg `asplit`/`var_stream_map` packaging with aligned 10-second renditions. hls.js seeds ABR from Network Information, caps to 64 kbps for Data Saver, and falls back on failure. The player signal chain shows `Auto · <active bitrate>`.
+- **Cast Lossless**: Cast FLAC/WAV losslessly at Source quality; receiver passes progressive lossless through with a lossless UI badge. Receiver lossless-capability probe and raw-stream request logging added. Cast-safe AAC fallback retained for `auto`/`source` on the custom receiver path.
+- **Authoritative Lossless Flag**: `music-metadata` now sets an authoritative `is_lossless` flag on tracks, replacing heuristic detection.
+- **Audio Output Routing**: Route graph output through a `MediaStream` bridge on Firefox/Safari. Permission-gated device routing with `AudioContext` sink selector.
+- **Loudness Normalization (EBU R128)**: Per-track EBU R128 loudness computed and stored during analysis. Per-element `GainNode` in the playback graph applies correction on track change. Library backfill via `POST /analyze/loudness`, `GET /api/loudness` read endpoint, distinct "Measuring Loudness" scan phase in the UI, and Lazy/Full/Both computation-mode switch.
+- **Volume Scroll**: Adjust volume with mouse wheel on the player.
+- **Cast Volume Clamp**: Receiver volume clamped on fresh session handover to prevent jarring jumps.
+
+### Hub & Recommendations
+- **Wrapped Recaps**: Generate year/season Wrapped playlists surfaced on Hub, Playlists, and Settings. Blends Last.fm/ListenBrainz listening history into recap playlists.
+- **Procedural Aurora Covers**: Generative cover art for Wrapped and Hub discover mixes — three distinct discover styles, humanized engine-mix copy, full-decade numerals ("2010" not "10's"), thicker overlapping favourite curtains. Multi-color palette extracted from cover art via `useDominantColor`.
+- **Hub Resume Slot**: User-configurable resume-freshness gate and last-opened-album fallback for the resume slot.
+- **Hub Admin Toggles**: Admin toggles for personalized Hub rails with config-aware cache.
+- **Artist Radio**: Eligibility check and adaptive radio length. Fixed missing stream/art URLs on artist radio tracks.
+- **Now-Playing Source Link**: Click now-playing title to open where it's playing from (album/artist/playlist).
+
+### Library & Metadata
+- **Canonical Genre Identity**: Deterministic 0–100 duplicate scoring with connector-aware normalization, MusicBrainz path context, persistent signature-scoped dismissals, and reversible transactional grouping. Canonical identity drives genre grids, Genre Matrix coverage, KNN inputs, candidate pools, banned paths, hop costs, Infinity Mode, Hub mixes, album filters, and OpenSubsonic genre listing.
+- **Library Entities Tab**: Expanded Artist Entities into Artists and Genres sub-tabs with ranked spelling-variant review, ambiguous slash-tag isolation, taxonomy-conflict preview, manual grouping, and reversible restore.
+- **WMA Artwork Recovery**: Shared `sharp`-validated resolver tries every embedded ASF picture, removes malformed prefixes, reconstructs broken JPEGs, and falls back through provider chain. `tracks.artwork_version` triggers one automatic reparse for artless rows.
+- **Credit Enrichment**: Background jobs with progress polling and MetadataTab progress bars. Credit-only artist detail rendering and loading-state fixes. Compilation tracks credited to real performers with name-based VA detection.
+- **Artist Image Enrichment**: Batch enrichment service wired into scan, refresh, and cache-clear. Removed per-card image fetching from LibraryHome grid to reduce boot payload.
+- **Self-Healing**: Unparsed tracks auto-recover on next scan; artwork decode failures are isolated per-file.
+
+### Mobile
+- **Two-Page Queue Sheet**: Queue sheet expanded to two pages with aurora bloom backdrop and Cast volume gating.
+- **Now-Playing Backdrops**: Compositor-friendly backdrop morphs that scroll with page 1. Cross-fade backdrops track-to-track. Adaptive readability veil for low-contrast covers.
+- **Music Video Backgrounds**: Mobile now-playing background music videos via YouTube, with vibrant mesh gradient fallback and appearance toggle.
+
+### Music Videos
+- **YouTube IFrame API**: Loader and track music video hook. Music Videos rail on artist pages. Track music video endpoint with DB index. YouTube host validation hardened.
+
+### Playlists
+- **Playlist Discovery**: Inline editing, privacy toggle, and rail-based playlist layout. Playlist discovery and privacy controls (backend + store).
+
+### Security
+- **CSP Enforcing**: Promoted Content-Security-Policy from Report-Only to enforcing. Dropped `script-src 'unsafe-inline'` in favor of sha256 hashes. Allowed Cast SDK scripts on insecure origins and service worker Google Fonts access.
+- **npm Audit Fix**: Resolved 18 of 22 advisories.
+
+### PWA & Offline
+- **Adaptive HLS Offline Fallback**: Rendition-agnostic offline fallback for adaptive HLS caches — same-path cache lookup on exact-query miss so aligned AAC renditions can satisfy offline requests.
+- **Stable Manifest ID**: PWA manifest id set independent of `start_url` so already-installed PWAs aren't treated as new on update.
+- **Chunk Recovery**: Auto-recover from stale lazy chunks after deploy via `vite:preloadError` handler. PWA update reload prevents white screen and repeated prompts.
+
+### Settings & Setup
+- **Resumable Onboarding**: Three-step first-run flow (Account → Analysis → Library) with server-side progress independent from user existence. Interrupted installs resume after login. Model downloads use partial files and reject failed/incomplete downloads; scans defer feature analysis when models are unavailable.
+- **ML Model Readiness**: Analysis gated on ML model readiness with atomic model downloads.
+- **API Keys Tab**: OpenSubsonic key management moved to dedicated Settings → API Keys tab with create, rotate, revoke, delete, and disabled-service states.
+- **OpenSubsonic Service Toggle**: `openSubsonicEnabled` system setting; `/rest` returns error `50` when disabled without deleting keys.
+- **Subsonic Key Rotation**: `POST /api/auth/subsonic-api-keys/:id/rotate` replaces key secret in place and returns the new raw key once.
+
+### Subsonic / OpenSubsonic
+- **Scrobble Bridge**: `/rest/scrobble` now updates Aurora play history and optionally forwards to connected Last.fm/ListenBrainz providers with per-user toggle (disabled by default). Provider failures logged without failing the client request.
+- **Scrobble Hardening**: Timeout + graceful soft-fail for LB/Last.fm submissions. Scrobble threshold default lowered from 95% to 50%.
+
+### Performance
+- **Lean DB Projections**: Stripped snake_case column duplicates from `mapTrackRow`. Trimmed `rawUrls` from `getAllTracks`; `decoded_path` never serialized. Index directory-prefix lookups via `decoded_path` column. Lean projection for `getAllArtists` to reduce boot payload.
+- **Connection Hardening**: Capture leak-detect stack at real `connect()` call site. Bound advisory-lock wait with `SET LOCAL lock_timeout`. Restored native `pool.query` wrapping to prevent connection poisoning on DB blips.
+- **Rendering**: Eliminate CLS by rendering FilterBar shape in loading states. Resolve actual scroll viewport for `VirtualizedCardGrid` to restore windowing. Compositor-friendly mobile backdrop morphs.
+- **Dead Code Removal**: Removed unused theme system, dead `cn()` helper, deprecated `Semaphore` class, unused npm deps (`@tensorflow/tfjs-node`, `bottleneck`, `buffer`, `clsx`, `tailwind-merge` — 85 packages), Buffer polyfill, and `global` shims.
 
 ### UI
-- **API Keys Tab**: Moved OpenSubsonic key management out of My Account into a dedicated Settings -> API Keys tab with create, rotate, revoke, delete, and disabled-service states.
-- **Library Entities**: Expanded Artist Entities into Artists and Genres sub-tabs. Genre review ranks spelling variants, isolates ambiguous slash tags, previews taxonomy conflicts, supports manual grouping, and restores aliases without changing raw Picard metadata.
+- **Semantic Color Tokens**: Semantic Tailwind color tokens with alpha modifier support.
+- **Cover Gradient Utilities**: Extracted multi-color palette and cover gradient logic into shared modules. SoftAurora premultiplied alpha and glass opacity for cross-browser consistency.
+- **Scroll Preservation**: Preserve scroll position across navigation.
+- **Cast UI**: Recovery message on real launch failure, "Stop casting" label, queue stream/art URL rebuild from current token. Receiver CSP hardened with per-page script hashes.
 
-### Recommendations
-- **Canonical Genre Identity**: Genre Matrix coverage, hop costs, banned paths, candidate pools, Infinity Mode, Hub genre families, decade-genre mixes, album filters, and Daylist inputs now resolve one canonical genre identity instead of grouping raw tag strings independently.
+### Infrastructure
+- **Rootless Podman**: Enable rootless Podman lingering so DB container survives logout.
 
 ## [v1.0.0-rc.3] - 2026-05-19
 
