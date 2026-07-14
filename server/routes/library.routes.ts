@@ -136,6 +136,84 @@ router.post('/artists/manual-merge', requireAdmin, async (req, res) => {
   }
 });
 
+router.get('/genre-duplicates', requireAdmin, async (_req, res) => {
+  try {
+    const { getGenreReviewState } = await import('../services/genreCanonicalization.service');
+    res.json(await getGenreReviewState());
+  } catch (error: any) {
+    console.error('[GenreDuplicates] list error:', error);
+    res.status(500).json({ error: error.message || 'Failed to load genre duplicate candidates' });
+  }
+});
+
+router.post('/genre-duplicates/dismiss', requireAdmin, async (req, res) => {
+  try {
+    const { candidateKey, signature, genreIds } = req.body || {};
+    if (!candidateKey || !signature || !Array.isArray(genreIds) || genreIds.length < 1) {
+      return res.status(400).json({ error: 'candidateKey, signature, and genreIds are required' });
+    }
+    const { dismissGenreCandidate } = await import('../services/genreCanonicalization.service');
+    await dismissGenreCandidate({
+      candidateKey: String(candidateKey),
+      signature: String(signature),
+      genreIds: genreIds.map(String),
+      userId: req.user?.userId || null,
+    });
+    res.json({ status: 'dismissed' });
+  } catch (error: any) {
+    console.error('[GenreDuplicates] dismiss error:', error);
+    res.status(500).json({ error: error.message || 'Failed to dismiss genre candidate' });
+  }
+});
+
+router.post('/genres/merge', requireAdmin, async (req, res) => {
+  try {
+    const {
+      canonicalGenreId,
+      aliasGenreIds,
+      candidateKey,
+      signature,
+      scoreEvidence,
+      acknowledgeTaxonomyConflict,
+    } = req.body || {};
+    if (!canonicalGenreId || !Array.isArray(aliasGenreIds) || aliasGenreIds.length < 1) {
+      return res.status(400).json({ error: 'canonicalGenreId and aliasGenreIds are required' });
+    }
+    const { groupGenres } = await import('../services/genreCanonicalization.service');
+    await groupGenres({
+      canonicalGenreId: String(canonicalGenreId),
+      aliasGenreIds: aliasGenreIds.map(String),
+      candidateKey: candidateKey ? String(candidateKey) : undefined,
+      signature: signature ? String(signature) : undefined,
+      scoreEvidence,
+      acknowledgeTaxonomyConflict: acknowledgeTaxonomyConflict === true,
+      userId: req.user?.userId || null,
+    });
+    res.json({ status: 'grouped' });
+  } catch (error: any) {
+    console.error('[GenreDuplicates] merge error:', error);
+    const isConflict = error?.code === 'GENRE_TAXONOMY_CONFLICT';
+    res.status(isConflict ? 409 : 400).json({
+      error: error.message || 'Failed to group genres',
+      code: isConflict ? 'GENRE_TAXONOMY_CONFLICT' : undefined,
+    });
+  }
+});
+
+router.post('/genres/:aliasId/restore', requireAdmin, async (req, res) => {
+  try {
+    const { restoreGenreAlias } = await import('../services/genreCanonicalization.service');
+    await restoreGenreAlias({
+      aliasGenreId: String(req.params.aliasId),
+      userId: req.user?.userId || null,
+    });
+    res.json({ status: 'restored' });
+  } catch (error: any) {
+    console.error('[GenreDuplicates] restore error:', error);
+    res.status(400).json({ error: error.message || 'Failed to restore genre alias' });
+  }
+});
+
 // ─── Credit enrichment from external providers ──────────────────────
 // Admin-triggered. Aurora's role-credit table is populated from on-disk
 // tags during scan (always-on); these endpoints layer additional rows
