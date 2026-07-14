@@ -1854,7 +1854,7 @@ export const usePlayerStore = create<PlayerState>()(
         },
 
         // On-demand: load the full track list into `library` for the admin
-        // tools that still need per-track data (Genre Matrix, Artist Entities).
+        // tools that still need per-track data (Genre Matrix, Library Entities).
         // The main app no longer loads this at boot. Deduped; no-op once present.
         ensureFullLibraryLoaded: async () => {
           if (get().library.length > 0) return;

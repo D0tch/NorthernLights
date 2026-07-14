@@ -186,7 +186,7 @@ track list at boot**:
 - **Server-side search** — `/api/library/search` (trigram), debounced client-side.
 - **Queue** — persisted and rehydrated via `reconcileQueue()` +
   `POST /api/library/tracks/exists`; stream URLs rebuilt from `path`.
-- **On-demand full list** — only admin tools (Genre Matrix, Artist Entities)
+- **On-demand full list** — only admin tools (Genre Matrix, Library Entities)
   load all tracks, via `ensureFullLibraryLoaded()`.
 
 See [Library Data Loading](library_data_loading.md) for the full design,

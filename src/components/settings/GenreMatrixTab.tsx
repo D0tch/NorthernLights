@@ -160,7 +160,7 @@ export const GenreMatrixTab: React.FC = () => {
         });
     };
 
-    const distinctGenres = Array.from(new Set(library.map(t => (t.genre || '').toLowerCase().trim()).filter(Boolean)));
+    const distinctGenres = Array.from(new Set(library.map(t => (t.canonicalGenre || t.genre || '').toLowerCase().trim()).filter(Boolean)));
     const mappedCount = distinctGenres.filter(g => mappings[g.toLowerCase().replace(/[^\w\s-]/g, '')]).length;
     const coveragePercent = distinctGenres.length > 0 ? Math.round((mappedCount / distinctGenres.length) * 100) : 100;
     const hasLibrary = library.length > 0;

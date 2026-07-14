@@ -932,10 +932,22 @@ Get album details with tracks.
 ### Genres
 
 ### [GET] `/api/genres`
-List all genres.
+List active canonical genres. Each row includes `track_count` across primary and secondary associations and `alias_count`. Grouped alias rows are hidden.
 
 ### [GET] `/api/genres/:id`
-Get genre details with tracks.
+Get canonical genre details with tracks. A grouped alias ID redirects to its canonical genre, and membership includes both primary and secondary tags.
+
+### [GET] `/api/library/genre-duplicates`
+Return the admin genre-hygiene state: scored duplicate candidates, separately quarantined slash-compound tags, and active reversible groups. Scores rank spelling/token similarity and never apply a merge automatically. Admin only.
+
+### [POST] `/api/library/genre-duplicates/dismiss`
+Dismiss a scored or compound candidate by `candidateKey`, `signature`, and `genreIds`. The dismissal remains active until names, mappings, or library counts change the signature. Admin only.
+
+### [POST] `/api/library/genres/merge`
+Group `aliasGenreIds` into `canonicalGenreId` without rewriting `tracks.genre` or `tracks.genres`. The transaction repoints canonical primary/secondary associations and records an audit row. Taxonomy-root conflicts return `409 GENRE_TAXONOMY_CONFLICT` unless `acknowledgeTaxonomyConflict` is true. Admin only.
+
+### [POST] `/api/library/genres/:aliasId/restore`
+Restore a grouped alias and rebuild affected associations from the preserved raw track tags. Admin only.
 
 ---
 

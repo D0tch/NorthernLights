@@ -213,14 +213,12 @@ export const LibraryHome: React.FC<{ section?: 'artists' | 'albums' | 'genres' }
     // doesn't recompute whole-library passes. The useMemo here is just a
     // per-render guard; the real cache survives route unmount. See
     // utils/libraryDerivations.ts.
-    const { genres: derivedGenreNames, tracksByAlbum } = useMemo(() => getTracksByAlbumAndGenres(library), [library]);
-    // When the track list isn't loaded yet (entity-first load), fall back to
-    // the genre entity names so the Genres view still populates immediately.
+    const { tracksByAlbum } = useMemo(() => getTracksByAlbumAndGenres(library), [library]);
+    // Genre entities are server-canonicalized. Never rebuild this list from raw
+    // track tags or grouped spellings would reappear after the full library loads.
     const genres = useMemo(
-        () => (derivedGenreNames.length > 0
-            ? derivedGenreNames
-            : (genreEntities as EntityInfo[]).map(g => g.name).filter((n): n is string => !!n)),
-        [derivedGenreNames, genreEntities],
+        () => (genreEntities as EntityInfo[]).map(g => g.name).filter((n): n is string => !!n),
+        [genreEntities],
     );
 
     const enrichedAlbums = useMemo(

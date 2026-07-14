@@ -27,7 +27,7 @@ const GenreMatrixTab = React.lazy(() => import('./settings/GenreMatrixTab').then
 const DatabaseTab = React.lazy(() => import('./settings/DatabaseTab').then(module => ({ default: module.DatabaseTab })));
 const MetadataTab = React.lazy(() => import('./settings/MetadataTab').then(module => ({ default: module.MetadataTab })));
 const LiveMusicTab = React.lazy(() => import('./settings/LiveMusicTab').then(module => ({ default: module.LiveMusicTab })));
-const ArtistEntitiesTab = React.lazy(() => import('./settings/ArtistEntitiesTab').then(module => ({ default: module.ArtistEntitiesTab })));
+const LibraryEntitiesTab = React.lazy(() => import('./settings/LibraryEntitiesTab').then(module => ({ default: module.LibraryEntitiesTab })));
 const AdminDashboard = React.lazy(() => import('./settings/AdminDashboard').then(module => ({ default: module.AdminDashboard })));
 
 const SettingsTabFallback: React.FC = () => (
@@ -109,7 +109,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         { id: 'Appearance', label: 'Appearance', category: 'App Settings' },
         ...(isAdmin ? ([
             { id: 'Library', label: 'Library', category: 'App Settings' },
-            { id: 'Artist Entities', label: 'Artist Entities', category: 'App Settings' },
+            { id: 'Library Entities', label: 'Library Entities', category: 'App Settings' },
             { id: 'Metadata', label: 'Metadata', category: 'App Settings' },
         ] satisfies SettingsTab[]) : []),
         { id: 'Playback', label: 'Playback', category: 'App Settings' },
@@ -132,7 +132,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         if (tab.id === 'API Keys') return 'api key keys subsonic opensubsonic rest client rotate revoke delete'.includes(query);
         if (tab.id === 'Appearance') return 'light dark theme'.includes(query);
         if (tab.id === 'Library') return 'folder path scan library stats analysis'.includes(query);
-        if (tab.id === 'Artist Entities') return 'artist duplicate merge canonical compound credit identity'.includes(query);
+        if (tab.id === 'Library Entities') return 'artist genre duplicate group merge canonical compound credit identity library hygiene'.includes(query);
         if (tab.id === 'Metadata') return 'genius musicbrainz lastfm jambase provider album bio image api mapping keys concerts tour live'.includes(query);
         if (tab.id === 'Live Music') return 'concerts tour live tickets jambase events location subscribe artists'.includes(query);
         if (tab.id === 'Playback') return 'infinity discovery genre artist amnesia matrix llm playlist diversity blend tracks wander played threshold scrobble count percent listened sleep timer quality streaming'.includes(query);
@@ -162,7 +162,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         if (tabId === 'Live Music') return Ticket;
         if (tabId === 'Appearance') return Palette;
         if (tabId === 'Library') return Folder;
-        if (tabId === 'Artist Entities') return GitMerge;
+        if (tabId === 'Library Entities') return GitMerge;
         if (tabId === 'Metadata') return Globe;
         if (tabId === 'Playback') return Play;
         if (tabId === 'System') return Cpu;
@@ -343,7 +343,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                                     {activeTab === 'Live Music' && <LiveMusicTab />}
                                     {activeTab === 'Appearance' && <AppearanceTab />}
                                     {isAdmin && activeTab === 'Library' && <LibraryTab />}
-                                    {isAdmin && activeTab === 'Artist Entities' && <ArtistEntitiesTab />}
+                                    {isAdmin && activeTab === 'Library Entities' && <LibraryEntitiesTab />}
                                     {isAdmin && activeTab === 'Metadata' && <MetadataTab />}
                                     {activeTab === 'Playback' && <PlaybackTab />}
                                     
