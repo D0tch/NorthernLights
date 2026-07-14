@@ -189,6 +189,36 @@ function buildCondition(
   const def = fields[metadataType];
   if (!def) return null;
 
+  if (view === 'albums' && metadataType === 'genre') {
+    const parameter = `$${paramIdx + 1}`;
+    const exact = operator === 'equals' || operator === 'is' || operator === 'is not';
+    const positive = exact ? `lower(g.name) = lower(${parameter})` : `g.name ILIKE ${parameter}`;
+    const pattern = exact ? value : operator === 'starts with' ? `${value}%` : `%${value}%`;
+    if (operator === 'is not') {
+      return {
+        sql: `NOT EXISTS (
+          SELECT 1 FROM tracks t
+          JOIN track_genres tg ON tg.track_id = t.id
+          JOIN genres g ON g.id = tg.genre_id
+          WHERE t.album_id = albums.id AND ${positive}
+        )`,
+        params: [pattern],
+      };
+    }
+    if (['contains', 'equals', 'is', 'starts with'].includes(operator)) {
+      return {
+        sql: `EXISTS (
+          SELECT 1 FROM tracks t
+          JOIN track_genres tg ON tg.track_id = t.id
+          JOIN genres g ON g.id = tg.genre_id
+          WHERE t.album_id = albums.id AND ${positive}
+        )`,
+        params: [pattern],
+      };
+    }
+    return null;
+  }
+
   const inner = buildInnerCondition(def, operator, value, paramIdx);
   if (!inner) return null;
 

@@ -988,23 +988,23 @@ async function resolveSimilarSeed(rawId: string, userId: string): Promise<{ vect
 async function fallbackSimilarSongs(rawId: string, count: number, userId: string) {
   const db = await initDB();
   let seedArtistId: string | null = null;
-  let seedGenre: string | null = null;
+  let seedGenreId: string | null = null;
   let seedSongInternal: string | null = null;
   if (rawId.startsWith('artist:')) {
     seedArtistId = artistId(rawId);
   } else if (rawId.startsWith('album:')) {
-    const r = (await db.query('SELECT artist_id::text AS artist_id, genre FROM tracks WHERE album_id = $1 LIMIT 1', [albumId(rawId)])).rows[0];
-    seedArtistId = r?.artist_id || null; seedGenre = r?.genre || null;
+    const r = (await db.query('SELECT artist_id::text AS artist_id, genre_id::text AS genre_id FROM tracks WHERE album_id = $1 LIMIT 1', [albumId(rawId)])).rows[0];
+    seedArtistId = r?.artist_id || null; seedGenreId = r?.genre_id || null;
   } else {
     seedSongInternal = songId(rawId);
-    const r = (await db.query('SELECT artist_id::text AS artist_id, genre FROM tracks WHERE id = $1', [seedSongInternal])).rows[0];
-    seedArtistId = r?.artist_id || null; seedGenre = r?.genre || null;
+    const r = (await db.query('SELECT artist_id::text AS artist_id, genre_id::text AS genre_id FROM tracks WHERE id = $1', [seedSongInternal])).rows[0];
+    seedArtistId = r?.artist_id || null; seedGenreId = r?.genre_id || null;
   }
   const params: unknown[] = [userId];
   const where: string[] = ['t.path IS NOT NULL'];
   const orParts: string[] = [];
   if (seedArtistId) { params.push(seedArtistId); orParts.push(`t.artist_id::text = $${params.length}`); }
-  if (seedGenre) { params.push(seedGenre); orParts.push(`LOWER(t.genre) = LOWER($${params.length})`); }
+  if (seedGenreId) { params.push(seedGenreId); orParts.push(`t.genre_id::text = $${params.length}`); }
   if (orParts.length) where.push(`(${orParts.join(' OR ')})`);
   if (seedSongInternal) { params.push(seedSongInternal); where.push(`t.id <> $${params.length}`); }
   let order = 'random()';
@@ -1147,8 +1147,17 @@ async function handleBrowsing(req: Request, res: Response, method: string, ctx: 
       return sendSubsonic(req, res, subsonicSuccess({ directory: { id, name: album.rows[0]?.title || 'Album', child: tracks.rows.map((row) => mapTrackToSubsonic(row, ctx.userId)) } }));
     }
     case 'getgenres': {
-      const genres = await db.query('SELECT COALESCE(NULLIF(TRIM(genre), \'\'), \'Unknown Genre\') AS name, COUNT(*)::int AS song_count FROM tracks GROUP BY 1 ORDER BY 1 ASC');
-      return sendSubsonic(req, res, subsonicSuccess({ genres: { genre: genres.rows.map((row) => ({ value: row.name, songCount: row.song_count, albumCount: 0 })) } }));
+      const genres = await db.query(`
+        SELECT g.name, COUNT(DISTINCT tg.track_id)::int AS song_count,
+               COUNT(DISTINCT t.album_id)::int AS album_count
+        FROM genres g
+        JOIN track_genres tg ON tg.genre_id = g.id
+        JOIN tracks t ON t.id = tg.track_id
+        WHERE g.merged_into IS NULL
+        GROUP BY g.id, g.name
+        ORDER BY g.name ASC
+      `);
+      return sendSubsonic(req, res, subsonicSuccess({ genres: { genre: genres.rows.map((row) => ({ value: row.name, songCount: row.song_count, albumCount: row.album_count })) } }));
     }
     case 'getartists': {
       const artists = await db.query(`
@@ -1226,7 +1235,7 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
       const conditions: string[] = [];
       if (genre || type === 'bygenre') {
         params.push(genre || '');
-        conditions.push(`LOWER(t.genre) = LOWER($${params.length})`);
+        conditions.push(`LOWER(g.name) = LOWER($${params.length})`);
       }
       if (type === 'byyear' && Number.isFinite(fromYear) && Number.isFinite(toYear)) {
         params.push(Math.min(fromYear, toYear), Math.max(fromYear, toYear));
@@ -1236,8 +1245,9 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
       const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
       const albums = await db.query(`
         SELECT a.*, COUNT(t.id)::int AS song_count, COALESCE(SUM(t.duration), 0)::int AS duration,
-               MIN(t.artist_id::text) AS artist_id, MIN(t.genre) AS genre, COALESCE(SUM(t.play_count), 0)::int AS play_count
+               MIN(t.artist_id::text) AS artist_id, MIN(g.name) AS genre, COALESCE(SUM(t.play_count), 0)::int AS play_count
         FROM albums a LEFT JOIN tracks t ON t.album_id = a.id
+        LEFT JOIN genres g ON g.id = t.genre_id
         ${where}
         GROUP BY a.id
         ORDER BY ${order}
@@ -1253,20 +1263,20 @@ async function handleLists(req: Request, res: Response, method: string, ctx: Sub
       const toYear = parseInt(getParam(req, 'toYear') || '', 10);
       const params: unknown[] = [ctx.userId];
       const conditions: string[] = [];
-      if (genre) { params.push(genre); conditions.push(`LOWER(t.genre) = LOWER($${params.length})`); }
+      if (genre) { params.push(genre); conditions.push(`LOWER(g.name) = LOWER($${params.length})`); }
       if (Number.isFinite(fromYear)) { params.push(fromYear); conditions.push(`t.year >= $${params.length}`); }
       if (Number.isFinite(toYear)) { params.push(toYear); conditions.push(`t.year <= $${params.length}`); }
       params.push(size);
       const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
       // ORDER BY random() gives a true sample; the old COUNT+offset scheme
       // returned one contiguous block (tracks.id sorts albums together).
-      const songs = await db.query(`SELECT t.*, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved FROM tracks t LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1 LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $1 ${where} ORDER BY random() LIMIT $${params.length}`, params);
+      const songs = await db.query(`SELECT t.*, COALESCE(g.name, t.genre) AS genre, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved FROM tracks t LEFT JOIN genres g ON g.id = t.genre_id LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1 LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $1 ${where} ORDER BY random() LIMIT $${params.length}`, params);
       return sendSubsonic(req, res, subsonicSuccess({ randomSongs: { song: songs.rows.map((row) => mapTrackToSubsonic(row, ctx.userId)) } }));
     }
     case 'getsongsbygenre': {
       const genre = getParam(req, 'genre') || '';
       const count = Math.max(1, Math.min(500, parseInt(getParam(req, 'count') || '10', 10) || 10));
-      const songs = await db.query('SELECT t.*, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved FROM tracks t LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1 LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $1 WHERE LOWER(t.genre) = LOWER($2) ORDER BY t.title LIMIT $3', [ctx.userId, genre, count]);
+      const songs = await db.query('SELECT t.*, COALESCE(g.name, t.genre) AS genre, ups.rating AS user_rating, ult.loved_at, (ult.track_id IS NOT NULL) AS is_loved FROM tracks t JOIN genres g ON g.id = t.genre_id LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1 LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $1 WHERE LOWER(g.name) = LOWER($2) ORDER BY t.title LIMIT $3', [ctx.userId, genre, count]);
       return sendSubsonic(req, res, subsonicSuccess({ songsByGenre: { song: songs.rows.map((row) => mapTrackToSubsonic(row, ctx.userId)) } }));
     }
     case 'getstarred':

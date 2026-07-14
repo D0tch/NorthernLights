@@ -1039,13 +1039,14 @@ async function computeDaylistFresh(userId: string, limit: number) {
   // banned-genre paths (mood-driven), not as a hard track filter.
   const genresRes = await db.query(
     `
-    SELECT t.genre, SUM(b.play_count) AS plays
+    SELECT g.name AS genre, SUM(b.play_count) AS plays
     FROM user_track_play_buckets b
     JOIN tracks t ON t.id = b.track_id
+    JOIN genres g ON g.id = t.genre_id AND g.merged_into IS NULL
     WHERE b.user_id = $1
       AND b.year_month >= date_trunc('month', NOW() - INTERVAL '7 days')::date
-      AND t.genre IS NOT NULL AND t.genre <> ''
-    GROUP BY t.genre
+      AND g.name <> ''
+    GROUP BY g.id, g.name
     ORDER BY plays DESC
     LIMIT 8
     `,
