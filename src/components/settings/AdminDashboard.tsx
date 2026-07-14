@@ -196,7 +196,7 @@ export const AdminDashboard: React.FC = () => {
                                         required
                                         value={newUsername}
                                         onChange={e => setNewUsername(e.target.value)}
-                                        className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+                                        className="w-full bg-background border border-[var(--glass-border)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
                                     />
                                     <input 
                                         type="password" 
@@ -204,12 +204,12 @@ export const AdminDashboard: React.FC = () => {
                                         required
                                         value={newPassword}
                                         onChange={e => setNewPassword(e.target.value)}
-                                        className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
+                                        className="w-full bg-background border border-[var(--glass-border)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-1 focus:ring-[var(--color-primary)]"
                                     />
                                     <select 
                                         value={newRole}
                                         onChange={e => setNewRole(e.target.value)}
-                                        className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)]"
+                                        className="w-full bg-background border border-[var(--glass-border)] rounded-lg px-3 py-2 text-sm text-[var(--color-text-primary)]"
                                     >
                                         <option value="user">User</option>
                                         <option value="admin">Admin</option>

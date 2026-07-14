@@ -18,7 +18,15 @@ async function loadHls(): Promise<typeof Hls> {
 }
 import { usePlayerStore, type PlaybackTelemetry } from '../store';
 import { getPlaybackTimeSnapshot, setPlaybackCurrentTime } from '../store/playbackTime';
-import { applyStreamingQualityToHlsUrl } from './streaming';
+import {
+    AdaptiveHlsTelemetryTracker,
+    applyAdaptiveDataSaverLevelCap,
+    applyStreamingQualityToHlsUrl,
+    getAdaptiveInitialBandwidthEstimate,
+    getBrowserNetworkInformation,
+    isDataSaverEnabled,
+    type BrowserNetworkInformation,
+} from './streaming';
 import { canBrowserPlayNative } from './losslessCapability';
 import { logPlaybackInfo } from './playbackDebug';
 import { audioOutputManager } from './AudioOutputManager';
@@ -41,6 +49,11 @@ class PlaybackManager {
     private webAudioNodes = new WeakMap<HTMLAudioElement, { source: MediaElementAudioSourceNode; gain: GainNode }>();
     private activeGainNode: GainNode | null = null;
     private currentLoudnessGainDb: number | null = null; // null → unity (no normalization)
+    // On browsers without AudioContext.setSinkId (Firefox, Safari) the graph
+    // exits through a MediaStream bridge element whose element-level sink CAN
+    // be routed; on Chromium these stay null and ctx.destination is used.
+    private bridgeDestination: MediaStreamAudioDestinationNode | null = null;
+    private bridgeAudio: HTMLAudioElement | null = null;
     private hls: Hls | null = null;
     private nextAudio: HTMLAudioElement | null = null;
     private nextHls: Hls | null = null;
@@ -63,6 +76,9 @@ class PlaybackManager {
     private hlsNetworkRetryCount = 0;
     private hlsMediaRetryCount = 0;
     private hlsRebuildRetryCount = 0;
+    private adaptiveFallbackAttempted = false;
+    private readonly adaptiveTelemetryTracker = new AdaptiveHlsTelemetryTracker();
+    private networkInformation: BrowserNetworkInformation | null = null;
     private readonly maxHlsNetworkRetries = 5;
     private readonly maxHlsMediaRetries = 2;
     private readonly maxHlsRebuildRetries = 2;
@@ -86,6 +102,8 @@ class PlaybackManager {
     private constructor() {
         this.audio = this.createAudioElement();
         this.attachAudioEvents(this.audio);
+        this.networkInformation = getBrowserNetworkInformation();
+        this.networkInformation?.addEventListener('change', this.handleNetworkInformationChange);
 
         // Set up CastManager listeners
         castManager.onTimeUpdate = (time) => {
@@ -126,6 +144,11 @@ class PlaybackManager {
         this.configureMediaSessionActionHandlers();
         this.attachLifecycleHandlers();
     }
+
+    private readonly handleNetworkInformationChange = (): void => {
+        this.applyDataSaverCap(this.hls);
+        this.applyDataSaverCap(this.nextHls);
+    };
 
     private createAudioElement(): HTMLAudioElement {
         const audio = new Audio();
@@ -554,6 +577,19 @@ class PlaybackManager {
     public async playUrl(hlsUrl: string, rawUrl: string, title?: string, artist?: string, artUrl?: string, album?: string, format?: string): Promise<void> {
         const streamingQuality = usePlayerStore.getState().streamingQuality;
         const effectiveHlsUrl = applyStreamingQualityToHlsUrl(hlsUrl, streamingQuality);
+        const adaptiveRequested = streamingQuality === 'auto' && !castManager.isConnected();
+        this.adaptiveFallbackAttempted = false;
+        this.adaptiveTelemetryTracker.reset();
+        this.recordTelemetry({
+            adaptiveActiveBitrateKbps: null,
+            adaptiveBandwidthEstimateKbps: adaptiveRequested
+                ? Math.round(getAdaptiveInitialBandwidthEstimate(this.networkInformation) / 1000)
+                : null,
+            adaptiveLevelCount: 0,
+            adaptiveSwitchCount: 0,
+            adaptiveFallbackState: 'none',
+            adaptiveNativePlayback: false,
+        });
 
         // True lossless: when the user picks Source and the browser can decode
         // the file's native codec, bypass HLS entirely and stream the raw bytes
@@ -613,7 +649,7 @@ class PlaybackManager {
                             prebufferPolicy: usePlayerStore.getState().prebufferPolicy,
                             prebufferSkippedReason: null,
                         });
-                        await this.playHls(effectiveHlsUrl);
+                        await this.playHlsWithAdaptiveFallback(effectiveHlsUrl);
                     }
                     return;
                 }
@@ -631,7 +667,7 @@ class PlaybackManager {
                     prebufferPolicy: usePlayerStore.getState().prebufferPolicy,
                     prebufferSkippedReason: null,
                 });
-                await this.playHls(effectiveHlsUrl);
+                await this.playHlsWithAdaptiveFallback(effectiveHlsUrl);
                 if (prepareFailureReason) {
                     this.lastPrepareFailureReason = null;
                 }
@@ -734,9 +770,15 @@ class PlaybackManager {
             const authToken = new URL(effectiveHlsUrl, window.location.origin).searchParams.get('token') || '';
 
             if (Hls.isSupported()) {
-                const nextHls = this.createHlsInstance(authToken, 30, 60);
+                const nextHls = this.createHlsInstance(
+                    authToken,
+                    30,
+                    60,
+                    this.isAdaptivePlaylistUrl(effectiveHlsUrl),
+                );
                 this.nextHls = nextHls;
                 nextHls.on(Hls.Events.MANIFEST_PARSED, () => {
+                    if (nextHls !== this.nextHls) return;
                     logPlaybackInfo(`[Playback] Prepared next HLS track: ${title || 'Unknown Title'}${artist ? ` by ${artist}` : ''}`);
                     this.recordTelemetry({
                         preparedTrackTitle: title || 'Unknown Title',
@@ -747,6 +789,7 @@ class PlaybackManager {
                     });
                 });
                 nextHls.on(Hls.Events.ERROR, (_event: string, data: any) => {
+                    if (nextHls !== this.nextHls) return;
                     if (data.fatal) {
                         console.warn('[Playback] Prepared next HLS track failed:', data);
                         const prepareError = data?.details || data?.type || 'fatal HLS prepare error';
@@ -780,6 +823,54 @@ class PlaybackManager {
         usePlayerStore.getState().recordPlaybackTelemetry(telemetry);
     }
 
+    private isAdaptivePlaylistUrl(playlistUrl: string): boolean {
+        try {
+            return new URL(playlistUrl, window.location.origin).searchParams.get('quality') === 'auto';
+        } catch {
+            return false;
+        }
+    }
+
+    private buildFixedFallbackUrl(playlistUrl: string): { url: string; quality: '64k' | '128k' } {
+        const quality = isDataSaverEnabled(this.networkInformation) ? '64k' : '128k';
+        const url = new URL(playlistUrl, window.location.origin);
+        url.searchParams.set('quality', quality);
+        url.searchParams.delete('maxBitrate');
+        url.searchParams.delete('adaptive');
+        url.searchParams.delete('rendition');
+        url.searchParams.delete('ladder');
+        return { url: url.toString(), quality };
+    }
+
+    private recordAdaptiveFallback(quality: '64k' | '128k', error: unknown): void {
+        this.recordTelemetry({
+            loadPath: 'fallback-hls',
+            fallbackHlsLoadUsed: true,
+            lastFallbackReason: 'adaptive-failed',
+            recoveredFromPrepareFailure: false,
+            recoveryPath: 'fixed-quality-after-adaptive-failure',
+            recoveryError: this.getErrorMessage(error),
+            adaptiveFallbackState: quality === '64k' ? 'fixed-64k' : 'fixed-128k',
+            adaptiveActiveBitrateKbps: Number.parseInt(quality, 10),
+            adaptiveLevelCount: 1,
+            adaptiveSwitchCount: this.adaptiveTelemetryTracker.getSwitchCount(),
+            adaptiveNativePlayback: false,
+        });
+    }
+
+    private async playHlsWithAdaptiveFallback(playlistUrl: string): Promise<void> {
+        try {
+            await this.playHls(playlistUrl);
+        } catch (error) {
+            if (!this.isAdaptivePlaylistUrl(playlistUrl) || this.adaptiveFallbackAttempted) throw error;
+            this.adaptiveFallbackAttempted = true;
+            const fallback = this.buildFixedFallbackUrl(playlistUrl);
+            console.warn(`[HLS] Adaptive startup failed; retrying fixed ${fallback.quality}:`, error);
+            this.recordAdaptiveFallback(fallback.quality, error);
+            await this.playHls(fallback.url);
+        }
+    }
+
     private async playHls(playlistUrl: string): Promise<void> {
         // Clean up previous HLS instance
         this.destroyHls();
@@ -795,9 +886,11 @@ class PlaybackManager {
         this.currentHlsAuthToken = authToken;
 
         const Hls = await loadHls();
+        const adaptive = this.isAdaptivePlaylistUrl(playlistUrl);
 
         if (Hls.isSupported()) {
-            this.hls = this.createHlsInstance(authToken, 60, 120);
+            this.hls = this.createHlsInstance(authToken, 60, 120, adaptive);
+            if (adaptive) this.attachAdaptiveTelemetry(this.hls);
             this.hls.loadSource(playlistUrl);
             this.hls.attachMedia(this.audio);
 
@@ -828,6 +921,15 @@ class PlaybackManager {
         }
         // Fallback for iOS Safari (native HLS support)
         else if (this.audio.canPlayType('application/vnd.apple.mpegurl')) {
+            if (adaptive) {
+                this.recordTelemetry({
+                    adaptiveActiveBitrateKbps: null,
+                    adaptiveBandwidthEstimateKbps: null,
+                    adaptiveLevelCount: 0,
+                    adaptiveSwitchCount: 0,
+                    adaptiveNativePlayback: true,
+                });
+            }
             this.audio.src = playlistUrl;
             // Resolve on metadata, but also reject on a media 'error' — otherwise a
             // failed native-HLS load leaves this promise (and the whole playAtIndex
@@ -853,8 +955,13 @@ class PlaybackManager {
         }
     }
 
-    private createHlsInstance(authToken: string, maxBufferLength: number, maxMaxBufferLength: number): Hls {
-        return new HlsCtor!({
+    private createHlsInstance(
+        authToken: string,
+        maxBufferLength: number,
+        maxMaxBufferLength: number,
+        adaptive: boolean = false,
+    ): Hls {
+        const hls = new HlsCtor!({
             maxBufferLength,
             maxMaxBufferLength,
             backBufferLength: 90,
@@ -865,6 +972,9 @@ class PlaybackManager {
             manifestLoadingRetryDelay: 1000,
             levelLoadingRetryDelay: 1000,
             startFragPrefetch: true,
+            ...(adaptive
+                ? { abrEwmaDefaultEstimate: getAdaptiveInitialBandwidthEstimate(this.networkInformation) }
+                : {}),
             xhrSetup: (xhr: XMLHttpRequest, _url: string) => {
                 // DO NOT call xhr.open() here — hls.js has already opened the request.
                 // Use setRequestHeader to inject the auth token as a Bearer header.
@@ -872,6 +982,39 @@ class PlaybackManager {
                     xhr.setRequestHeader('Authorization', `Bearer ${authToken}`);
                 }
             },
+        });
+        if (adaptive) this.applyDataSaverCap(hls);
+        return hls;
+    }
+
+    private applyDataSaverCap(hls: Hls | null): void {
+        if (!hls || !this.isAdaptivePlaylistUrl(hls.url || this.currentPlaylistUrl || '')) return;
+        applyAdaptiveDataSaverLevelCap(hls, isDataSaverEnabled(this.networkInformation));
+    }
+
+    private attachAdaptiveTelemetry(hls: Hls): void {
+        const Hls = HlsCtor!;
+        hls.on(Hls.Events.MANIFEST_PARSED, () => {
+            if (hls !== this.hls) return;
+            this.applyDataSaverCap(hls);
+            const snapshot = this.adaptiveTelemetryTracker.onManifest(hls);
+            this.recordTelemetry({
+                adaptiveActiveBitrateKbps: snapshot.activeBitrateKbps,
+                adaptiveBandwidthEstimateKbps: snapshot.bandwidthEstimateKbps,
+                adaptiveLevelCount: snapshot.levelCount,
+                adaptiveSwitchCount: snapshot.switchCount,
+                adaptiveNativePlayback: false,
+            });
+        });
+        hls.on(Hls.Events.LEVEL_SWITCHED, (_event, data) => {
+            if (hls !== this.hls) return;
+            const snapshot = this.adaptiveTelemetryTracker.onLevelSwitched(hls, data.level);
+            this.recordTelemetry({
+                adaptiveActiveBitrateKbps: snapshot.activeBitrateKbps,
+                adaptiveBandwidthEstimateKbps: snapshot.bandwidthEstimateKbps,
+                adaptiveLevelCount: snapshot.levelCount,
+                adaptiveSwitchCount: snapshot.switchCount,
+            });
         });
     }
 
@@ -942,6 +1085,12 @@ class PlaybackManager {
 
     private rebuildActiveHls(playlistUrl: string, authToken: string, data: any): void {
         if (!playlistUrl || this.hlsRebuildRetryCount >= this.maxHlsRebuildRetries) {
+            if (playlistUrl && this.isAdaptivePlaylistUrl(playlistUrl) && !this.adaptiveFallbackAttempted) {
+                this.adaptiveFallbackAttempted = true;
+                const fallback = this.buildFixedFallbackUrl(playlistUrl);
+                this.loadFixedFallbackAfterAdaptiveFailure(fallback.url, fallback.quality, authToken, data);
+                return;
+            }
             console.error('[HLS] Unrecoverable fatal error:', data);
             this.destroyHls();
             this.onPlayStateChangeCallback?.('paused');
@@ -957,9 +1106,11 @@ class PlaybackManager {
         console.warn('[HLS] Rebuilding active HLS pipeline after fatal error:', data);
         this.destroyHls();
 
-        const nextHls = this.createHlsInstance(authToken, 60, 120);
+        const adaptive = this.isAdaptivePlaylistUrl(playlistUrl);
+        const nextHls = this.createHlsInstance(authToken, 60, 120, adaptive);
         this.hls = nextHls;
         this.currentHlsAuthToken = authToken;
+        if (adaptive) this.attachAdaptiveTelemetry(nextHls);
         this.attachActiveHlsRecovery(nextHls, playlistUrl, authToken);
         nextHls.once(HlsCtor!.Events.MANIFEST_PARSED, () => {
             if (position > 0) {
@@ -969,6 +1120,32 @@ class PlaybackManager {
         });
         nextHls.loadSource(playlistUrl);
         nextHls.attachMedia(this.audio);
+    }
+
+    private loadFixedFallbackAfterAdaptiveFailure(
+        playlistUrl: string,
+        quality: '64k' | '128k',
+        authToken: string,
+        error: unknown,
+    ): void {
+        const position = this.getCurrentTime();
+        console.warn(`[HLS] Adaptive recovery exhausted; retrying fixed ${quality}:`, error);
+        this.recordAdaptiveFallback(quality, error);
+        this.destroyHls();
+        this.currentPlaylistUrl = playlistUrl;
+        this.hlsNetworkRetryCount = 0;
+        this.hlsMediaRetryCount = 0;
+        this.hlsRebuildRetryCount = 0;
+        const fallbackHls = this.createHlsInstance(authToken, 60, 120, false);
+        this.hls = fallbackHls;
+        this.currentHlsAuthToken = authToken;
+        this.attachActiveHlsRecovery(fallbackHls, playlistUrl, authToken);
+        fallbackHls.once(HlsCtor!.Events.MANIFEST_PARSED, () => {
+            if (position > 0) this.seek(position);
+            void this.safePlay();
+        });
+        fallbackHls.loadSource(playlistUrl);
+        fallbackHls.attachMedia(this.audio);
     }
 
     private clearHlsRecoveryTimer(): void {
@@ -1010,6 +1187,15 @@ class PlaybackManager {
         this.nextAudio = null;
         this.nextHls = null;
         this.nextUrlKey = null;
+
+        if (this.hls && this.currentPlaylistUrl) {
+            this.currentHlsAuthToken = new URL(this.currentPlaylistUrl, window.location.origin).searchParams.get('token') || '';
+            if (this.isAdaptivePlaylistUrl(this.currentPlaylistUrl)) {
+                this.attachAdaptiveTelemetry(this.hls);
+                this.applyDataSaverCap(this.hls);
+            }
+            this.attachActiveHlsRecovery(this.hls, this.currentPlaylistUrl, this.currentHlsAuthToken);
+        }
 
         // The promoted element already owns its loudness chain (wired in
         // prepareNextUrl); re-point the active gain node and re-apply.
@@ -1264,12 +1450,22 @@ class PlaybackManager {
     }
 
     public destroy(): void {
+        this.networkInformation?.removeEventListener('change', this.handleNetworkInformationChange);
+        this.networkInformation = null;
         this.destroyHls();
         this.destroyPreparedAudio();
         this.audio.pause();
         this.audio.src = '';
         audioOutputManager.unregisterElement(this.audio);
+        if (this.bridgeAudio) {
+            this.bridgeAudio.pause();
+            this.bridgeAudio.srcObject = null;
+            audioOutputManager.unregisterElement(this.bridgeAudio);
+            this.bridgeAudio = null;
+        }
+        this.bridgeDestination = null;
         if (this.audioContext) {
+            audioOutputManager.unregisterContext(this.audioContext);
             this.audioContext.close();
             this.audioContext = null;
         }
@@ -1288,6 +1484,25 @@ class PlaybackManager {
         try {
             if (!this.audioContext) {
                 this.audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+                // The loudness graph bypasses element-level sinks, so its exit
+                // must follow the selected output device. Registration applies
+                // any already-active selection.
+                if (audioOutputManager.isContextSinkSupported()) {
+                    audioOutputManager.registerContext(this.audioContext);
+                } else if (audioOutputManager.isElementSinkSupported()) {
+                    // Firefox/Safari: no AudioContext.setSinkId — exit through a
+                    // MediaStream bridge element and route that element's sink.
+                    this.bridgeDestination = this.audioContext.createMediaStreamDestination();
+                    const bridge = new Audio();
+                    bridge.srcObject = this.bridgeDestination.stream;
+                    audioOutputManager.registerBridgeElement(bridge);
+                    this.bridgeAudio = bridge;
+                }
+            }
+            // ensureAudioContext runs on user gestures and before each play —
+            // both valid moments to (re)start the gesture-gated bridge element.
+            if (this.bridgeAudio && this.bridgeAudio.paused) {
+                void this.bridgeAudio.play().catch((e) => console.warn('[Audio] bridge element play failed:', e));
             }
             // Wire (or re-point to) the active element's loudness chain. Idempotent
             // per element; also covers a post-promotion element that was created
@@ -1319,7 +1534,7 @@ class PlaybackManager {
             const gain = ctx.createGain();
             gain.gain.value = dbToLinear(this.currentLoudnessGainDb); // start correct → no click
             source.connect(gain);
-            gain.connect(ctx.destination);
+            gain.connect(this.bridgeDestination ?? ctx.destination);
             this.webAudioNodes.set(element, { source, gain });
             return gain;
         } catch (e) {

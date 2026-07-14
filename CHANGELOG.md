@@ -28,9 +28,14 @@
 ### API
 - **Subsonic Key Rotation**: Added `POST /api/auth/subsonic-api-keys/:id/rotate` to replace a key secret in place and return the new raw key once. `DELETE /api/auth/subsonic-api-keys/:id` now deletes already-revoked key records after the first delete revokes active keys.
 - **OpenSubsonic Service Toggle**: Added the `openSubsonicEnabled` system setting. When disabled from Settings -> System -> Service, `/rest` returns OpenSubsonic error `50` without deleting existing keys.
+- **Genre Canonicalization**: Added admin review, dismiss, transactional group, and restore endpoints for reversible local genre aliases. Active genre lists and OpenSubsonic genre output now aggregate canonical primary and secondary membership.
 
 ### UI
 - **API Keys Tab**: Moved OpenSubsonic key management out of My Account into a dedicated Settings -> API Keys tab with create, rotate, revoke, delete, and disabled-service states.
+- **Library Entities**: Expanded Artist Entities into Artists and Genres sub-tabs. Genre review ranks spelling variants, isolates ambiguous slash tags, previews taxonomy conflicts, supports manual grouping, and restores aliases without changing raw Picard metadata.
+
+### Recommendations
+- **Canonical Genre Identity**: Genre Matrix coverage, hop costs, banned paths, candidate pools, Infinity Mode, Hub genre families, decade-genre mixes, album filters, and Daylist inputs now resolve one canonical genre identity instead of grouping raw tag strings independently.
 
 ## [v1.0.0-rc.3] - 2026-05-19
 

@@ -48,7 +48,7 @@ export const LyricsPanel: React.FC<LyricsPanelProps> = ({ trackName, artistName,
 
       {isLoading && (
         <div className="flex flex-col items-center justify-center py-8 gap-3">
-          <div className="w-6 h-6 border-2 border-[var(--color-primary)]/30 border-t-[var(--color-primary)] rounded-full animate-spin" />
+          <div className="w-6 h-6 border-2 border-primary/30 border-t-[var(--color-primary)] rounded-full animate-spin" />
           <span className="text-xs text-[var(--color-text-muted)]">Searching Genius...</span>
         </div>
       )}

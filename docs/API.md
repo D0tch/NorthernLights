@@ -133,7 +133,7 @@ GET /rest/getCoverArt.view?id=song:track-id&apiKey=aurora_sub_...
 GET /rest/hls.view?id=song:track-id&apiKey=aurora_sub_...
 ```
 
-`stream` and `download` support HTTP Range requests and do not increment play counts. `hls` returns segment URLs with short-lived scoped `mediaToken` values instead of embedding the primary API key. Use `scrobble` to record playback:
+`stream` and `download` support HTTP Range requests and do not increment play counts. `hls` returns segment URLs with short-lived scoped `mediaToken` values instead of embedding the primary API key. `getCoverArt` uses the same normalized embedded/folder resolver as Aurora and falls back to the configured album-art provider through the allowlisted image proxy. Use `scrobble` to record playback:
 
 ```text
 GET /rest/scrobble.view?id=song:track-id&apiKey=aurora_sub_...
@@ -170,19 +170,22 @@ All authenticated requests must include the following header:
 `Authorization: Bearer <your_jwt_token>`
 
 ### [GET] `/api/setup/status`
-Check if the server requires initial setup (first admin creation).
-- **How to use**: Call this upon first launch to determine if you need to redirect to the setup wizard.
+Check whether Aurora needs first-run setup and which step should resume. Existing installations created before resumable onboarding are treated as complete when users already exist.
+- **How to use**: Call this upon launch before choosing between account creation, resumed admin login, or the application shell.
 - **Example Response**:
   ```json
   {
-    "needsSetup": false,
+    "needsSetup": true,
+    "adminCreated": true,
+    "onboardingCompleted": false,
+    "nextStep": "library",
     "dbConnected": true
   }
   ```
 
 ### [POST] `/api/setup/complete`
-Complete initial setup by creating the first admin account.
-- **How to use**: Submit the admin credentials. Only works if `needsSetup` is true.
+Create the first admin account and initialize resumable onboarding.
+- **How to use**: Submit the admin credentials. Only works while no user exists.
 - **Example Request**:
   ```json
   {
@@ -193,10 +196,26 @@ Complete initial setup by creating the first admin account.
 - **Example Response**:
   ```json
   {
-    "status": "completed",
+    "status": "account_created",
+    "nextStep": "analysis",
     "token": "eyJh...",
     "user": { "id": "uuid-v4", "username": "admin", "role": "admin" }
   }
+  ```
+
+### [PUT] `/api/setup/progress`
+Persist the next resumable onboarding step. Requires an authenticated admin JWT.
+- **Example Request**:
+  ```json
+  { "nextStep": "library" }
+  ```
+- Accepted steps are `analysis` and `library`; account creation is derived from whether a user exists.
+
+### [POST] `/api/setup/finalize`
+Mark onboarding complete. Requires an authenticated admin JWT and at least one registered library directory.
+- **Example Response**:
+  ```json
+  { "status": "completed", "onboardingCompleted": true }
   ```
 
 ### [POST] `/api/auth/login`
@@ -913,10 +932,22 @@ Get album details with tracks.
 ### Genres
 
 ### [GET] `/api/genres`
-List all genres.
+List active canonical genres. Each row includes `track_count` across primary and secondary associations and `alias_count`. Grouped alias rows are hidden.
 
 ### [GET] `/api/genres/:id`
-Get genre details with tracks.
+Get canonical genre details with tracks. A grouped alias ID redirects to its canonical genre, and membership includes both primary and secondary tags.
+
+### [GET] `/api/library/genre-duplicates`
+Return the admin genre-hygiene state: scored duplicate candidates, separately quarantined slash-compound tags, and active reversible groups. Scores rank spelling/token similarity and never apply a merge automatically. Admin only.
+
+### [POST] `/api/library/genre-duplicates/dismiss`
+Dismiss a scored or compound candidate by `candidateKey`, `signature`, and `genreIds`. The dismissal remains active until names, mappings, or library counts change the signature. Admin only.
+
+### [POST] `/api/library/genres/merge`
+Group `aliasGenreIds` into `canonicalGenreId` without rewriting `tracks.genre` or `tracks.genres`. The transaction repoints canonical primary/secondary associations and records an audit row. Taxonomy-root conflicts return `409 GENRE_TAXONOMY_CONFLICT` unless `acknowledgeTaxonomyConflict` is true. Admin only.
+
+### [POST] `/api/library/genres/:aliasId/restore`
+Restore a grouped alias and rebuild affected associations from the preserved raw track tags. Admin only.
 
 ---
 
@@ -996,37 +1027,54 @@ Get top artist candidates based on play counts.
 
 ## 🎵 Media & Streaming
 
-### [GET] `/api/media/stream/:trackId/playlist.m3u8`
+### [GET] `/api/stream/:trackId/playlist.m3u8`
 The primary streaming endpoint using **HLS (HTTP Live Streaming)**. Returns an M3U8 master playlist.
-- **Query Params**: `quality` (`source`, `320k`, `160k`, `128k`, `64k`), `codec` (e.g. `aac`, `mp3`, `ac3`), `token` (JWT authorization).
+- **Query Params**: `quality` (`auto`, `source`, `320k`, `160k`, `128k`, `64k`), `codec` (e.g. `aac`, `mp3`, `ac3`), `token` (scoped media/JWT authorization), and optional `maxBitrate=64k` when browser Data Saver caps Auto.
+- **Auto behavior**: `quality=auto` returns an audio-only multi-rendition master with 64/128/160/320 kbps AAC variants. Known lossy sources omit variants above the source bitrate; lossless or unknown sources may expose the full ladder. Every variant URI carries the auth token and `adaptive=1` marker.
+- **Cast behavior**: browser Auto does not change the custom receiver contract. Chromecast requests continue to resolve `auto` and `source` to fixed 128 kbps AAC HLS.
 - **Note**: Requires FFmpeg on the host machine.
 
-### [GET] `/api/media/stream/:trackId/media.m3u8`
+### [GET] `/api/stream/:trackId/media.m3u8`
 HLS media playlist segment mapping index.
-- **Query Params**: `quality`, `codec`, `token`.
+- **Fixed Query Params**: `quality`, `codec`, `token`.
+- **Adaptive Query Params**: `quality=auto`, `codec=aac`, `adaptive=1`, canonical `ladder`, validated `rendition`, and `token`. Adaptive segment URLs preserve all of these fields so the server can resolve the exact track, ladder, codec, and rendition session.
 
-### [POST] `/api/media/stream/:trackId/prewarm`
+### [POST] `/api/stream/:trackId/prewarm`
 Start HLS stream slicing/transcoding in the background before playback begins.
-- **Query Params**: `quality`, `codec`.
+- **Query Params**: `quality`, `codec`, and optional `maxBitrate=64k` for a Data Saver Auto package.
+- **Auto behavior**: prepares the complete adaptive package in one FFmpeg process and returns rendition count details. Conservative prebuffering requests one queued track; aggressive prebuffering may request two tracks, still with one process per Auto track.
 - **Example Response**:
   ```json
-  { "ok": true, "segmentCount": 10, "finished": false }
+  {
+    "ok": true,
+    "trackId": "track-id",
+    "quality": "auto",
+    "codec": "aac",
+    "segmentCount": 2,
+    "finished": false,
+    "renditions": [
+      { "name": "64k", "bitrateKbps": 64, "segmentCount": 2 },
+      { "name": "128k", "bitrateKbps": 128, "segmentCount": 2 }
+    ]
+  }
   ```
 
-### [GET] `/api/media/stream/:trackId/:segment.ts`
+### [GET] `/api/stream/:trackId/:segment.ts`
 Retrieve a specific HLS transport stream segment chunk.
-- **Cache Policy**: Segments are cached indefinitely (`max-age=31536000, immutable`).
+- **Adaptive Query Params**: `adaptive=1`, `ladder`, `rendition`, `quality=auto`, `codec=aac`, and `token`. Rendition names and bare segment filenames are validated; only an exact active session/rendition owner can serve the file.
+- **Cache Policy**: Segments are cached indefinitely (`max-age=31536000, immutable`). In the browser PWA, exact adaptive URLs remain the primary cache key; after an offline fetch failure, Workbox may reuse the cached AAC segment for the same track and segment pathname from another aligned rendition. Fixed-quality requests keep exact-query matching.
 
-### [GET] `/api/media/stream` (Legacy)
+### [GET] `/api/stream` (Legacy)
 Classic HTTP streaming for non-HLS clients or direct downloads.
 - **Query Params**: `pathB64` or `path` (Base64-encoded file path).
 - **Features**: Full HTTP `Range` support. WMA files auto-transcode to MP3.
 
-### [GET] `/api/media/art`
-Retrieve album artwork. Covers are pre-encoded to AVIF during library scans (see [docs/audio_management.md](./audio_management.md) → Album Artwork Pipeline) and served from a content-hash cache.
+### [GET] `/api/art`
+Retrieve album artwork. Local embedded or conventional folder covers are normalized and pre-encoded to AVIF during library scans (see [docs/audio_management.md](./audio_management.md) → Album Artwork Pipeline), then served from a content-hash cache.
 - **Query Params** (two addressing modes):
   - `hash` + `size` — serve the pre-encoded AVIF directly. `size` ∈ `256 | 640 | 1024` (default `640`). Response is `image/avif`, `Cache-Control: immutable`. This is the URL the client uses once a cover is encoded (shared across all tracks of an album).
-  - `pathB64` or `path` — resolve the track's stored art hash and serve the cache file; for tracks not yet processed, falls back to live raw extraction of the embedded picture.
+  - `pathB64` or `path` — resolve the stored local art hash; if necessary, perform live normalized embedded/folder extraction, then use the configured album-art provider. External results return `302` to `/api/providers/external/proxy-image`; no available artwork returns `404`.
+- **Precedence**: local cached art → live embedded art → conventional folder art → cached/configured metadata provider.
 
 ### [POST] `/api/cast/log`
 Write ChromeCast receiver logs to the server.

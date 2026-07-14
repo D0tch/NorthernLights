@@ -1,0 +1,1 @@
+export const ARTWORK_EXTRACTION_VERSION = 1;

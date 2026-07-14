@@ -133,7 +133,7 @@ export const GenAiTab: React.FC = () => {
                             value={llmBaseUrl} 
                             onChange={(e) => handleInputChange({ llmBaseUrl: e.target.value })}
                             placeholder="https://api.openai.com/v1"
-                            className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                            className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
                         />
                     </div>
                     <div>
@@ -143,7 +143,7 @@ export const GenAiTab: React.FC = () => {
                             value={llmApiKey} 
                             onChange={(e) => handleInputChange({ llmApiKey: e.target.value })}
                             placeholder="Leave blank if using local unrestricted provider"
-                            className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                            className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
                         />
                     </div>
                     <div className="relative">
@@ -155,7 +155,7 @@ export const GenAiTab: React.FC = () => {
                             onFocus={() => setShowModelDropdown(true)}
                             onBlur={() => setTimeout(() => setShowModelDropdown(false), 200)}
                             placeholder="gpt-4o / llama-3"
-                            className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-[var(--color-bg)] text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
+                            className="w-full p-3 rounded-xl border border-[var(--glass-border)] bg-background text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] transition-colors"
                         />
                         {availableModels.length > 0 && showModelDropdown && (
                             <ul className="absolute left-0 right-0 z-50 w-full mt-2 max-h-48 overflow-y-auto bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl shadow-xl py-1">
@@ -194,7 +194,7 @@ export const GenAiTab: React.FC = () => {
             </div>
 
             {/* Provider Recommendations */}
-            <div className="p-4 rounded-xl bg-[var(--color-surface)]/50 border border-[var(--glass-border)]">
+            <div className="p-4 rounded-xl bg-surface/50 border border-[var(--glass-border)]">
                 <div className="flex items-start gap-3">
                     <Info className="w-5 h-5 text-[var(--color-text-muted)] flex-shrink-0 mt-0.5" />
                     <div className="text-xs text-[var(--color-text-muted)] space-y-2">

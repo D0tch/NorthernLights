@@ -13,7 +13,7 @@ Audio files are sliced into 10-second HLS chunks on-the-fly by FFmpeg on the bac
 
 ### Backend: On-the-Fly HLS Generation
 
-**Service**: `server/services/hlsStream.service.ts`
+**Services**: `server/services/hlsStream.service.ts` (fixed presets) and `server/services/adaptiveHlsStream.service.ts` (Auto)
 **Route**: `server/routes/media.routes.ts`
 
 ```
@@ -30,23 +30,38 @@ Client Request → /api/stream/:trackId/playlist.m3u8?quality=128k
           Serves playlist.m3u8 once first segment is ready
 ```
 
+For `quality=auto`, the master playlist is source-aware and contains an AAC ladder selected from 64/128/160/320 kbps. Known lossy sources are capped at their stored source bitrate. Lossless sources and sources without reliable bitrate metadata may use the full 320 kbps ceiling. Browser Data Saver requests `maxBitrate=64k`, producing a one-rendition Auto master.
+
+Adaptive media packaging decodes the input once. One FFmpeg process uses `asplit` plus `var_stream_map` to encode every rendition and write aligned 10-second MPEG-TS playlists under one session directory:
+
+```text
+os.tmpdir()/nl-adaptive-hls-streams/<session-hash>/
+  64k/playlist.m3u8 + segmentNNN.ts
+  128k/playlist.m3u8 + segmentNNN.ts
+  160k/playlist.m3u8 + segmentNNN.ts
+  320k/playlist.m3u8 + segmentNNN.ts
+```
+
+The service does not mark the package ready until every rendition playlist has at least two segments (or a complete one-segment short track). Sessions deduplicate by exact track, ladder, and codec. A failed zero-segment process is discarded so the next request can create a fresh session.
+
 ### The Source Rule (Remux vs Transcode)
 
 The backend evaluates the requested quality against the source file's bitrate (stored in the `tracks.bitrate` column during library scan):
 
 | Condition | Action | FFmpeg Flag |
 |-----------|--------|-------------|
-| `quality === 'source'` | **Remux** — change container only | `-c:a copy` |
-| `requestedBitrate >= sourceBitrate` | **Remux** — no upsampling | `-c:a copy` |
-| `requestedBitrate < sourceBitrate` | **Transcode** to AAC | `-c:a aac -b:a <quality>` |
+| Browser `source`, natively playable codec | Stream original bytes with Range support | HLS bypassed |
+| HLS `source`, TS-compatible codec matches target | **Remux**, change container only | `-c:a copy` |
+| Fixed preset at/above source bitrate, codec matches target | **Remux**, no upsampling | `-c:a copy` |
+| Incompatible codec/container or lower fixed preset | **Transcode** to AAC | `-c:a aac -b:a <quality>` |
 
-Remuxing uses zero CPU and preserves original quality.
+Remuxing uses negligible CPU and preserves original quality. `source` never becomes a literal FFmpeg bitrate; incompatible HLS sources use a real bounded transcode bitrate instead.
 
 ### Quality Tiers
 
 | Setting | Bitrate | Description |
 |---------|---------|-------------|
-| `auto` | 128 kbps | Default — always uses Normal quality |
+| `auto` | Adaptive 64–320 kbps AAC | Browser hls.js/native HLS selects from a source-aware ladder |
 | `64k` | 64 kbps | Low quality, saves bandwidth |
 | `128k` | 128 kbps | Normal — good balance |
 | `160k` | 160 kbps | High quality |
@@ -55,13 +70,17 @@ Remuxing uses zero CPU and preserves original quality.
 
 Quality is persisted in the Zustand store (`streamingQuality`) and applied when building track URLs.
 
+`auto` is preserved in hydrated library, playlist, continuity, prepared-track, and runtime playback URLs. Chromecast has a separate resolver: both `auto` and `source` become fixed 128 kbps AAC for the current custom receiver path.
+
 ### Session Lifecycle
 
-- Sessions are keyed by `trackId::quality`
+- Fixed sessions are keyed by `trackId::quality::codec`
+- Adaptive sessions are keyed by `trackId::ladder::codec`
 - Reused if an identical session exists (no duplicate FFmpeg processes)
 - Auto-reaped after 30 minutes of inactivity
 - All sessions cleaned up on server shutdown (SIGINT/SIGTERM)
 - Output directory: `os.tmpdir()/nl-hls-streams/`
+- Adaptive output directory: `os.tmpdir()/nl-adaptive-hls-streams/`
 
 ### FFmpeg Command
 
@@ -74,15 +93,51 @@ ffmpeg -i <input> -vn -map 0:a:0 \
   -f hls <dir>/playlist.m3u8
 ```
 
+Adaptive Auto uses one input and one process:
+
+```bash
+ffmpeg -i <input> -vn \
+  -filter_complex '[0:a:0]asplit=4[a0][a1][a2][a3]' \
+  -map '[a0]' -c:a:0 aac -b:a:0 64k -profile:a:0 aac_low \
+  -map '[a1]' -c:a:1 aac -b:a:1 128k -profile:a:1 aac_low \
+  -map '[a2]' -c:a:2 aac -b:a:2 160k -profile:a:2 aac_low \
+  -map '[a3]' -c:a:3 aac -b:a:3 320k -profile:a:3 aac_low \
+  -hls_time 10 -hls_list_size 0 -hls_playlist_type event \
+  -hls_segment_filename '%v/segment%03d.ts' \
+  -var_stream_map 'a:0,name:64k a:1,name:128k a:2,name:160k a:3,name:320k' \
+  -f hls '%v/playlist.m3u8'
+```
+
 ### Frontend: hls.js Integration
 
 **File**: `src/utils/PlaybackManager.ts`
 
 - `playUrl()` detects `.m3u8` URLs and routes to `playHls()`
 - `playHls()` creates an `Hls` instance with `maxBufferLength: 60` (buffers 60s ahead)
+- Auto seeds hls.js's ABR estimator from Network Information `downlink` when available; otherwise hls.js keeps Aurora's explicit 500 kbps cold-start estimate.
+- hls.js remains in normal automatic level selection. `MANIFEST_PARSED` and `LEVEL_SWITCHED` update active bitrate, estimated bandwidth, rendition count, and switch count in in-memory playback telemetry. Fragment samples do not write to Zustand.
+- A live Data Saver change caps `autoLevelCapping` at the 64 kbps level immediately. Native Safari HLS has no level-selection API, so it receives the capped master on the next load and reports `Auto` without an observable active rendition.
 - Waits for `MANIFEST_PARSED` event before calling `safePlay()`
 - iOS Safari fallback: uses native `<audio>` element with HLS src directly
 - `safePlay()` handles `NotAllowedError` (autoplay blocked) gracefully
+- If adaptive packaging or playback exhausts recovery, Aurora retries once at fixed 64 kbps with Data Saver or fixed 128 kbps otherwise, recording `fixed-quality-after-adaptive-failure`.
+
+### Prewarm and prepared-track behavior
+
+`POST /api/stream/:trackId/prewarm?quality=auto` prepares all renditions in one FFmpeg process. Conservative policy prepares the immediate next track. Aggressive policy may prewarm the next two server packages while retaining one local prepared `HTMLAudioElement` for promotion. Each Auto track still consumes one FFmpeg process, not one process per rendition. Offline, Data Saver, and 2G safeguards remain in the frontend prewarm manager; Data Saver playback itself still requests the 64 kbps Auto master.
+
+### Packaging benchmark (2026-07-14)
+
+Measured with reproducible 60-second 44.1 kHz pink-noise fixtures, one FLAC and one 160 kbps MP3, on the development host. Readiness is Aurora's two-segment threshold. Peak RSS and CPU/storage are full-process measurements, so they describe packaging cost rather than steady playback memory.
+
+| Input / package | Renditions | Ready | Wall | User CPU | Peak RSS | Temp storage |
+|---|---:|---:|---:|---:|---:|---:|
+| FLAC, fixed 128 kbps | 1 | 268 ms | 0.32 s | 0.34 s | 70,612 KB | 1,040 KB |
+| FLAC, Auto 64/128/160/320 | 4 | 503 ms | 1.30 s | 2.22 s | 72,384 KB | 4,468 KB |
+| MP3 160 kbps, fixed 128 kbps | 1 | 271 ms | 0.33 s | 0.36 s | 69,532 KB | 1,040 KB |
+| MP3 160 kbps, Auto 64/128/160 | 3 | 203 ms | 0.37 s | 0.95 s | 70,896 KB | 2,856 KB |
+
+All generated rendition playlists had identical segment names and duration boundaries. Process inspection and FFmpeg arguments confirmed one FFmpeg process per Auto track. Adaptive and fixed temp sessions retain the same 30-minute inactivity cleanup contract.
 
 ### Client-Side Caching (Service Worker)
 
@@ -95,6 +150,8 @@ Configured via Workbox in `vite.config.ts`:
 | `/api/art` | CacheFirst | `media-cache` | 30 days, 500 entries |
 
 Segments are immutable (cache-forever safe). Playlists use NetworkFirst so they're always fresh, with cache fallback for offline.
+
+Adaptive Auto requests have an additional failure-only cache fallback. hls.js may choose a different rendition when a cached track is replayed offline, even though only the rendition used during the original playback exists in Cache Storage. Workbox still prefers an exact URL while online, but if that request fails it may reuse a cached playlist or time-aligned segment with the same track/path and different adaptive query parameters. This preserves live ABR behavior, makes already-cached Auto playback rendition-agnostic offline, and leaves fixed-quality and Source cache matching unchanged. Existing `nl-audio-*` cache names are retained so entries created before this behavior remain usable.
 
 ### Album Artwork
 
@@ -196,17 +253,19 @@ An asymmetric penalty applied in SQL: if the playlist targets EDM (acousticness 
 
 ## Album Artwork Pipeline
 
-Embedded covers are encoded once, at ingestion time, instead of being extracted and resized on every request. This removes a per-request audio-file parse and, more importantly, caps decoded-bitmap memory in the browser (a full-resolution embedded cover can be 1000–3000px; a grid of them decoded at full size used to consume hundreds of MB and could OOM mobile tabs).
+Local covers are encoded once, at ingestion time, instead of being extracted and resized on every request. This removes a per-request audio-file parse and, more importantly, caps decoded-bitmap memory in the browser (a full-resolution cover can be 1000–3000px; a grid of them decoded at full size used to consume hundreds of MB and could OOM mobile tabs).
 
-**Encoding (scan time).** During the Metadata Phase, the `scanTrack` worker reads the embedded picture, hashes its bytes (SHA-256, first 32 hex chars), and encodes AVIF variants at **256 / 640 / 1024 px** via `sharp` (`quality 62`, `effort 4`). Files are written to `ART_CACHE_DIR` (default `./art-cache`), sharded by hash prefix: `art-cache/<ab>/<hash>_<size>.avif`. Encoding is keyed by content hash and skips any variant already on disk, so an album's tracks that share identical art produce **one** file set.
+**Resolution and encoding (scan time).** During the Metadata Phase, the `scanTrack` worker validates every embedded picture with `sharp`. It prefers front-cover images, then square/high-resolution candidates. ASF/WMA recovery removes bytes before a recognized image header and reconstructs JPEG streams whose SOI/JFIF prefix was lost, accepting a repair only when `sharp` can decode it. If no embedded candidate is valid, Aurora checks the track directory in this order: `cover`, `folder`, `front`, `AlbumArt*_Large`, then `AlbumArt*_Small`/`AlbumArtSmall` (JPEG, PNG, WebP, or AVIF). Unrelated images are ignored.
 
-**Change detection.** `tracks.file_mtime` is recorded per file. A scan reprocesses a file when it is new **or** its mtime changed (a re-tag), so replaced covers are re-encoded; the displaced hash is removed if no other track still references it. Files predating this feature have a null mtime and are treated as unchanged — run **Settings → Library → Refresh Metadata** once to backfill their art (Refresh Metadata re-reads every file in a folder through the same encoding path).
+The chosen local image is hashed (SHA-256, first 32 hex chars) and encoded to AVIF variants at **256 / 640 / 1024 px** via `sharp` (`quality 62`, `effort 4`). Files are written to `ART_CACHE_DIR` (default `./art-cache`), sharded by hash prefix: `art-cache/<ab>/<hash>_<size>.avif`. Encoding is keyed by content hash and skips any variant already on disk, so an album's tracks that share identical art produce **one** file set.
 
-**Serving.** `tracks.art_hash` stores the result (`NULL` = not yet processed, `''` = no embedded art, otherwise the hash). `GET /api/art` serves:
+**Change detection and parser upgrades.** `tracks.file_mtime` is recorded per file. A scan reprocesses a file when it is new **or** its mtime changed (a re-tag), so replaced embedded covers are re-encoded; the displaced hash is removed if no other track still references it. `tracks.artwork_version` records which resolver processed the file. When recovery logic changes, only stale rows are queued for a one-time automatic metadata pass. The WMA recovery upgrade specifically leaves previously artless `ASF/audio` rows stale, while successful and non-WMA rows are seeded current. A completed attempt is stamped current even when no local art exists, preventing repeated work on genuinely artless files. Use **Settings → Library → Refresh Metadata** to force a complete folder re-read or pick up a newly-added folder image when the audio file mtime did not change.
+
+**Serving.** `tracks.art_hash` stores the local result (`NULL` = not yet processed, `''` = no local art, otherwise the hash). `GET /api/art` serves:
 - `?hash=<hash>&size=<256|640|1024>` → streams the pre-encoded AVIF directly, `Cache-Control: immutable`.
-- `?pathB64=<path>` → resolves the track's `art_hash` and serves the cache file; for un-processed tracks (`NULL`) it falls back to live raw extraction so art still appears before a backfill.
+- `?pathB64=<path>` → serves cached local art, performs live normalized embedded/folder resolution when the row is stale or the cache was cleared, then consults the configured album-art provider and redirects through the allowlisted external-image proxy. If every source fails it returns `404`.
 
-The client requests a hash URL when `art_hash` is known (see `buildTrackUrls`) and appends `&size=` per context via `AlbumArt` (grids 256, detail hero 640, now-playing up to 1024).
+The client requests a hash URL when `art_hash` is known (see `buildTrackUrls`) and appends `&size=` per context via `AlbumArt` (grids 256, detail hero 640, now-playing up to 1024). Artless tracks retain the path-addressed URL, so the same provider result reaches album views, player controls, queues, Media Session, Cast, and OpenSubsonic `getCoverArt` instead of being implemented separately in each UI component. Local artwork always wins.
 
 **Operational notes.** `ART_CACHE_DIR` is a derived cache — safe to delete; it rebuilds on the next scan or Refresh Metadata, so it does not need to be backed up. `sharp` is a runtime dependency (native module); `npm ci` installs the prebuilt binary on Linux automatically.
 
@@ -220,3 +279,4 @@ The client requests a hash URL when `art_hash` is known (see `buildTrackUrls`) a
 - **Transcoding**: WMA files are transcoded to AAC on-the-fly via the HLS pipeline (same as other formats when quality < source bitrate)
 - **Legacy fallback**: Direct WMA → MP3 pipe streaming is preserved in the `/api/stream` legacy endpoint
 - **Format Detection**: File extension-based MIME type mapping in `MIME_TYPES` record
+- **Artwork recovery**: Malformed `WM/Picture` offsets, missing JPEG SOI/JFIF prefixes, multiple embedded pictures, and conventional Windows Media folder artwork are normalized through the shared album-art resolver

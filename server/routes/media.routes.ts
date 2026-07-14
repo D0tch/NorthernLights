@@ -4,9 +4,10 @@ import path from 'path';
 import { spawn } from 'child_process';
 import * as mm from 'music-metadata';
 import { isPathAllowed, pathToBuffer } from '../state';
-import { initDB, getArtHashForPath, getTrackLoudnessByIds, getAlbumLoudness } from '../database';
+import { initDB, getArtworkInfoForPath, getTrackLoudnessByIds, getAlbumLoudness } from '../database';
 import { maybeMeasureLoudnessForUser } from '../services/loudness.service';
-import { artCachePath, isValidArtSize, DEFAULT_ART_SIZE, findImageStart, type ArtSize } from '../services/artCache';
+import { artCachePath, isValidArtSize, DEFAULT_ART_SIZE, resolveArtwork, ARTWORK_EXTRACTION_VERSION, type ArtSize } from '../services/artCache';
+import { providerArtworkProxyPath, resolveProviderArtworkUrl } from '../services/artworkFallback.service';
 import {
   getOrCreateHlsSession,
   getSessionInfo,
@@ -14,6 +15,19 @@ import {
   getSessionOutputDir,
   getActiveSessionVariants,
 } from '../services/hlsStream.service';
+import {
+  buildAdaptiveLadder,
+  buildAdaptiveMasterPlaylist,
+  getAdaptiveSegmentPath,
+  getOrCreateAdaptiveHlsSession,
+  parseAdaptiveLadder,
+  parseAdaptiveMaxBitrate,
+  rewriteAdaptiveMediaPlaylistSegments,
+  serializeAdaptiveLadder,
+  touchAdaptiveHlsSession,
+  type AdaptiveRendition,
+  type AdaptiveRenditionName,
+} from '../services/adaptiveHlsStream.service';
 import { writeCastReceiverLog, writeHlsServerLog, writeHlsSessionLog } from '../services/debugLogger.service';
 import { logHls, logFfmpeg } from '../services/loggingConfig';
 import { createRateLimiter } from '../middleware/rateLimit';
@@ -206,15 +220,17 @@ async function resolveTrackForHls(trackId: string, userId?: string): Promise<{
   fileBuf: Buffer;
   bitrate: number | null;
   sourceFormat: string | null;
+  sourceLossless: boolean | null;
 }> {
   let fileBuf: Buffer;
   let bitrate: number | null = null;
   let sourceFormat: string | null = null;
+  let sourceLossless: boolean | null = null;
   let resolvedId: string | null = null;
 
   if (UUID_REGEX.test(trackId)) {
     const db = await initDB();
-    const result = await db.query('SELECT path, bitrate, format FROM tracks WHERE id = $1', [trackId]);
+    const result = await db.query('SELECT path, bitrate, format, lossless FROM tracks WHERE id = $1', [trackId]);
     if (result.rows.length === 0) {
       const err = new Error('Track not found') as Error & { status?: number };
       err.status = 404;
@@ -223,6 +239,7 @@ async function resolveTrackForHls(trackId: string, userId?: string): Promise<{
     fileBuf = pathToBuffer(result.rows[0].path);
     bitrate = result.rows[0].bitrate;
     sourceFormat = result.rows[0].format;
+    sourceLossless = typeof result.rows[0].lossless === 'boolean' ? result.rows[0].lossless : null;
     resolvedId = trackId;
   } else {
     const dbPath = Buffer.from(decodeURIComponent(trackId), 'base64').toString();
@@ -230,11 +247,12 @@ async function resolveTrackForHls(trackId: string, userId?: string): Promise<{
 
     try {
       const db = await initDB();
-      const result = await db.query('SELECT id, bitrate, format FROM tracks WHERE path = $1', [dbPath]);
+      const result = await db.query('SELECT id, bitrate, format, lossless FROM tracks WHERE path = $1', [dbPath]);
       if (result.rows.length > 0) {
         resolvedId = result.rows[0].id;
         bitrate = result.rows[0].bitrate;
         sourceFormat = result.rows[0].format;
+        sourceLossless = typeof result.rows[0].lossless === 'boolean' ? result.rows[0].lossless : null;
       }
     } catch { /* non-critical */ }
   }
@@ -253,7 +271,7 @@ async function resolveTrackForHls(trackId: string, userId?: string): Promise<{
     void maybeMeasureLoudnessForUser(userId, resolvedId, fileBuf.toString('utf8'));
   }
 
-  return { fileBuf, bitrate, sourceFormat };
+  return { fileBuf, bitrate, sourceFormat, sourceLossless };
 }
 
 function normalizeTargetCodec(codec: string, quality: string): string {
@@ -272,6 +290,30 @@ async function ensureHlsSessionForRequest(trackId: string, quality: string, targ
     codec,
     sessionInfo: getSessionInfo(trackId, quality, codec),
   };
+}
+
+function isAllowedAdaptiveLadder(requested: AdaptiveRendition[], full: AdaptiveRendition[]): boolean {
+  if (requested.length === 0 || requested.length > full.length) return false;
+  return requested.every((rendition, index) => rendition.name === full[index]?.name);
+}
+
+async function ensureAdaptiveHlsSessionForRequest(
+  trackId: string,
+  requestedLadder: AdaptiveRendition[] | null,
+  maxBitrateKbps: number | null,
+  userId?: string,
+) {
+  const track = await resolveTrackForHls(trackId, userId);
+  const fullLadder = buildAdaptiveLadder(track.bitrate, track.sourceFormat, track.sourceLossless);
+  const ladder = requestedLadder
+    ?? buildAdaptiveLadder(track.bitrate, track.sourceFormat, track.sourceLossless, maxBitrateKbps);
+  if (!isAllowedAdaptiveLadder(ladder, fullLadder)) {
+    const error = new Error('Invalid adaptive rendition ladder') as Error & { status?: number };
+    error.status = 400;
+    throw error;
+  }
+  const sessionInfo = await getOrCreateAdaptiveHlsSession(trackId, track.fileBuf, ladder, 'aac');
+  return { ladder, sessionInfo };
 }
 
 function sanitizeCastLogValue(value: string): string {
@@ -348,12 +390,22 @@ router.all('/stream/:trackId/playlist.m3u8', async (req, res) => {
 
   try {
     const token = req.query.token as string | undefined;
-    const { bitrate } = await resolveTrackForHls(trackId, (req as any).user?.userId);
-    const output = buildMasterPlaylist(trackId, quality, targetCodec, token, bitrate);
+    const { bitrate, sourceFormat, sourceLossless } = await resolveTrackForHls(trackId, (req as any).user?.userId);
+    let output: string;
+    if (quality === 'auto') {
+      targetCodec = 'aac';
+      const maxBitrateKbps = parseAdaptiveMaxBitrate(req.query.maxBitrate);
+      const ladder = buildAdaptiveLadder(bitrate, sourceFormat, sourceLossless, maxBitrateKbps);
+      output = buildAdaptiveMasterPlaylist(ladder, targetCodec, token);
+      writeHlsServerLog(`[playlist ${trackId} auto ${targetCodec}] Served adaptive master ladder=${serializeAdaptiveLadder(ladder)}`);
+      writeHlsSessionLog(trackId, `auto-${serializeAdaptiveLadder(ladder)}`, targetCodec, `Served adaptive master playlist: ${output.split(/\r?\n/).join('\\n')}`);
+    } else {
+      output = buildMasterPlaylist(trackId, quality, targetCodec, token, bitrate);
+      writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Served master playlist`);
+      writeHlsSessionLog(trackId, quality, targetCodec, `Served master playlist: ${output.split(/\r?\n/).join('\\n')}`);
+    }
     res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache');
-    writeHlsServerLog(`[playlist ${trackId} ${quality} ${targetCodec}] Served master playlist`);
-    writeHlsSessionLog(trackId, quality, targetCodec, `Served master playlist: ${output.split(/\r?\n/).join('\\n')}`);
     res.send(output);
   } catch (err: any) {
     console.error('[HLS] Playlist error:', err?.message || err);
@@ -379,6 +431,45 @@ router.all('/stream/:trackId/media.m3u8', async (req, res) => {
   let targetCodec = (req.query.codec as string) || 'aac';
 
   try {
+    if (req.query.adaptive === '1') {
+      targetCodec = 'aac';
+      const ladder = parseAdaptiveLadder(String(req.query.ladder || ''));
+      const rendition = String(req.query.rendition || '') as AdaptiveRenditionName;
+      if (!ladder || !ladder.some((item) => item.name === rendition)) {
+        return res.status(400).send('Invalid adaptive rendition request');
+      }
+      const ensured = await ensureAdaptiveHlsSessionForRequest(
+        trackId,
+        ladder,
+        null,
+        (req as any).user?.userId,
+      );
+      const renditionInfo = ensured.sessionInfo.renditions.find((item) => item.name === rendition);
+      if (!renditionInfo || !fs.existsSync(renditionInfo.playlistPath)) {
+        writeHlsServerLog(`[adaptive-media ${trackId} ${ensured.sessionInfo.ladderKey} ${rendition}] Playlist missing`);
+        return res.status(500).send('Adaptive HLS media playlist generation failed');
+      }
+
+      const token = req.query.token as string | undefined;
+      const playlist = fs.readFileSync(renditionInfo.playlistPath, 'utf8');
+      const output = rewriteAdaptiveMediaPlaylistSegments(playlist, ensured.ladder, rendition, targetCodec, token);
+      const validation = validateHlsPlaylist(output);
+      if (!validation.valid) {
+        writeHlsServerLog(`[adaptive-media ${trackId} ${ensured.sessionInfo.ladderKey} ${rendition}] Invalid playlist: ${validation.error}`);
+        return res.status(500).send(`Invalid HLS playlist: ${validation.error}`);
+      }
+
+      res.setHeader('Content-Type', 'application/vnd.apple.mpegurl; charset=utf-8');
+      res.setHeader('Cache-Control', ensured.sessionInfo.finished ? 'public, max-age=30' : 'no-cache');
+      touchAdaptiveHlsSession(trackId, ensured.ladder, targetCodec);
+      writeHlsServerLog(`[adaptive-media ${trackId} ${ensured.sessionInfo.ladderKey} ${rendition}] Served ${renditionInfo.segmentCount} segments`);
+      return res.send(output);
+    }
+
+    if (quality === 'auto') {
+      return res.status(400).send('Adaptive HLS rendition marker is required');
+    }
+
     const ensured = await ensureHlsSessionForRequest(trackId, quality, targetCodec, (req as any).user?.userId);
     targetCodec = ensured.codec;
     const sessionInfo = ensured.sessionInfo;
@@ -435,6 +526,38 @@ router.all('/stream/:trackId/prewarm', async (req, res) => {
   let targetCodec = (req.query.codec as string) || 'aac';
 
   try {
+    if (quality === 'auto') {
+      targetCodec = 'aac';
+      const maxBitrateKbps = parseAdaptiveMaxBitrate(req.query.maxBitrate);
+      const ensured = await ensureAdaptiveHlsSessionForRequest(
+        trackId,
+        null,
+        maxBitrateKbps,
+        (req as any).user?.userId,
+      );
+      const renditions = ensured.sessionInfo.renditions.map((rendition) => ({
+        name: rendition.name,
+        bitrateKbps: rendition.bitrateKbps,
+        segmentCount: rendition.segmentCount,
+      }));
+      const segmentCount = renditions.length > 0
+        ? Math.min(...renditions.map((rendition) => rendition.segmentCount))
+        : 0;
+      touchAdaptiveHlsSession(trackId, ensured.ladder, targetCodec);
+      writeHlsServerLog(`[prewarm ${trackId} auto ${targetCodec}] Adaptive ladder=${ensured.sessionInfo.ladderKey}; renditions=${renditions.length}; minSegments=${segmentCount}`);
+
+      if (req.method === 'HEAD') return res.sendStatus(204);
+      return res.json({
+        ok: true,
+        trackId,
+        quality,
+        codec: targetCodec,
+        segmentCount,
+        finished: ensured.sessionInfo.finished,
+        renditions,
+      });
+    }
+
     const ensured = await ensureHlsSessionForRequest(trackId, quality, targetCodec, (req as any).user?.userId);
     targetCodec = ensured.codec;
     const sessionInfo = ensured.sessionInfo;
@@ -485,15 +608,35 @@ router.all('/stream/:trackId/:segment', async (req, res) => {
   const quality = (req.query.quality as string) || '128k';
   const codec = (req.query.codec as string) || 'aac';
 
-  logHls(`[HLS DEBUG] Segment request: trackId=${trackId} segment=${segment} quality=${quality} codec=${codec}`);
-  writeHlsSessionLog(trackId, quality, codec, `Segment request for ${segment}`);
-
-  // Only serve .ts segment files. Restrict to a bare filename (no path
-  // separators or "..") so a crafted segment can't traverse out of the
-  // session's output directory and read arbitrary .ts files on disk.
+  // Restrict both fixed and adaptive requests to one bare transport-stream
+  // filename so no request can escape its exact session/rendition directory.
   if (!/^[\w.-]+\.ts$/.test(segment) || segment.includes('..')) {
     return res.status(400).send('Invalid segment request');
   }
+
+  if (req.query.adaptive === '1') {
+    const ladder = parseAdaptiveLadder(String(req.query.ladder || ''));
+    const rendition = String(req.query.rendition || '');
+    if (!ladder || !ladder.some((item) => item.name === rendition) || codec !== 'aac') {
+      return res.status(400).send('Invalid adaptive segment request');
+    }
+    const segmentPath = getAdaptiveSegmentPath(trackId, ladder, codec, rendition, segment);
+    if (!segmentPath) {
+      return res.status(404).send('No exact adaptive HLS session for this segment');
+    }
+    if (!fs.existsSync(segmentPath)) {
+      return res.status(404).send('Adaptive segment not found');
+    }
+    const stat = fs.statSync(segmentPath);
+    touchAdaptiveHlsSession(trackId, ladder, codec);
+    writeHlsSessionLog(trackId, `auto-${serializeAdaptiveLadder(ladder)}`, codec, `Serving ${rendition}/${segment} (${stat.size} bytes)`);
+    res.setHeader('Content-Type', 'video/mp2t');
+    res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    return fs.createReadStream(segmentPath).pipe(res);
+  }
+
+  logHls(`[HLS DEBUG] Segment request: trackId=${trackId} segment=${segment} quality=${quality} codec=${codec}`);
+  writeHlsSessionLog(trackId, quality, codec, `Segment request for ${segment}`);
 
   const outputDir = getSessionOutputDir(trackId, quality, codec);
 
@@ -678,15 +821,11 @@ router.get('/art', async (req, res) => {
   if (!b64Path && !rawPath) return res.status(404).send('Not found');
   const dbPathStr = b64Path ? decodeURIComponent(b64Path) : rawPath;
 
-  // ── Path-addressed: resolve the stored art hash ──
-  // hash → serve cache file; '' → processed, no embedded art; null → not yet
-  // processed (pre-backfill) → live extraction below.
-  const artHash = await getArtHashForPath(dbPathStr).catch(() => null);
-  if (artHash) {
-    if (streamArtFile(res, artCachePath(artHash, size))) return;
+  // ── Path-addressed: resolve the stored local art and album fallback ──
+  const artworkInfo = await getArtworkInfoForPath(dbPathStr).catch(() => null);
+  if (artworkInfo?.artHash) {
+    if (streamArtFile(res, artCachePath(artworkInfo.artHash, size))) return;
     // Cache file vanished (cache dir cleared) → fall through to live extraction.
-  } else if (artHash === '') {
-    return res.status(404).send('No art found');
   }
 
   // ── Live raw extraction fallback ──
@@ -702,34 +841,38 @@ router.get('/art', async (req, res) => {
 
   try {
     const utf8Path = fileBuf.toString('utf8');
-    const metadata = await mm.parseFile(utf8Path);
-    const picture = metadata.common.picture?.[0];
+    const shouldParseEmbedded = !artworkInfo ||
+      artworkInfo.artHash === null ||
+      artworkInfo.artworkVersion < ARTWORK_EXTRACTION_VERSION ||
+      !!artworkInfo.artHash;
+    const pictures = shouldParseEmbedded
+      ? (await mm.parseFile(utf8Path, { duration: false })).common.picture
+      : undefined;
+    const artwork = await resolveArtwork(pictures, utf8Path);
 
-    if (picture) {
-      // Sanitize Content-Type: WMA files can embed malformed format strings
-      // containing non-ASCII/control characters that crash Node's setHeader.
-      const validMime = /^[\x20-\x7E]+$/.test(picture.format) ? picture.format : 'image/jpeg';
-
-      // music-metadata 11.x mis-parses WM/Picture in ASF when the description
-      // is non-empty: picture.data starts a few bytes inside the description
-      // string instead of at the image header. Re-align to the first known
-      // image signature when present.
-      let data: Uint8Array = picture.data;
-      const start = findImageStart(data);
-      if (start > 0) {
-        data = data.subarray(start);
-      }
-
-      res.setHeader('Content-Type', validMime);
+    if (artwork) {
+      res.setHeader('Content-Type', artwork.format);
       res.setHeader('Cache-Control', 'public, max-age=86400');
-      res.send(Buffer.from(data.buffer, data.byteOffset, data.byteLength));
-    } else {
-      res.status(404).send('No art found');
+      return res.send(artwork.data);
     }
   } catch (err: any) {
     console.error('[Art] Error reading embedded art:', err?.message || err);
-    res.status(500).send('Error reading metadata');
   }
+
+  const providerUrl = artworkInfo
+    ? await resolveProviderArtworkUrl({
+        albumId: artworkInfo.albumId,
+        album: artworkInfo.album,
+        artist: artworkInfo.artist,
+        mbAlbumId: artworkInfo.mbAlbumId,
+        cachedImageUrl: artworkInfo.cachedImageUrl,
+      }).catch((err) => {
+        console.warn('[Art] Provider fallback failed:', err?.message || err);
+        return undefined;
+      })
+    : undefined;
+  if (providerUrl) return res.redirect(302, providerArtworkProxyPath(providerUrl));
+  return res.status(404).send('No art found');
 });
 
 export default router;

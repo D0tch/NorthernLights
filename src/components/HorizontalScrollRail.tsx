@@ -59,7 +59,7 @@ export const HorizontalScrollRail: React.FC<HorizontalScrollRailProps> = ({
   };
 
   const buttonClass =
-    'hidden md:flex absolute top-1/2 z-20 h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] text-[var(--color-text-primary)] shadow-md backdrop-blur-xl transition-ui hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/40';
+    'hidden md:flex absolute top-1/2 z-20 h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-[var(--glass-border)] bg-[var(--glass-bg)] text-[var(--color-text-primary)] shadow-md backdrop-blur-xl transition-ui hover:bg-[var(--glass-bg-hover)] hover:text-[var(--color-primary)] focus:outline-none focus:ring-2 focus:ring-primary/40';
 
   return (
     <div className={`relative ${className}`}>

@@ -158,7 +158,7 @@ export const QueryBuilderModal: React.FC<QueryBuilderModalProps> = ({
                   <div className="flex-1 h-px bg-[var(--glass-border)]" />
                 </div>
               )}
-              <div className="rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface-variant)]/30 p-3 space-y-2">
+              <div className="rounded-xl border border-[var(--glass-border)] bg-surface-variant/30 p-3 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-[var(--color-text-muted)] uppercase tracking-wider">
                     Group {gIdx + 1}
@@ -240,7 +240,7 @@ const ConditionRow: React.FC<{
       <select
         value={condition.metadataType}
         onChange={e => onChange({ metadataType: e.target.value })}
-        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)] text-sm text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+        className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)] text-sm text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] focus-visible:ring-2 focus-visible:ring-primary/40"
         aria-label="Metadata type"
       >
         <option value="">Select field</option>
@@ -252,7 +252,7 @@ const ConditionRow: React.FC<{
         value={condition.operator}
         onChange={e => onChange({ operator: e.target.value })}
         disabled={!condition.metadataType}
-        className="w-28 px-2.5 py-1.5 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)] text-sm text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+        className="w-28 px-2.5 py-1.5 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)] text-sm text-[var(--color-text-primary)] focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-primary/40"
         aria-label="Operator"
       >
         <option value="">Operator</option>
@@ -267,7 +267,7 @@ const ConditionRow: React.FC<{
           onChange={e => onChange({ value: e.target.value })}
           disabled={!condition.operator}
           placeholder="Value"
-          className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)] text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-[var(--color-primary)]/40"
+          className="flex-1 min-w-0 px-2.5 py-1.5 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)] text-sm text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none focus:border-[var(--color-primary)] disabled:opacity-40 focus-visible:ring-2 focus-visible:ring-primary/40"
           aria-label="Value"
         />
       )}

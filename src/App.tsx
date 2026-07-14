@@ -27,7 +27,7 @@ const DatabaseControl = React.lazy(() => import('./components/DatabaseControl').
 
 const FullPageFallback: React.FC<{ label?: string }> = ({ label = 'Loading...' }) => (
   <div className="h-screen w-full flex flex-col items-center justify-center bg-[var(--color-bg-primary)] text-[var(--color-text-primary)]">
-    <div className="w-12 h-12 border-4 border-[var(--color-primary)]/20 border-t-[var(--color-primary)] rounded-full animate-spin" />
+    <div className="w-12 h-12 border-4 border-primary/20 border-t-[var(--color-primary)] rounded-full animate-spin" />
     <p className="mt-4 text-sm text-[var(--color-text-secondary)]">{label}</p>
   </div>
 );
@@ -109,6 +109,8 @@ const App: React.FC = () => {
   }, []);
   const [isDatabaseStarting, setIsDatabaseStarting] = React.useState(false);
   const needsSetup = usePlayerStore(state => state.needsSetup);
+  const setupAdminCreated = usePlayerStore(state => state.setupAdminCreated);
+  const setupStatusError = usePlayerStore(state => state.setupStatusError);
   const checkSetupStatus = usePlayerStore(state => state.checkSetupStatus);
   const authToken = usePlayerStore(state => state.authToken);
   const sseAccessToken = usePlayerStore(state => state.sseAccessToken);
@@ -437,6 +439,19 @@ const App: React.FC = () => {
     });
   }, [checkHealth, checkSetupStatus, authToken]);
 
+  const handleLogin = React.useCallback(async (username: string, password: string) => {
+    const success = await login(username, password);
+    if (!success) return false;
+
+    await checkSetupStatus();
+    if (!usePlayerStore.getState().needsSetup) {
+      usePlayerStore.getState().loadSettings();
+      usePlayerStore.getState().fetchLibraryFromServer();
+      usePlayerStore.getState().fetchPlaylistsFromServer();
+    }
+    return true;
+  }, [checkSetupStatus, login]);
+
   // Public shared-playlist view — accessible without auth and before any setup/DB
   // gate. Like the invite flow, a share link is always a fresh full-page load, so
   // reading window.location directly is accurate and keeps App location-subscription-free.
@@ -463,6 +478,20 @@ const App: React.FC = () => {
     );
   }
 
+  if (dbConnected === true && needsSetup === null && setupStatusError && isOnline) {
+    return (
+      <main className="setup-status-error">
+        <section className="setup-status-error__panel" role="alert">
+          <h1>Setup status unavailable</h1>
+          <p>{setupStatusError}</p>
+          <button type="button" className="btn btn-primary" onClick={() => void checkSetupStatus()}>
+            Retry
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   // Loading / Initializing gate
   // Shows if:
   // 1. We are explicitly starting the database
@@ -479,8 +508,8 @@ const App: React.FC = () => {
         <div className="h-screen w-full flex flex-col items-center justify-center bg-[var(--color-bg-primary)]">
           <div className="flex flex-col items-center space-y-6">
             <div className="relative">
-              <div className="w-16 h-16 border-4 border-[var(--color-primary)]/20 border-t-[var(--color-primary)] rounded-full animate-spin" />
-              <div className="absolute inset-x-0 -bottom-1 w-full h-1 bg-[var(--color-primary)]/10 blur-md" />
+              <div className="w-16 h-16 border-4 border-primary/20 border-t-[var(--color-primary)] rounded-full animate-spin" />
+              <div className="absolute inset-x-0 -bottom-1 w-full h-1 bg-primary/10 blur-md" />
             </div>
             <div className="text-center">
               <h1 className="text-xl font-bold text-[var(--color-text-primary)]">
@@ -496,6 +525,18 @@ const App: React.FC = () => {
             </div>
           </div>
         </div>
+      );
+  }
+
+  if (needsSetup && setupAdminCreated && !authToken) {
+      return (
+        <React.Suspense fallback={<FullPageFallback label="Loading sign in..." />}>
+          <LoginPage
+            onLogin={handleLogin}
+            sessionMessage="Sign in with the admin account to continue first-run setup."
+            submitLabel="Resume setup"
+          />
+        </React.Suspense>
       );
   }
 
@@ -520,15 +561,6 @@ const App: React.FC = () => {
           );
       }
 
-      const handleLogin = async (username: string, password: string) => {
-          const success = await login(username, password);
-          if (success) {
-              usePlayerStore.getState().loadSettings();
-              usePlayerStore.getState().fetchLibraryFromServer();
-              usePlayerStore.getState().fetchPlaylistsFromServer();
-          }
-          return success;
-      };
       return (
         <React.Suspense fallback={<FullPageFallback label="Loading sign in..." />}>
           <LoginPage
@@ -611,7 +643,7 @@ const App: React.FC = () => {
 
         {/* PWA Update Available Banner */}
         {pendingUpdate && (
-          <div className="fixed bottom-6 left-6 z-[10001] flex items-center gap-3 px-5 py-3.5 rounded-2xl border shadow-2xl backdrop-blur-xl bg-[var(--glass-bg)] border-[var(--color-primary)]/30 max-w-[360px]">
+          <div className="fixed bottom-6 left-6 z-[10001] flex items-center gap-3 px-5 py-3.5 rounded-2xl border shadow-2xl backdrop-blur-xl bg-[var(--glass-bg)] border-primary/30 max-w-[360px]">
             <div className="flex-1">
               <p className="text-sm font-medium text-[var(--color-text-primary)]">Update Available</p>
               <p className="text-xs text-[var(--color-text-secondary)] mt-0.5">Reload to get the latest version.</p>

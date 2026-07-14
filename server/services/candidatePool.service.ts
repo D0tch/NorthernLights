@@ -122,8 +122,9 @@ const PLAYABLE_TRACK_SQL = `
   )
 `;
 
-const GENRE_KEY_SQL = `regexp_replace(lower(trim(t.genre)), '[^[:alnum:]_[:space:]-]', '', 'g')`;
+const GENRE_KEY_SQL = `regexp_replace(lower(trim(COALESCE(canonical_genre.name, t.genre))), '[^[:alnum:]_[:space:]-]', '', 'g')`;
 const GENRE_PATH_JOIN_SQL = `
+  LEFT JOIN genres canonical_genre ON canonical_genre.id = t.genre_id
   LEFT JOIN subgenre_mappings sm ON ${GENRE_KEY_SQL} = sm.sub_genre
   LEFT JOIN LATERAL (
     (SELECT path FROM genre_tree_paths WHERE LOWER(genre_name) = ${GENRE_KEY_SQL} LIMIT 1)
@@ -221,10 +222,13 @@ export async function fetchCandidatePool(opts: FetchPoolOptions): Promise<any[]>
   let orderSql: string;
 
   // Acoustic / embedding distance — only when a vector is supplied.
+  // Simulated-fallback features are constant center-of-space vectors, so any
+  // distance ranking over-picks them; bar them from vector pools entirely.
   if (opts.vectorStr) {
     params.push(opts.vectorStr);
     const vectorParam = nextParam++;
     where.push(`tf.acoustic_vector_8d IS NOT NULL`);
+    where.push(`tf.is_simulated = FALSE`);
     if (opts.embeddingCentroidStr) {
       params.push(opts.embeddingCentroidStr);
       const embParam = nextParam++;
@@ -316,10 +320,10 @@ export async function fetchCandidatePool(opts: FetchPoolOptions): Promise<any[]>
     const p = nextParam++;
     where.push(`NOT EXISTS (
       SELECT 1 FROM unnest($${p}::text[]) AS banned(name)
-      WHERE COALESCE(sm.path, gm.path, lower(t.genre), '') = banned.name
-         OR COALESCE(sm.path, gm.path, lower(t.genre), '') LIKE banned.name || '.%'
-         OR COALESCE(sm.path, gm.path, lower(t.genre), '') LIKE '%.' || banned.name
-         OR COALESCE(sm.path, gm.path, lower(t.genre), '') LIKE '%.' || banned.name || '.%'
+      WHERE COALESCE(sm.path, gm.path, lower(canonical_genre.name), lower(t.genre), '') = banned.name
+         OR COALESCE(sm.path, gm.path, lower(canonical_genre.name), lower(t.genre), '') LIKE banned.name || '.%'
+         OR COALESCE(sm.path, gm.path, lower(canonical_genre.name), lower(t.genre), '') LIKE '%.' || banned.name
+         OR COALESCE(sm.path, gm.path, lower(canonical_genre.name), lower(t.genre), '') LIKE '%.' || banned.name || '.%'
     )`);
   }
 
@@ -359,7 +363,8 @@ export async function fetchCandidatePool(opts: FetchPoolOptions): Promise<any[]>
       SELECT
         t.*,
         ${needsGenreJoin ? `COALESCE(sm.path, gm.path)` : `NULL::text`} AS genre_path,
-        tf.acoustic_vector_8d::text AS acoustic_vector_text,
+        CASE WHEN COALESCE(tf.is_simulated, FALSE) THEN NULL
+             ELSE tf.acoustic_vector_8d::text END AS acoustic_vector_text,
         ${distanceSql} AS distance,
         ${noveltySql} AS novelty_boost,
         ${favoritesScoreSql} AS favorites_score,
@@ -718,6 +723,7 @@ export async function computeArtistCentroids(
     LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
     WHERE t.artist_id::text = $2
       AND tf.acoustic_vector_8d IS NOT NULL
+      AND tf.is_simulated = FALSE
     ORDER BY COALESCE(ups.play_count, 0) DESC, t.id ASC
     LIMIT $3
     `,
@@ -786,6 +792,7 @@ export async function getLibraryMainstreamVector(): Promise<string | null> {
     `SELECT tf.acoustic_vector_8d::text AS v
      FROM track_features tf
      WHERE tf.acoustic_vector_8d IS NOT NULL
+       AND tf.is_simulated = FALSE
      ORDER BY RANDOM()
      LIMIT 1000`,
     []
@@ -839,11 +846,12 @@ export async function getArtistGenrePaths(artistId: string): Promise<{
 }> {
   const res = await queryWithRetry(
     `
-    SELECT t.genre, COUNT(*) AS n
+    SELECT g.name AS genre, COUNT(*) AS n
     FROM tracks t
+    JOIN genres g ON g.id = t.genre_id AND g.merged_into IS NULL
     WHERE t.artist_id::text = $1
-      AND t.genre IS NOT NULL AND t.genre <> ''
-    GROUP BY t.genre
+      AND g.name <> ''
+    GROUP BY g.id, g.name
     ORDER BY n DESC
     LIMIT 4
     `,

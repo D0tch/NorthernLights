@@ -9,7 +9,7 @@ import { cloneTrackForQueue, ensureQueueEntryIds } from '../utils/queue';
 import { preloadManager } from '../utils/PreloadManager';
 import { setPlaybackDebugLogging } from '../utils/playbackDebug';
 import { savePlaybackContinuitySnapshot } from '../utils/playbackContinuity';
-import { audioOutputManager, type AudioOutputDevice } from '../utils/AudioOutputManager';
+import { audioOutputManager, type AudioOutputDevice, type AudioOutputPermission } from '../utils/AudioOutputManager';
 import {
   getPlaybackTimeSnapshot,
   setPlaybackCurrentTime,
@@ -29,6 +29,16 @@ export interface ToastItem {
   duration?: number;
   actionLabel?: string;
   onAction?: () => void;
+}
+
+export type SetupStep = 'account' | 'analysis' | 'library';
+
+export type StoreActionResult =
+  | { success: true }
+  | { success: false; error: string };
+
+export interface AddLibraryFolderOptions {
+  scan?: boolean;
 }
 
 // Re-entrancy guard: incremented on each playAtIndex call to discard stale callbacks
@@ -129,6 +139,16 @@ function abortInFlightLibraryFetches() {
 
 function isAbortError(e: unknown): boolean {
   return !!e && typeof e === 'object' && (e as { name?: string }).name === 'AbortError';
+}
+
+async function getResponseError(response: Response, fallback: string): Promise<string> {
+  try {
+    const data = await response.json();
+    if (typeof data?.error === 'string' && data.error.trim()) return data.error;
+  } catch {
+    // Preserve the operation-specific fallback for non-JSON responses.
+  }
+  return fallback;
 }
 
 const buildTrackUrls = (trackId: string, path: string, token: string, quality: string = '128k', artHash?: string) => {
@@ -235,7 +255,7 @@ const hydratePlaylistTracks = (
   authToken: string,
   streamingQuality: PlayerState['streamingQuality']
 ): TrackInfo[] => {
-  const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+  const quality = streamingQuality;
   const libraryById = new Map(library.map((track) => [track.id, track]));
   const existingById = new Map(existingTracks.map((track) => [track.id, track]));
 
@@ -376,8 +396,10 @@ export interface FilterState {
 
 export type PlaybackLoadPath = 'none' | 'cast' | 'direct' | 'prepared-hls' | 'fallback-hls' | 'lossless-passthrough';
 export type PlaybackPrepareStatus = 'idle' | 'preparing' | 'ready' | 'failed';
-export type PlaybackRecoveryPath = 'none' | 'normal-hls-after-prepare-failure' | 'normal-hls-after-promotion-failure';
+export type PlaybackRecoveryPath = 'none' | 'normal-hls-after-prepare-failure' | 'normal-hls-after-promotion-failure' | 'fixed-quality-after-adaptive-failure';
 export type PrebufferPolicy = 'off' | 'conservative' | 'aggressive';
+export type AdaptiveFallbackState = 'none' | 'fixed-64k' | 'fixed-128k';
+const getPrewarmAheadCount = (policy: PrebufferPolicy): 1 | 2 => policy === 'aggressive' ? 2 : 1;
 export type LlmVetoMode = 'hard' | 'adaptive';
 export type ThemeName = 'light' | 'dark' | 'midnight' | 'solstice' | 'nebula' | 'crimson' | 'custom';
 
@@ -476,6 +498,12 @@ export interface PlaybackTelemetry {
   recoveryError: string | null;
   prebufferPolicy: PrebufferPolicy;
   prebufferSkippedReason: string | null;
+  adaptiveActiveBitrateKbps: number | null;
+  adaptiveBandwidthEstimateKbps: number | null;
+  adaptiveLevelCount: number;
+  adaptiveSwitchCount: number;
+  adaptiveFallbackState: AdaptiveFallbackState;
+  adaptiveNativePlayback: boolean;
 }
 
 export interface PlayerState {
@@ -541,7 +569,14 @@ export interface PlayerState {
 
   // Setup State
   needsSetup: boolean | null;
+  setupAdminCreated: boolean | null;
+  setupOnboardingCompleted: boolean | null;
+  setupStep: SetupStep | null;
+  setupStatusError: string | null;
   checkSetupStatus: () => Promise<void>;
+  createSetupAdmin: (username: string, password: string) => Promise<StoreActionResult>;
+  updateSetupProgress: (nextStep: Exclude<SetupStep, 'account'>) => Promise<StoreActionResult>;
+  finalizeSetup: () => Promise<StoreActionResult>;
 
   // Playback State (Transient)
   currentIndex: number | null;
@@ -556,6 +591,8 @@ export interface PlayerState {
   audioOutputActive: boolean;
   audioOutputSelecting: boolean;
   audioOutputError: string | null;
+  audioOutputPermission: AudioOutputPermission;
+  audioOutputRequestingAccess: boolean;
   playbackTelemetry: PlaybackTelemetry;
 
   // Settings State (Persisted)
@@ -704,7 +741,7 @@ export interface PlayerState {
   getAuthHeader: () => Record<string, string>;
   /** Build stream/art URLs onto server-fetched tracks using the current token + quality. */
   hydrateTracks: (tracks: TrackInfo[]) => TrackInfo[];
-  addLibraryFolder: (folderPath: string) => Promise<void>;
+  addLibraryFolder: (folderPath: string, options?: AddLibraryFolderOptions) => Promise<StoreActionResult>;
   removeLibraryFolder: (folderName: string) => Promise<void>;
   rescanLibrary: (specificFolder?: string) => Promise<void>;
   addTracksToLibrary: (newTracks: TrackInfo[]) => void;
@@ -750,8 +787,7 @@ export interface PlayerState {
   cancelSleepTimer: () => void;
   selectAudioOutput: () => Promise<void>;
   setAudioOutputDevice: (deviceId: string) => Promise<void>;
-  refreshAudioOutputs: () => Promise<void>;
-  clearAudioOutput: () => Promise<void>;
+  ensureAudioOutputAccess: () => Promise<void>;
   toggleShuffle: () => void;
   cycleRepeat: () => void;
   setCastConnected: (connected: boolean) => void;
@@ -956,6 +992,7 @@ export const usePlayerStore = create<PlayerState>()(
           if (state.prebufferPolicy !== 'off') {
             preloadManager.prewarmNext(state.playlist, state.currentIndex, state.streamingQuality, {
               castConnected: castState === 'CONNECTED',
+              aheadCount: getPrewarmAheadCount(state.prebufferPolicy),
             });
           }
         });
@@ -976,6 +1013,8 @@ export const usePlayerStore = create<PlayerState>()(
           audioOutputActive: initialAudioOutput.active,
           audioOutputSelecting: initialAudioOutput.selecting,
           audioOutputError: initialAudioOutput.error,
+          audioOutputPermission: initialAudioOutput.permission,
+          audioOutputRequestingAccess: initialAudioOutput.requestingAccess,
         });
 
         audioOutputManager.subscribe((audioOutput) => {
@@ -988,6 +1027,8 @@ export const usePlayerStore = create<PlayerState>()(
             audioOutputActive: audioOutput.active,
             audioOutputSelecting: audioOutput.selecting,
             audioOutputError: audioOutput.error,
+            audioOutputPermission: audioOutput.permission,
+            audioOutputRequestingAccess: audioOutput.requestingAccess,
           });
         });
       }, 0);
@@ -1009,6 +1050,7 @@ export const usePlayerStore = create<PlayerState>()(
         }
         preloadManager.prewarmNext(state.playlist, currentIndex, state.streamingQuality, {
           castConnected: isActuallyCasting,
+          aheadCount: getPrewarmAheadCount(state.prebufferPolicy),
         });
         if (!isActuallyCasting && nextTrack?.url) {
           playbackManager.prepareNextUrl(
@@ -1080,6 +1122,10 @@ export const usePlayerStore = create<PlayerState>()(
         scanningFile: null as string | null,
 
         needsSetup: null as boolean | null,
+        setupAdminCreated: null as boolean | null,
+        setupOnboardingCompleted: null as boolean | null,
+        setupStep: null as SetupStep | null,
+        setupStatusError: null as string | null,
 
         currentIndex: null as number | null,
         playbackState: 'stopped' as PlaybackState,
@@ -1093,6 +1139,8 @@ export const usePlayerStore = create<PlayerState>()(
         audioOutputActive: false,
         audioOutputSelecting: false,
         audioOutputError: null,
+        audioOutputPermission: 'unknown' as AudioOutputPermission,
+        audioOutputRequestingAccess: false,
         playbackTelemetry: {
           lastUpdatedAt: null,
           loadPath: 'none',
@@ -1114,6 +1162,12 @@ export const usePlayerStore = create<PlayerState>()(
           recoveryError: null,
           prebufferPolicy: 'conservative',
           prebufferSkippedReason: null,
+          adaptiveActiveBitrateKbps: null,
+          adaptiveBandwidthEstimateKbps: null,
+          adaptiveLevelCount: 0,
+          adaptiveSwitchCount: 0,
+          adaptiveFallbackState: 'none',
+          adaptiveNativePlayback: false,
         } as PlaybackTelemetry,
         volume: 1,
         shuffle: false as boolean,
@@ -1227,15 +1281,98 @@ export const usePlayerStore = create<PlayerState>()(
         checkSetupStatus: async () => {
           try {
             const res = await fetch('/api/setup/status');
-            if (res.ok) {
-              const data = await res.json();
-              set({ needsSetup: data.needsSetup });
-            } else {
-              set({ needsSetup: false });
+            if (!res.ok) throw new Error(await getResponseError(res, 'Could not check setup status.'));
+            const data = await res.json();
+            if (typeof data.needsSetup !== 'boolean') {
+              throw new Error(typeof data.error === 'string' ? data.error : 'Setup status was unavailable.');
             }
-          } catch (e) {
-            console.error("Failed to check setup status", e);
-            set({ needsSetup: false }); // Fallback assuming standard boot
+            const nextStep = data.nextStep === 'account' || data.nextStep === 'analysis' || data.nextStep === 'library'
+              ? data.nextStep as SetupStep
+              : null;
+            set({
+              needsSetup: data.needsSetup,
+              setupAdminCreated: typeof data.adminCreated === 'boolean' ? data.adminCreated : null,
+              setupOnboardingCompleted: typeof data.onboardingCompleted === 'boolean' ? data.onboardingCompleted : null,
+              setupStep: nextStep,
+              setupStatusError: null,
+            });
+          } catch (error) {
+            console.error('Failed to check setup status', error);
+            const message = error instanceof Error ? error.message : 'Could not check setup status.';
+            set({ setupStatusError: message });
+          }
+        },
+
+        createSetupAdmin: async (username: string, password: string) => {
+          try {
+            const res = await fetch('/api/setup/complete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ username: username.trim(), password }),
+            });
+            if (!res.ok) {
+              return { success: false, error: await getResponseError(res, 'Failed to create the admin account.') };
+            }
+
+            const data = await res.json();
+            set({
+              authToken: data.token,
+              mediaAccessToken: data.mediaToken || data.token,
+              sseAccessToken: data.sseToken || data.token,
+              currentUser: data.user || null,
+              needsSetup: true,
+              setupAdminCreated: true,
+              setupOnboardingCompleted: false,
+              setupStep: 'analysis',
+              setupStatusError: null,
+              authExpired: false,
+              authExpiredMessage: null,
+            });
+            return { success: true };
+          } catch (error) {
+            return {
+              success: false,
+              error: error instanceof Error ? error.message : 'Network error while creating the admin account.',
+            };
+          }
+        },
+
+        updateSetupProgress: async (nextStep: Exclude<SetupStep, 'account'>) => {
+          try {
+            const res = await fetch('/api/setup/progress', {
+              method: 'PUT',
+              headers: { 'Content-Type': 'application/json', ...get().getAuthHeader() },
+              body: JSON.stringify({ nextStep }),
+            });
+            if (!res.ok) {
+              return { success: false, error: await getResponseError(res, 'Failed to save setup progress.') };
+            }
+            set({ setupStep: nextStep, setupStatusError: null });
+            return { success: true };
+          } catch (error) {
+            return {
+              success: false,
+              error: error instanceof Error ? error.message : 'Network error while saving setup progress.',
+            };
+          }
+        },
+
+        finalizeSetup: async () => {
+          try {
+            const res = await fetch('/api/setup/finalize', {
+              method: 'POST',
+              headers: get().getAuthHeader(),
+            });
+            if (!res.ok) {
+              return { success: false, error: await getResponseError(res, 'Failed to finish setup.') };
+            }
+            set({ setupOnboardingCompleted: true, setupStatusError: null });
+            return { success: true };
+          } catch (error) {
+            return {
+              success: false,
+              error: error instanceof Error ? error.message : 'Network error while finishing setup.',
+            };
           }
         },
 
@@ -1388,7 +1525,7 @@ export const usePlayerStore = create<PlayerState>()(
         hydrateTracks: (tracks: TrackInfo[]) => {
           const { mediaAccessToken, authToken, streamingQuality } = get();
           const token = mediaAccessToken || authToken || '';
-          const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+          const quality = streamingQuality;
           return tracks.map((t) => hydrateServerTrack(t, token, quality));
         },
 
@@ -1649,7 +1786,7 @@ export const usePlayerStore = create<PlayerState>()(
               if (data.track) {
                 const { mediaAccessToken, authToken, streamingQuality } = state;
                 const token = mediaAccessToken || authToken || '';
-                const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+                const quality = streamingQuality;
 
                 const track = {
                   ...data.track,
@@ -1714,7 +1851,7 @@ export const usePlayerStore = create<PlayerState>()(
 
               const { mediaAccessToken, authToken, streamingQuality } = get();
               const token = mediaAccessToken || authToken || '';
-              const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+              const quality = streamingQuality;
 
               set((state: PlayerState): Partial<PlayerState> => {
                 const currentTrack = state.currentIndex !== null ? state.playlist[state.currentIndex] : null;
@@ -1796,7 +1933,7 @@ export const usePlayerStore = create<PlayerState>()(
         },
 
         // On-demand: load the full track list into `library` for the admin
-        // tools that still need per-track data (Genre Matrix, Artist Entities).
+        // tools that still need per-track data (Genre Matrix, Library Entities).
         // The main app no longer loads this at boot. Deduped; no-op once present.
         ensureFullLibraryLoaded: async () => {
           if (get().library.length > 0) return;
@@ -1809,7 +1946,7 @@ export const usePlayerStore = create<PlayerState>()(
               const data = await res.json();
               const { mediaAccessToken, authToken, streamingQuality } = get();
               const token = mediaAccessToken || authToken || '';
-              const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+              const quality = streamingQuality;
               set({ library: (data.tracks || []).map((t: TrackInfo) => hydrateServerTrack(t, token, quality)) });
             } catch (e) {
               console.error('Failed to load full library on demand', e);
@@ -1844,7 +1981,7 @@ export const usePlayerStore = create<PlayerState>()(
                        const fullTrack = library.find((lt: TrackInfo) => lt.id === t.id);
                        const track = fullTrack ? { ...t, ...fullTrack, playlistAddedAt: t.playlistAddedAt } : t;
                        if (!track.path) return null;
-                       const quality = (get().streamingQuality === 'auto' ? '128k' : get().streamingQuality);
+                       const quality = get().streamingQuality;
                        return {
                          ...track,
                          ...buildTrackUrls(track.id, track.path, token, quality, (track as any).artHash),
@@ -1889,7 +2026,7 @@ export const usePlayerStore = create<PlayerState>()(
                     const fullTrack = library.find((lt: TrackInfo) => lt.id === t.id);
                     const track = fullTrack ? { ...t, ...fullTrack, playlistAddedAt: t.playlistAddedAt } : t;
                     if (!track.path) return null;
-                    const quality = (get().streamingQuality === 'auto' ? '128k' : get().streamingQuality);
+                    const quality = get().streamingQuality;
                     return {
                       ...track,
                       ...buildTrackUrls(track.id, track.path, token, quality, (track as any).artHash),
@@ -1920,7 +2057,7 @@ export const usePlayerStore = create<PlayerState>()(
 
               const { mediaAccessToken, authToken, library, streamingQuality } = get();
               const token = mediaAccessToken || authToken || '';
-              const quality = (streamingQuality === 'auto' ? '128k' : streamingQuality);
+              const quality = streamingQuality;
 
               const mappedTracks = (pl.tracks || []).map((t: any) => {
                  const fullTrack = library.find((lt: TrackInfo) => lt.id === t.id);
@@ -2175,26 +2312,45 @@ export const usePlayerStore = create<PlayerState>()(
           }
         },
 
-        addLibraryFolder: async (folderPath: string) => {
-          const state = get();
-          if (state.libraryFolders.includes(folderPath)) return;
+        addLibraryFolder: async (folderPath: string, options: AddLibraryFolderOptions = {}) => {
+          const normalizedPath = folderPath.trim();
+          if (!normalizedPath) {
+            return { success: false, error: 'Enter an absolute directory path.' };
+          }
 
-          set({ libraryFolders: [...state.libraryFolders, folderPath] });
+          if (get().libraryFolders.includes(normalizedPath)) {
+            if (options.scan !== false) await get().rescanLibrary(normalizedPath);
+            return { success: true };
+          }
 
           try {
-            const authHeaders = (get() as any).getAuthHeader();
-            
-            // Instantly register the folder to the DB so page refreshes don't lose it
-            await fetch('/api/library/add', {
+            const authHeaders = get().getAuthHeader();
+            const response = await fetch('/api/library/add', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', ...authHeaders },
-              body: JSON.stringify({ path: folderPath })
+              body: JSON.stringify({ path: normalizedPath })
             });
+            if (!response.ok) {
+              return {
+                success: false,
+                error: await getResponseError(response, 'Failed to add the directory.'),
+              };
+            }
 
-            // Queue a scan for JUST this newly added folder
-            await get().rescanLibrary(folderPath);
-          } catch (e) {
-            console.error('Failed to add and scan folder', e);
+            set((state: PlayerState) => ({
+              libraryFolders: state.libraryFolders.includes(normalizedPath)
+                ? state.libraryFolders
+                : [...state.libraryFolders, normalizedPath],
+            }));
+
+            if (options.scan !== false) await get().rescanLibrary(normalizedPath);
+            return { success: true };
+          } catch (error) {
+            console.error('Failed to add and scan folder', error);
+            return {
+              success: false,
+              error: error instanceof Error ? error.message : 'Network error while adding the directory.',
+            };
           }
         },
 
@@ -2264,7 +2420,7 @@ export const usePlayerStore = create<PlayerState>()(
               
               const { mediaAccessToken, authToken, streamingQuality } = get();
               const token = mediaAccessToken || authToken || '';
-              const quality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+              const quality = streamingQuality;
 
               const latestLibrary = data.tracks.map((t: TrackInfo) => hydrateServerTrack(t, token, quality));
               set({
@@ -2459,7 +2615,7 @@ export const usePlayerStore = create<PlayerState>()(
           // path) are left untouched.
           const { mediaAccessToken, authToken, streamingQuality } = get();
           const freshToken = mediaAccessToken || authToken || '';
-          const freshQuality = streamingQuality === 'auto' ? '128k' : streamingQuality;
+          const freshQuality = streamingQuality;
           const playable: TrackInfo = track.path && freshToken
             ? { ...track, ...buildTrackUrls(track.id, track.path, freshToken, freshQuality, (track as any).artHash) }
             : track;
@@ -2705,16 +2861,9 @@ export const usePlayerStore = create<PlayerState>()(
           }
         },
 
-        refreshAudioOutputs: async () => {
-          const output = await audioOutputManager.refreshDevices();
-          if (output.error) {
-            get().addToast(output.error, 'error');
-          }
-        },
-
-        clearAudioOutput: async () => {
-          await playbackManager.clearAudioOutputDevice();
-          get().addToast('Using system default audio output.', 'info');
+        ensureAudioOutputAccess: async () => {
+          // Denials/errors render inline in the Output settings tab — no toasts.
+          await audioOutputManager.ensureDeviceAccess();
         },
 
         toggleShuffle: () => set((state: PlayerState) => ({ shuffle: !state.shuffle })),

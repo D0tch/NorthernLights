@@ -150,7 +150,7 @@ const SimilarArtistRow: React.FC<{ artist: SimilarArtist }> = ({ artist }) => {
             onPointerEnter={prefetchArtistDetail}
             onPointerDown={prefetchArtistDetail}
             onFocus={prefetchArtistDetail}
-            className="group rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-3 transition-ui hover:border-[var(--color-primary)]/40 hover:bg-[var(--glass-bg-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
+            className="group rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-3 transition-ui hover:border-primary/40 hover:bg-[var(--glass-bg-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-primary)]"
         >
             <div className="flex items-start gap-3">
                 <div
@@ -1025,7 +1025,7 @@ export const ArtistDetail: React.FC = () => {
                                 <div
                                     key={track.id}
                                     onClick={() => handlePlayPopularTracks(index)}
-                                    className={`grid grid-cols-[24px_40px_minmax(0,1fr)] md:grid-cols-[34px_52px_minmax(0,1.7fr)_minmax(160px,1fr)_120px_56px] gap-2 md:gap-3 px-1.5 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group ${isCurrentPopular ? 'bg-[var(--color-primary)]/5' : ''}`}
+                                    className={`grid grid-cols-[24px_40px_minmax(0,1fr)] md:grid-cols-[34px_52px_minmax(0,1.7fr)_minmax(160px,1fr)_120px_56px] gap-2 md:gap-3 px-1.5 md:px-4 py-2 border-b border-black/5 dark:border-white/5 cursor-pointer items-center transition-ui duration-200 hover:bg-black/5 dark:hover:bg-white/5 rounded-lg my-0.5 group ${isCurrentPopular ? 'bg-primary/5' : ''}`}
                                 >
                                     {/* Rank */}
                                     <div className="flex items-center justify-center md:justify-start text-[var(--color-text-muted)] group-hover:text-[var(--color-primary)] transition-colors text-sm tabular-nums">

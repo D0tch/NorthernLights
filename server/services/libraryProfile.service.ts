@@ -114,7 +114,7 @@ export async function getLibraryProfile(): Promise<LibraryProfile> {
     return cachedProfile.value;
   }
 
-  const genreKeySql = `regexp_replace(lower(trim(t.genre)), '[^[:alnum:]_[:space:]-]', '', 'g')`;
+  const genreKeySql = `regexp_replace(lower(trim(COALESCE(canonical_genre.name, t.genre))), '[^[:alnum:]_[:space:]-]', '', 'g')`;
 
   const [summaryRes, vectorRes, genreRes] = await Promise.all([
     queryWithRetry(`
@@ -147,6 +147,7 @@ export async function getLibraryProfile(): Promise<LibraryProfile> {
           COALESCE(NULLIF(t.mb_recording_id, ''), lower(trim(COALESCE(t.artist, ''))) || ':' || lower(trim(COALESCE(t.title, '')))) AS song_key
         FROM tracks t
         JOIN track_features tf ON t.id = tf.track_id AND tf.acoustic_vector_8d IS NOT NULL
+        LEFT JOIN genres canonical_genre ON canonical_genre.id = t.genre_id
         LEFT JOIN subgenre_mappings sm ON ${genreKeySql} = sm.sub_genre
         LEFT JOIN LATERAL (
           (SELECT path FROM genre_tree_paths WHERE LOWER(genre_name) = ${genreKeySql} LIMIT 1)

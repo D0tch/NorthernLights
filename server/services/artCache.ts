@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import sharp from 'sharp';
+import type { IPicture } from 'music-metadata';
+import { ARTWORK_EXTRACTION_VERSION } from './artworkVersion';
 
 // Pre-encoded album-art cache.
 //
@@ -26,6 +28,18 @@ export const ART_CACHE_DIR = path.resolve(process.env.ART_CACHE_DIR || './art-ca
 export const ART_SIZES = [256, 640, 1024] as const;
 export type ArtSize = (typeof ART_SIZES)[number];
 export const DEFAULT_ART_SIZE: ArtSize = 640;
+
+export { ARTWORK_EXTRACTION_VERSION };
+
+export interface NormalizedArtwork {
+  data: Buffer;
+  format: string;
+  width: number;
+  height: number;
+  source: 'embedded' | 'folder';
+  sourcePath?: string;
+  pictureType?: string;
+}
 
 export function isValidArtSize(n: number): n is ArtSize {
   return (ART_SIZES as readonly number[]).includes(n);
@@ -67,6 +81,191 @@ export function findImageStart(buf: Uint8Array): number {
     if (b0 === 0x42 && b1 === 0x4D) return i;
   }
   return -1;
+}
+
+const IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.avif']);
+
+function normalizedMime(format: string | undefined): string {
+  switch ((format || '').toLowerCase()) {
+    case 'jpg':
+    case 'jpeg':
+      return 'image/jpeg';
+    case 'png':
+      return 'image/png';
+    case 'gif':
+      return 'image/gif';
+    case 'webp':
+      return 'image/webp';
+    case 'bmp':
+      return 'image/bmp';
+    case 'avif':
+    case 'heif':
+      return 'image/avif';
+    case 'tif':
+    case 'tiff':
+      return 'image/tiff';
+    default:
+      return 'application/octet-stream';
+  }
+}
+
+function findJpegRecoveryStart(buf: Uint8Array): number {
+  const maxScan = Math.min(buf.length - 1, 4096);
+  for (let i = 0; i < maxScan; i++) {
+    if (buf[i] !== 0xFF) continue;
+    const marker = buf[i + 1];
+    // WMP can drop the JPEG SOI/JFIF prefix while leaving a complete stream
+    // beginning at a table or frame marker. sharp validates the reconstruction
+    // before it is accepted, so incidental marker bytes are harmless.
+    if (marker === 0xDB || marker === 0xC4 || marker === 0xC0 || marker === 0xC1 || marker === 0xC2) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+interface ByteCandidate {
+  data: Buffer;
+  reconstructed: boolean;
+}
+
+function byteCandidates(input: Uint8Array): ByteCandidate[] {
+  const raw = Buffer.from(input.buffer, input.byteOffset, input.byteLength);
+  const candidates: ByteCandidate[] = [{ data: raw, reconstructed: false }];
+  const imageStart = findImageStart(raw);
+  if (imageStart > 0) candidates.push({ data: raw.subarray(imageStart), reconstructed: false });
+
+  // Some malformed WM/Picture values start immediately after a JPEG segment
+  // marker. Infer the missing marker only for recognizable segment bodies.
+  const segmentLength = raw.length >= 4 ? raw.readUInt16BE(0) : 0;
+  if (segmentLength >= 2 && segmentLength <= 4096 && segmentLength <= raw.length) {
+    let marker: number | null = null;
+    if (raw.subarray(2, 6).toString('ascii') === 'Exif') marker = 0xE1;
+    else if (raw.subarray(2, 6).toString('ascii') === 'JFIF') marker = 0xE0;
+    else if ((segmentLength === 67 || segmentLength === 132) && raw[2] <= 3) marker = 0xDB;
+    if (marker !== null) {
+      candidates.push({
+        data: Buffer.concat([Buffer.from([0xFF, 0xD8, 0xFF, marker]), raw]),
+        reconstructed: true,
+      });
+    }
+  }
+
+  // Try JPEG reconstruction independently of the generic signature result.
+  // Compressed JPEG bytes can contain an incidental "BM" pair long after the
+  // real DQT start; treating that as authoritative recreates the original WMA
+  // failure. Every candidate is validated by sharp below.
+  const jpegStart = findJpegRecoveryStart(raw);
+  if (jpegStart >= 0 && !(raw[0] === 0xFF && raw[1] === 0xD8)) {
+    candidates.push({
+      data: Buffer.concat([Buffer.from([0xFF, 0xD8]), raw.subarray(jpegStart)]),
+      reconstructed: true,
+    });
+  }
+
+  return candidates;
+}
+
+function artworkScore(art: NormalizedArtwork): number {
+  const type = (art.pictureType || '').toLowerCase();
+  const frontBonus = type.includes('front') ? 1_000_000_000 : 0;
+  const squareRatio = Math.min(art.width, art.height) / Math.max(art.width, art.height);
+  return frontBonus + (art.width * art.height) + Math.round(squareRatio * 100_000);
+}
+
+async function normalizePicture(
+  picture: Pick<IPicture, 'data' | 'type'>,
+  source: NormalizedArtwork['source'],
+  sourcePath?: string,
+): Promise<NormalizedArtwork | null> {
+  const seen = new Set<string>();
+  for (const { data: candidate, reconstructed } of byteCandidates(picture.data)) {
+    if (candidate.length === 0) continue;
+    const fingerprint = hashArt(candidate);
+    if (seen.has(fingerprint)) continue;
+    seen.add(fingerprint);
+
+    try {
+      const metadata = await sharp(candidate, { failOn: 'error' }).metadata();
+      if (!metadata.format || !metadata.width || !metadata.height) continue;
+      if (reconstructed) {
+        // metadata() only parses headers. A stream can advertise dimensions but
+        // still lack an earlier quantization table, so force one full decode
+        // before accepting any repaired byte sequence.
+        await sharp(candidate, { failOn: 'error' }).stats();
+      }
+      return {
+        data: candidate,
+        format: normalizedMime(metadata.format),
+        width: metadata.width,
+        height: metadata.height,
+        source,
+        sourcePath,
+        pictureType: picture.type,
+      };
+    } catch {
+      // Try the next alignment or picture. A malformed cover must not sink the
+      // track metadata or hide a later valid front cover.
+    }
+  }
+  return null;
+}
+
+function folderArtworkPriority(fileName: string): number | null {
+  const ext = path.extname(fileName).toLowerCase();
+  if (!IMAGE_EXTENSIONS.has(ext)) return null;
+  const stem = path.basename(fileName, ext).toLowerCase();
+  if (stem === 'cover') return 0;
+  if (stem === 'folder') return 1;
+  if (stem === 'front') return 2;
+  if (/^albumart.*_large$/.test(stem)) return 3;
+  if (stem === 'albumartlarge') return 3;
+  if (/^albumart.*_small$/.test(stem)) return 4;
+  if (stem === 'albumartsmall') return 4;
+  return null;
+}
+
+export async function findFolderArtwork(audioPath: string): Promise<string[]> {
+  let names: string[];
+  try {
+    names = await fs.promises.readdir(path.dirname(audioPath));
+  } catch {
+    return [];
+  }
+
+  return names
+    .map((name) => ({ name, priority: folderArtworkPriority(name) }))
+    .filter((entry): entry is { name: string; priority: number } => entry.priority !== null)
+    .sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name))
+    .map((entry) => path.join(path.dirname(audioPath), entry.name));
+}
+
+export async function resolveArtwork(
+  pictures: readonly IPicture[] | undefined,
+  audioPath?: string,
+): Promise<NormalizedArtwork | null> {
+  const embedded: NormalizedArtwork[] = [];
+  for (const picture of pictures || []) {
+    const normalized = await normalizePicture(picture, 'embedded');
+    if (normalized) embedded.push(normalized);
+  }
+  if (embedded.length > 0) {
+    embedded.sort((a, b) => artworkScore(b) - artworkScore(a));
+    return embedded[0];
+  }
+
+  if (!audioPath) return null;
+  for (const candidatePath of await findFolderArtwork(audioPath)) {
+    try {
+      const data = await fs.promises.readFile(candidatePath);
+      const normalized = await normalizePicture({ data, type: 'Cover (front)' }, 'folder', candidatePath);
+      if (normalized) return normalized;
+    } catch {
+      // A broken Folder.jpg should not prevent trying the next conventional
+      // Windows Media artwork filename.
+    }
+  }
+  return null;
 }
 
 // Encode `bytes` to AVIF at every configured size, skipping any size whose file

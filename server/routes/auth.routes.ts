@@ -1,10 +1,12 @@
 import { Router } from 'express';
 import crypto from 'crypto';
-import { hasUsers, createUser, getUserByUsername, getUserById, updateUser, deleteUser, updateLastLogin, createInvite, getInvite, isInviteValid, incrementInviteUses, createSubsonicApiKey, listSubsonicApiKeys, revokeSubsonicApiKey, rotateSubsonicApiKey, deleteRevokedSubsonicApiKey } from '../database';
+import fs from 'fs';
+import { hasUsers, createUser, getUserByUsername, getUserById, updateUser, deleteUser, updateLastLogin, createInvite, getInvite, isInviteValid, incrementInviteUses, createSubsonicApiKey, listSubsonicApiKeys, revokeSubsonicApiKey, rotateSubsonicApiKey, deleteRevokedSubsonicApiKey, getDirectories, getSystemSetting, setSystemSetting } from '../database';
 import { hashPassword, verifyPassword, generateToken, JwtPayload } from '../services/auth.service';
 import { generateScopedToken } from '../services/scopedToken.service';
 import { queueLlmHubRefreshForUser } from '../services/hubRefresh.service';
 import { createRateLimiter } from '../middleware/rateLimit';
+import { requireAdmin } from '../middleware/auth';
 
 const router = Router();
 const MIN_PASSWORD_LENGTH = 12;
@@ -48,6 +50,44 @@ const inviteValidationRateLimit = createRateLimiter({
 
 type AuthAttempt = { count: number; firstAt: number; blockedUntil: number };
 const authAttempts = new Map<string, AuthAttempt>();
+
+export type SetupStep = 'account' | 'analysis' | 'library';
+
+const SETUP_COMPLETED_KEY = 'setupOnboardingCompleted';
+const SETUP_STEP_KEY = 'setupNextStep';
+const RESUMABLE_SETUP_STEPS = new Set<SetupStep>(['analysis', 'library']);
+
+export function resolveSetupStatus(
+  usersExist: boolean,
+  storedCompleted: unknown,
+  storedStep: unknown,
+) {
+  if (!usersExist) {
+    return {
+      needsSetup: true,
+      adminCreated: false,
+      onboardingCompleted: false,
+      nextStep: 'account' as SetupStep,
+      dbConnected: true,
+    };
+  }
+
+  // Existing Aurora installs predate the onboarding flags. Treat a missing
+  // completion flag as complete so upgrades never force established admins
+  // back through first-run setup.
+  const onboardingCompleted = storedCompleted !== false;
+  const nextStep = RESUMABLE_SETUP_STEPS.has(storedStep as SetupStep)
+    ? storedStep as SetupStep
+    : 'analysis';
+
+  return {
+    needsSetup: !onboardingCompleted,
+    adminCreated: true,
+    onboardingCompleted,
+    nextStep: onboardingCompleted ? 'library' as SetupStep : nextStep,
+    dbConnected: true,
+  };
+}
 
 function getClientIp(req: any): string {
   return String(req.ip || req.socket?.remoteAddress || 'unknown');
@@ -119,14 +159,28 @@ async function buildAuthResponse(payload: JwtPayload) {
   return { token, mediaToken, sseToken };
 }
 
-// Setup: check if initial admin needs to be created
+// Setup: report both account creation and the separately persisted first-run flow.
 router.get('/setup/status', authStatusRateLimit, async (req, res) => {
   try {
     const usersExist = await hasUsers();
-    res.json({ needsSetup: !usersExist, dbConnected: true });
+    if (!usersExist) {
+      return res.json(resolveSetupStatus(false, false, 'account'));
+    }
+    const [storedCompleted, storedStep] = await Promise.all([
+      getSystemSetting(SETUP_COMPLETED_KEY),
+      getSystemSetting(SETUP_STEP_KEY),
+    ]);
+    res.json(resolveSetupStatus(true, storedCompleted, storedStep));
   } catch (error: any) {
     if (error.code === 'ECONNREFUSED') {
-      return res.json({ needsSetup: null, dbConnected: false, error: 'Database unavailable' });
+      return res.json({
+        needsSetup: null,
+        adminCreated: null,
+        onboardingCompleted: null,
+        nextStep: null,
+        dbConnected: false,
+        error: 'Database unavailable',
+      });
     }
     res.status(500).json({ error: 'Internal server error' });
   }
@@ -147,13 +201,61 @@ router.post('/setup/complete', authPublicMutationRateLimit, async (req, res) => 
 
   try {
     const passwordHash = await hashPassword(password);
+    await Promise.all([
+      setSystemSetting(SETUP_COMPLETED_KEY, false),
+      setSystemSetting(SETUP_STEP_KEY, 'analysis'),
+    ]);
     const user = await createUser(username, passwordHash, 'admin');
     const auth = await buildAuthResponse({ userId: user.id, username: user.username, role: user.role });
     clearAuthAttempts(req, 'setup', username);
-    res.json({ status: 'completed', ...auth, user: { id: user.id, username: user.username, role: user.role } });
+    res.json({ status: 'account_created', nextStep: 'analysis', ...auth, user: { id: user.id, username: user.username, role: user.role } });
   } catch (error) {
     console.error('Failed to complete setup:', error);
     res.status(500).json({ error: 'Failed to create admin user.' });
+  }
+});
+
+router.put('/setup/progress', requireAdmin, async (req, res) => {
+  const nextStep = req.body?.nextStep;
+  if (!RESUMABLE_SETUP_STEPS.has(nextStep)) {
+    return res.status(400).json({ error: 'Invalid setup step.' });
+  }
+
+  try {
+    await Promise.all([
+      setSystemSetting(SETUP_COMPLETED_KEY, false),
+      setSystemSetting(SETUP_STEP_KEY, nextStep),
+    ]);
+    res.json({ status: 'saved', nextStep });
+  } catch (error) {
+    console.error('Failed to save setup progress:', error);
+    res.status(500).json({ error: 'Failed to save setup progress.' });
+  }
+});
+
+router.post('/setup/finalize', requireAdmin, async (_req, res) => {
+  try {
+    const directories = await getDirectories();
+    const hasValidDirectory = directories.some((directory) => {
+      try {
+        return fs.statSync(directory).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+
+    if (!hasValidDirectory) {
+      return res.status(400).json({ error: 'Add a valid music directory before launching Aurora.' });
+    }
+
+    await Promise.all([
+      setSystemSetting(SETUP_COMPLETED_KEY, true),
+      setSystemSetting(SETUP_STEP_KEY, 'library'),
+    ]);
+    res.json({ status: 'completed', onboardingCompleted: true });
+  } catch (error) {
+    console.error('Failed to finalize setup:', error);
+    res.status(500).json({ error: 'Failed to finish setup.' });
   }
 });
 

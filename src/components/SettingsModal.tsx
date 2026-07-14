@@ -27,7 +27,7 @@ const GenreMatrixTab = React.lazy(() => import('./settings/GenreMatrixTab').then
 const DatabaseTab = React.lazy(() => import('./settings/DatabaseTab').then(module => ({ default: module.DatabaseTab })));
 const MetadataTab = React.lazy(() => import('./settings/MetadataTab').then(module => ({ default: module.MetadataTab })));
 const LiveMusicTab = React.lazy(() => import('./settings/LiveMusicTab').then(module => ({ default: module.LiveMusicTab })));
-const ArtistEntitiesTab = React.lazy(() => import('./settings/ArtistEntitiesTab').then(module => ({ default: module.ArtistEntitiesTab })));
+const LibraryEntitiesTab = React.lazy(() => import('./settings/LibraryEntitiesTab').then(module => ({ default: module.LibraryEntitiesTab })));
 const AdminDashboard = React.lazy(() => import('./settings/AdminDashboard').then(module => ({ default: module.AdminDashboard })));
 
 const SettingsTabFallback: React.FC = () => (
@@ -109,7 +109,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         { id: 'Appearance', label: 'Appearance', category: 'App Settings' },
         ...(isAdmin ? ([
             { id: 'Library', label: 'Library', category: 'App Settings' },
-            { id: 'Artist Entities', label: 'Artist Entities', category: 'App Settings' },
+            { id: 'Library Entities', label: 'Library Entities', category: 'App Settings' },
             { id: 'Metadata', label: 'Metadata', category: 'App Settings' },
         ] satisfies SettingsTab[]) : []),
         { id: 'Playback', label: 'Playback', category: 'App Settings' },
@@ -132,7 +132,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         if (tab.id === 'API Keys') return 'api key keys subsonic opensubsonic rest client rotate revoke delete'.includes(query);
         if (tab.id === 'Appearance') return 'light dark theme custom css variables colors'.includes(query);
         if (tab.id === 'Library') return 'folder path scan library stats analysis'.includes(query);
-        if (tab.id === 'Artist Entities') return 'artist duplicate merge canonical compound credit identity'.includes(query);
+        if (tab.id === 'Library Entities') return 'artist genre duplicate group merge canonical compound credit identity library hygiene'.includes(query);
         if (tab.id === 'Metadata') return 'genius musicbrainz lastfm jambase provider album bio image api mapping keys concerts tour live'.includes(query);
         if (tab.id === 'Live Music') return 'concerts tour live tickets jambase events location subscribe artists'.includes(query);
         if (tab.id === 'Playback') return 'infinity discovery genre artist amnesia matrix llm playlist diversity blend tracks wander played threshold scrobble count percent listened sleep timer quality streaming'.includes(query);
@@ -162,7 +162,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         if (tabId === 'Live Music') return Ticket;
         if (tabId === 'Appearance') return Palette;
         if (tabId === 'Library') return Folder;
-        if (tabId === 'Artist Entities') return GitMerge;
+        if (tabId === 'Library Entities') return GitMerge;
         if (tabId === 'Metadata') return Globe;
         if (tabId === 'Playback') return Play;
         if (tabId === 'System') return Cpu;
@@ -210,7 +210,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                             <input
                                 type="text"
                                 aria-label="Search settings"
-                                className="w-full min-h-11 bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-2xl pl-10 pr-4 py-2.5 text-base text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui placeholder:text-[var(--color-text-muted)]"
+                                className="w-full min-h-11 bg-background border border-[var(--glass-border)] rounded-2xl pl-10 pr-4 py-2.5 text-base text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-primary/50 transition-ui placeholder:text-[var(--color-text-muted)]"
                                 placeholder="Search settings"
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -245,7 +245,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                                     clearAuthToken();
                                     handleClose();
                                 }}
-                                className="flex min-h-11 items-center gap-2 px-3.5 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-ui flex-shrink-0 text-[var(--color-error)] bg-[var(--color-error)]/10 hover:bg-[var(--color-error)]/15 ml-auto"
+                                className="flex min-h-11 items-center gap-2 px-3.5 py-2 rounded-full text-sm font-medium whitespace-nowrap transition-ui flex-shrink-0 text-[var(--color-error)] bg-error/10 hover:bg-error/15 ml-auto"
                             >
                                 <LogOut size={14} />
                                 Sign Out
@@ -265,7 +265,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                             <input 
                                 type="text" 
                                 aria-label="Search settings"
-                                className="w-full bg-[var(--color-bg)] border border-[var(--glass-border)] rounded-full pl-10 pr-4 py-2.5 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui placeholder:text-[var(--color-text-muted)]" 
+                                className="w-full bg-background border border-[var(--glass-border)] rounded-full pl-10 pr-4 py-2.5 text-sm text-[var(--color-text-primary)] focus:outline-none focus:ring-2 focus:ring-primary/50 transition-ui placeholder:text-[var(--color-text-muted)]" 
                                 placeholder="Search settings" 
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
@@ -310,7 +310,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                             <div className="mt-8 border-t border-[var(--glass-border)] pt-4">
                                 <button 
                                     type="button"
-                                    className="w-full flex items-center px-3 py-2.5 rounded-xl text-sm font-medium text-[var(--color-error)] hover:bg-[var(--color-error)]/10 transition-colors"
+                                    className="w-full flex items-center px-3 py-2.5 rounded-xl text-sm font-medium text-[var(--color-error)] hover:bg-error/10 transition-colors"
                                     onClick={() => {
                                         clearAuthToken();
                                         handleClose();
@@ -343,7 +343,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
                                     {activeTab === 'Live Music' && <LiveMusicTab />}
                                     {activeTab === 'Appearance' && <AppearanceTab />}
                                     {isAdmin && activeTab === 'Library' && <LibraryTab />}
-                                    {isAdmin && activeTab === 'Artist Entities' && <ArtistEntitiesTab />}
+                                    {isAdmin && activeTab === 'Library Entities' && <LibraryEntitiesTab />}
                                     {isAdmin && activeTab === 'Metadata' && <MetadataTab />}
                                     {activeTab === 'Playback' && <PlaybackTab />}
                                     

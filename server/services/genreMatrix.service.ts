@@ -16,7 +16,7 @@ import { queryWithRetry } from '../utils/db';
 // If the library has ≥ 300 genres, return top 300 from MBDB hierarchy.
 export async function getGenreVocabulary(): Promise<string[]> {
   // Count genres in the user's library
-  const countRes = await queryWithRetry('SELECT COUNT(*) as cnt FROM genres');
+  const countRes = await queryWithRetry('SELECT COUNT(*) as cnt FROM genres WHERE merged_into IS NULL');
   const libraryCount = parseInt(countRes.rows[0]?.cnt || '0', 10);
 
   if (libraryCount < 300) {
@@ -25,6 +25,7 @@ export async function getGenreVocabulary(): Promise<string[]> {
       SELECT g.name
       FROM genres g
       LEFT JOIN genre_tree_paths gtp ON LOWER(gtp.genre_name) = LOWER(g.name)
+      WHERE g.merged_into IS NULL
       ORDER BY 
         CASE WHEN gtp.genre_name IS NOT NULL THEN 0 ELSE 10 END ASC,
         g.name ASC
@@ -66,6 +67,10 @@ export class GenreMatrixService {
       console.log('[GenreMatrix] Detected stale categorization job. Marking as Interrupted.');
       await setSystemSetting('genreMatrixProgress', 'Interrupted (Server restarted)');
     }
+  }
+
+  async reloadMappings() {
+    this.subGenreMap = await getSubGenreMappings();
   }
 
   private sanitize(s: string): string {
@@ -131,7 +136,7 @@ export class GenreMatrixService {
       // --- TIER 1: DIRECT SQL MATCH ---
       console.log(`[GenreMatrix] Tier 1: Scanning metadata for direct MBDB matches...`);
       for (const track of tracks) {
-        const subGenre = this.sanitize(track.genre || '');
+        const subGenre = this.sanitize(track.canonicalGenre || track.genre || '');
         if (!subGenre) continue; // Will be handled by Tier 3
 
         if (!mappings[subGenre] && !newMappings[subGenre]) {
@@ -286,7 +291,7 @@ export class GenreMatrixService {
       // Collect tracks needing KNN and batch-fetch features in one query
       const tracksNeedingKnn: { trackId: string, effectiveKey: string }[] = [];
       for (const track of tracks) {
-          const subGenre = this.sanitize(track.genre || '');
+          const subGenre = this.sanitize(track.canonicalGenre || track.genre || '');
           const artistKey = this.sanitize(track.artist || 'unknown-artist');
           const effectiveKey = subGenre || artistKey;
           if (!mappings[effectiveKey]) {

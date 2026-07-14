@@ -349,7 +349,7 @@ export function deriveAlbumMetadata(albums: AlbumInfo[], tracks: TrackInfo[]): E
     let earliestYear: number | null = null;
 
     albumTracks.forEach(t => {
-      if (t.genre) genres.add(t.genre);
+      if (t.canonicalGenre || t.genre) genres.add(t.canonicalGenre || t.genre || '');
       if (t.genres) {
         parseListField(t.genres as any).forEach(g => genres.add(g));
       }

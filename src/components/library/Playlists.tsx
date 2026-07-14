@@ -222,7 +222,7 @@ const GeneratePlaylistModal: React.FC<{ onClose: () => void; onGenerated: () => 
 
         <div>
           <div className="flex items-center gap-3 mb-1">
-            <div className="w-9 h-9 rounded-full bg-[var(--color-primary)]/10 flex items-center justify-center">
+            <div className="w-9 h-9 rounded-full bg-primary/10 flex items-center justify-center">
               <Sparkles className="w-5 h-5 text-[var(--color-primary)]" />
             </div>
             <h2 className="text-xl font-bold text-[var(--color-text-primary)]">Generate a Playlist</h2>

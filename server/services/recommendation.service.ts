@@ -367,8 +367,9 @@ export async function getHubCollections(
   const tracksPerPlaylist = settings.llmTracksPerPlaylist ?? 10;
   const diversity = (settings.llmPlaylistDiversity ?? 50) / 100; // 0.0 to 1.0
   const allowSoftVetoRecovery = settings.llmVetoMode === 'adaptive';
-  const genreKeySql = `regexp_replace(lower(trim(t.genre)), '[^[:alnum:]_[:space:]-]', '', 'g')`;
+  const genreKeySql = `regexp_replace(lower(trim(COALESCE(canonical_genre.name, t.genre))), '[^[:alnum:]_[:space:]-]', '', 'g')`;
   const genrePathJoinSql = `
+    LEFT JOIN genres canonical_genre ON canonical_genre.id = t.genre_id
     LEFT JOIN subgenre_mappings sm ON ${genreKeySql} = sm.sub_genre
     LEFT JOIN LATERAL (
       (SELECT path FROM genre_tree_paths WHERE LOWER(genre_name) = ${genreKeySql} LIMIT 1)
@@ -754,6 +755,7 @@ export async function getHubCollections(
       SELECT * FROM (
         SELECT
           t.*,
+          COALESCE(canonical_genre.name, t.genre) AS genre,
           COALESCE(sm.path, gm.path) AS genre_path,
           tf.acoustic_vector_8d::text AS acoustic_vector_text,
           ${distanceSql} AS distance,
@@ -1574,8 +1576,9 @@ export async function getHubCollections(
       const recentIds = userRecentTracks.map((t: any) => t.id);
       const placeholders = recentIds.map((_, i) => `$${i + 1}`).join(',');
       const vecRes = await queryWithRetry(`
-        SELECT t.id, t.genre, tf.acoustic_vector_8d, tf.embedding_vector
+        SELECT t.id, COALESCE(g.name, t.genre) AS genre, tf.acoustic_vector_8d, tf.embedding_vector
         FROM tracks t JOIN track_features tf ON t.id = tf.track_id
+        LEFT JOIN genres g ON g.id = t.genre_id
         WHERE t.id IN (${placeholders}) AND tf.acoustic_vector_8d IS NOT NULL
       `, recentIds);
 
@@ -1588,17 +1591,19 @@ export async function getHubCollections(
         let upNextRes;
         if (effnetStr) {
           upNextRes = await queryWithRetry(`
-            SELECT t.*, (tf.acoustic_vector_8d <-> $1::vector) + (tf.embedding_vector <=> $2::vector) AS distance
+            SELECT t.*, COALESCE(g.name, t.genre) AS genre, (tf.acoustic_vector_8d <-> $1::vector) + (tf.embedding_vector <=> $2::vector) AS distance
             FROM tracks t
             JOIN track_features tf ON t.id = tf.track_id
+            LEFT JOIN genres g ON g.id = t.genre_id
             WHERE t.id NOT IN (${recentIds.map((_,i) => `$${i+3}`).join(',')}) AND tf.acoustic_vector_8d IS NOT NULL AND tf.embedding_vector IS NOT NULL
             ORDER BY distance ASC LIMIT $${recentIds.length + 3}
           `, [vecStr, effnetStr, ...recentIds, constraints.nearestNeighborLimit]);
         } else {
           upNextRes = await queryWithRetry(`
-            SELECT t.*, tf.acoustic_vector_8d <-> $1::vector AS distance
+            SELECT t.*, COALESCE(g.name, t.genre) AS genre, tf.acoustic_vector_8d <-> $1::vector AS distance
             FROM tracks t
             JOIN track_features tf ON t.id = tf.track_id
+            LEFT JOIN genres g ON g.id = t.genre_id
             WHERE t.id NOT IN (${recentIds.map((_,i) => `$${i+2}`).join(',')}) AND tf.acoustic_vector_8d IS NOT NULL
             ORDER BY distance ASC LIMIT $${recentIds.length + 2}
           `, [vecStr, ...recentIds, constraints.nearestNeighborLimit]);
@@ -1615,7 +1620,7 @@ export async function getHubCollections(
   } else if (systemPlaylistConfig.upNext) {
     // Fallback: use global tracks table
     const recentTracksRes = await queryWithRetry(
-      'SELECT t.id, t.genre, tf.acoustic_vector_8d, tf.embedding_vector FROM tracks t JOIN track_features tf ON t.id = tf.track_id WHERE t.last_played_at IS NOT NULL AND tf.acoustic_vector_8d IS NOT NULL ORDER BY t.last_played_at DESC LIMIT 5'
+      'SELECT t.id, COALESCE(g.name, t.genre) AS genre, tf.acoustic_vector_8d, tf.embedding_vector FROM tracks t JOIN track_features tf ON t.id = tf.track_id LEFT JOIN genres g ON g.id = t.genre_id WHERE t.last_played_at IS NOT NULL AND tf.acoustic_vector_8d IS NOT NULL ORDER BY t.last_played_at DESC LIMIT 5'
     );
      const profile = buildTasteProfileCentroids(recentTracksRes.rows);
      if (profile && profile.acousticCount >= 3) {
@@ -1627,17 +1632,19 @@ export async function getHubCollections(
        let upNextRes;
        if (effnetStr) {
          upNextRes = await queryWithRetry(`
-           SELECT t.*, (tf.acoustic_vector_8d <-> $1::vector) + (tf.embedding_vector <=> $2::vector) AS distance
+           SELECT t.*, COALESCE(g.name, t.genre) AS genre, (tf.acoustic_vector_8d <-> $1::vector) + (tf.embedding_vector <=> $2::vector) AS distance
            FROM tracks t
            JOIN track_features tf ON t.id = tf.track_id
+           LEFT JOIN genres g ON g.id = t.genre_id
            WHERE t.id NOT IN (${recentIds.map((_,i) => `$${i+3}`).join(',')}) AND tf.acoustic_vector_8d IS NOT NULL AND tf.embedding_vector IS NOT NULL
            ORDER BY distance ASC LIMIT $${recentIds.length + 3}
          `, [vecStr, effnetStr, ...recentIds, constraints.nearestNeighborLimit]);
        } else {
          upNextRes = await queryWithRetry(`
-           SELECT t.*, tf.acoustic_vector_8d <-> $1::vector AS distance
+           SELECT t.*, COALESCE(g.name, t.genre) AS genre, tf.acoustic_vector_8d <-> $1::vector AS distance
            FROM tracks t
            JOIN track_features tf ON t.id = tf.track_id
+           LEFT JOIN genres g ON g.id = t.genre_id
            WHERE t.id NOT IN (${recentIds.map((_,i) => `$${i+2}`).join(',')}) AND tf.acoustic_vector_8d IS NOT NULL
            ORDER BY distance ASC LIMIT $${recentIds.length + 2}
          `, [vecStr, ...recentIds, constraints.nearestNeighborLimit]);
@@ -1706,8 +1713,9 @@ export async function getHubCollections(
       const topIds = userTopTracks.map((t: any) => t.id);
       const topPlaceholders = topIds.map((_, i) => `$${i + 1}`).join(',');
       const topVecRes = await queryWithRetry(`
-        SELECT t.id, t.genre, tf.acoustic_vector_8d, tf.embedding_vector
+        SELECT t.id, COALESCE(g.name, t.genre) AS genre, tf.acoustic_vector_8d, tf.embedding_vector
         FROM tracks t JOIN track_features tf ON t.id = tf.track_id
+        LEFT JOIN genres g ON g.id = t.genre_id
         WHERE t.id IN (${topPlaceholders}) AND tf.acoustic_vector_8d IS NOT NULL
       `, topIds);
 
@@ -1721,9 +1729,10 @@ export async function getHubCollections(
         let vaultRes;
         if (effnetStr) {
           vaultRes = await queryWithRetry(`
-            SELECT t.*, (tf.acoustic_vector_8d <-> $1::vector) + (tf.embedding_vector <=> $2::vector) AS distance
+            SELECT t.*, COALESCE(g.name, t.genre) AS genre, (tf.acoustic_vector_8d <-> $1::vector) + (tf.embedding_vector <=> $2::vector) AS distance
             FROM tracks t
             JOIN track_features tf ON t.id = tf.track_id
+            LEFT JOIN genres g ON g.id = t.genre_id
             WHERE t.id NOT IN (
               SELECT track_id FROM user_playback_stats WHERE user_id = $4 AND play_count > 0
             ) AND tf.acoustic_vector_8d IS NOT NULL AND tf.embedding_vector IS NOT NULL
@@ -1731,9 +1740,10 @@ export async function getHubCollections(
           `, [vecStr, effnetStr, constraints.nearestNeighborLimit, userId]);
         } else {
           vaultRes = await queryWithRetry(`
-            SELECT t.*, tf.acoustic_vector_8d <-> $1::vector AS distance
+            SELECT t.*, COALESCE(g.name, t.genre) AS genre, tf.acoustic_vector_8d <-> $1::vector AS distance
             FROM tracks t
             JOIN track_features tf ON t.id = tf.track_id
+            LEFT JOIN genres g ON g.id = t.genre_id
             WHERE t.id NOT IN (
               SELECT track_id FROM user_playback_stats WHERE user_id = $3 AND play_count > 0
             ) AND tf.acoustic_vector_8d IS NOT NULL
@@ -1752,7 +1762,7 @@ export async function getHubCollections(
   } else if (systemPlaylistConfig.vault) {
     // Fallback: global
     const topTracksRes = await queryWithRetry(
-      'SELECT t.id, t.genre, tf.acoustic_vector_8d, tf.embedding_vector FROM tracks t JOIN track_features tf ON t.id = tf.track_id WHERE t.play_count > 0 AND tf.acoustic_vector_8d IS NOT NULL ORDER BY t.play_count DESC LIMIT 10'
+      'SELECT t.id, COALESCE(g.name, t.genre) AS genre, tf.acoustic_vector_8d, tf.embedding_vector FROM tracks t JOIN track_features tf ON t.id = tf.track_id LEFT JOIN genres g ON g.id = t.genre_id WHERE t.play_count > 0 AND tf.acoustic_vector_8d IS NOT NULL ORDER BY t.play_count DESC LIMIT 10'
     );
     const profile = buildTasteProfileCentroids(topTracksRes.rows);
     if (profile) {
@@ -1763,17 +1773,19 @@ export async function getHubCollections(
        let vaultRes;
        if (effnetStr) {
          vaultRes = await queryWithRetry(`
-           SELECT t.*, (tf.acoustic_vector_8d <-> $1::vector) + (tf.embedding_vector <=> $2::vector) AS distance
+           SELECT t.*, COALESCE(g.name, t.genre) AS genre, (tf.acoustic_vector_8d <-> $1::vector) + (tf.embedding_vector <=> $2::vector) AS distance
            FROM tracks t
            JOIN track_features tf ON t.id = tf.track_id
+           LEFT JOIN genres g ON g.id = t.genre_id
            WHERE t.play_count = 0 AND tf.acoustic_vector_8d IS NOT NULL AND tf.embedding_vector IS NOT NULL
            ORDER BY distance ASC LIMIT $3
          `, [vecStr, effnetStr, constraints.nearestNeighborLimit]);
        } else {
          vaultRes = await queryWithRetry(`
-           SELECT t.*, tf.acoustic_vector_8d <-> $1::vector AS distance
+           SELECT t.*, COALESCE(g.name, t.genre) AS genre, tf.acoustic_vector_8d <-> $1::vector AS distance
            FROM tracks t
            JOIN track_features tf ON t.id = tf.track_id
+           LEFT JOIN genres g ON g.id = t.genre_id
            WHERE t.play_count = 0 AND tf.acoustic_vector_8d IS NOT NULL
            ORDER BY distance ASC LIMIT $2
          `, [vecStr, constraints.nearestNeighborLimit]);
@@ -1793,7 +1805,8 @@ export async function getHubCollections(
   if (userId && (systemPlaylistConfig.genreHeavyRotation || systemPlaylistConfig.genreRediscovery)) {
     const genreStatsRes = await queryWithRetry(`
       SELECT
-        trim(t.genre) AS genre,
+        g.id AS genre_id,
+        g.name AS genre,
         COUNT(*)::int AS track_count,
         COALESCE(SUM(ups.play_count), 0)::int AS user_plays,
         COUNT(*) FILTER (
@@ -1803,9 +1816,10 @@ export async function getHubCollections(
              OR ups.last_played_at < NOW() - INTERVAL '4 weeks'
         )::int AS rediscovery_count
       FROM tracks t
+      JOIN genres g ON g.id = t.genre_id AND g.merged_into IS NULL
       LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
-      WHERE t.genre IS NOT NULL AND trim(t.genre) <> ''
-      GROUP BY trim(t.genre)
+      WHERE trim(g.name) <> ''
+      GROUP BY g.id, g.name
       HAVING COUNT(*) >= ${systemPlaylistMinTracks}
       ORDER BY COALESCE(SUM(ups.play_count), 0) DESC, COUNT(*) DESC
       LIMIT ${maxGenreSystemMixes}
@@ -1814,6 +1828,7 @@ export async function getHubCollections(
     const seenGenreSlugs = new Set<string>();
     for (const row of genreStatsRes.rows) {
       const rawGenre = String((row as any).genre || '').trim();
+      const canonicalGenreId = String((row as any).genre_id || '');
       const genreSlug = toSystemGenreSlug(rawGenre);
       if (!rawGenre || seenGenreSlugs.has(genreSlug)) continue;
       seenGenreSlugs.add(genreSlug);
@@ -1826,10 +1841,10 @@ export async function getHubCollections(
             JOIN tracks t ON t.id = ups.track_id
             WHERE ups.user_id = $1
               AND ups.play_count > 0
-              AND lower(trim(t.genre)) = lower($2)
+              AND t.genre_id = $2::uuid
             ORDER BY ups.play_count DESC, ups.last_played_at DESC NULLS LAST
             LIMIT ${systemPlaylistTrackLimit}
-          `, [userId, rawGenre])
+          `, [userId, canonicalGenreId])
         : { rows: [] };
 
       if (systemPlaylistConfig.genreHeavyRotation && mostPlayedRes.rows.length >= systemPlaylistMinTracks) {
@@ -1847,7 +1862,7 @@ export async function getHubCollections(
             SELECT t.*, COALESCE(ups.play_count, 0) AS play_count, ups.last_played_at AS user_last_played
             FROM tracks t
             LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
-            WHERE lower(trim(t.genre)) = lower($2)
+            WHERE t.genre_id = $2::uuid
               AND (
                 ups.track_id IS NULL
                 OR ups.play_count = 0
@@ -1859,7 +1874,7 @@ export async function getHubCollections(
               ups.last_played_at ASC NULLS FIRST,
               random()
             LIMIT ${systemPlaylistTrackLimit}
-          `, [userId, rawGenre])
+          `, [userId, canonicalGenreId])
         : { rows: [] };
 
       if (systemPlaylistConfig.genreRediscovery && rediscoveryRes.rows.length >= systemPlaylistMinTracks) {
@@ -1922,17 +1937,18 @@ export async function getHubCollections(
       const decadeGenreRes = await queryWithRetry(`
         SELECT
           (floor(t.year / 10) * 10)::int AS decade,
-          trim(t.genre) AS genre,
+          g.id AS genre_id,
+          g.name AS genre,
           COUNT(*)::int AS track_count,
           COALESCE(SUM(ups.play_count), 0)::int AS user_plays
         FROM tracks t
+        JOIN genres g ON g.id = t.genre_id AND g.merged_into IS NULL
         LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
         WHERE t.year IS NOT NULL
           AND t.year >= 1950
           AND t.year <= EXTRACT(YEAR FROM NOW())::int
-          AND t.genre IS NOT NULL
-          AND trim(t.genre) <> ''
-        GROUP BY (floor(t.year / 10) * 10)::int, trim(t.genre)
+          AND trim(g.name) <> ''
+        GROUP BY (floor(t.year / 10) * 10)::int, g.id, g.name
         HAVING COUNT(*) >= ${systemPlaylistMinTracks}
         ORDER BY user_plays DESC, track_count DESC, decade DESC
         LIMIT 40
@@ -1957,6 +1973,7 @@ export async function getHubCollections(
       for (const row of selectedDecadeGenreRows) {
         const decade = Number((row as any).decade);
         const rawGenre = String((row as any).genre || '').trim();
+        const canonicalGenreId = String((row as any).genre_id || '');
         const genreSlug = toSystemGenreSlug(rawGenre);
         const slug = `${decade}-${genreSlug}`;
         if (!Number.isFinite(decade) || !rawGenre || seenDecadeGenreSlugs.has(slug)) continue;
@@ -1969,10 +1986,10 @@ export async function getHubCollections(
           LEFT JOIN user_playback_stats ups ON ups.track_id = t.id AND ups.user_id = $1
           WHERE t.year >= $2
             AND t.year < $3
-            AND lower(trim(t.genre)) = lower($4)
+            AND t.genre_id = $4::uuid
           ORDER BY COALESCE(ups.play_count, 0) DESC, ups.last_played_at DESC NULLS LAST, random()
           LIMIT ${systemPlaylistTrackLimit}
-        `, [userId, decade, decade + 10, rawGenre]);
+        `, [userId, decade, decade + 10, canonicalGenreId]);
 
         if (decadeGenreTracksRes.rows.length >= systemPlaylistMinTracks) {
           const playlist = await persistSystem(
@@ -2035,8 +2052,9 @@ export async function calculateNextInfinityTrack(
     const placeholders = last10Ids.map((_, i) => `$${i + 1}`).join(',');
     const vecRes = await queryWithRetry(`
       SELECT t.id, tf.acoustic_vector_8d
-      FROM tracks t JOIN track_features tf ON t.id = tf.track_id 
+      FROM tracks t JOIN track_features tf ON t.id = tf.track_id
       WHERE t.id IN (${placeholders}) AND tf.acoustic_vector_8d IS NOT NULL
+        AND tf.is_simulated = FALSE
     `, last10Ids);
 
     // Map rows back to the ordered last10 array
@@ -2109,6 +2127,7 @@ export async function calculateNextInfinityTrack(
       SELECT t.id, tf.embedding_vector
       FROM tracks t JOIN track_features tf ON t.id = tf.track_id
       WHERE t.id IN (${placeholders2}) AND tf.embedding_vector IS NOT NULL
+        AND tf.is_simulated = FALSE
     `, last10Ids);
     if (effnetRes.rows.length > 0) {
       const lambda = 0.8;
@@ -2145,7 +2164,12 @@ export async function calculateNextInfinityTrack(
   let currentGenre = '';
   if (sessionHistoryTrackIds.length > 0) {
     const lastTrackId = sessionHistoryTrackIds[sessionHistoryTrackIds.length - 1];
-    const lastTrackRes = await queryWithRetry('SELECT genre FROM tracks WHERE id = $1', [lastTrackId]);
+    const lastTrackRes = await queryWithRetry(`
+      SELECT COALESCE(g.name, t.genre) AS genre
+      FROM tracks t
+      LEFT JOIN genres g ON g.id = t.genre_id
+      WHERE t.id = $1
+    `, [lastTrackId]);
     if (lastTrackRes.rows.length > 0 && (lastTrackRes.rows[0] as any).genre) {
       currentGenre = (lastTrackRes.rows[0] as any).genre as string;
     }
@@ -2168,20 +2192,26 @@ export async function calculateNextInfinityTrack(
         ? `AND ${historyClause.replace(/^WHERE /, '').replace(/\$(\d+)/g, (_, n) => `$${Number(n) + 1}`)}`
         : '';
       res = await queryWithRetry(`
-        SELECT t.*, (tf.acoustic_vector_8d <-> $1::vector) + (tf.embedding_vector <=> $2::vector) AS distance
+        SELECT t.*, COALESCE(g.name, t.genre) AS genre,
+               (tf.acoustic_vector_8d <-> $1::vector) + (tf.embedding_vector <=> $2::vector) AS distance
         FROM tracks t
         JOIN track_features tf ON t.id = tf.track_id
+        LEFT JOIN genres g ON g.id = t.genre_id
         WHERE tf.acoustic_vector_8d IS NOT NULL AND tf.embedding_vector IS NOT NULL
+        AND tf.is_simulated = FALSE
         ${renumberedHistory}
         ORDER BY distance ASC
         LIMIT $${penaltyIds.length + 3}
       `, [vectorStr, effnetVectorStr, ...penaltyIds, overFetchLimit]);
     } else {
       res = await queryWithRetry(`
-        SELECT t.*, tf.acoustic_vector_8d <-> $1::vector AS distance
+        SELECT t.*, COALESCE(g.name, t.genre) AS genre,
+               tf.acoustic_vector_8d <-> $1::vector AS distance
         FROM tracks t
         JOIN track_features tf ON t.id = tf.track_id
-        WHERE tf.acoustic_vector_8d IS NOT NULL ${historyClause ? `AND ${historyClause.replace(/^WHERE /, '')}` : ''}
+        LEFT JOIN genres g ON g.id = t.genre_id
+        WHERE tf.acoustic_vector_8d IS NOT NULL AND tf.is_simulated = FALSE
+        ${historyClause ? `AND ${historyClause.replace(/^WHERE /, '')}` : ''}
         ORDER BY distance ASC
         LIMIT $${penaltyIds.length + 2}
       `, [vectorStr, ...penaltyIds, overFetchLimit]);
@@ -2229,9 +2259,16 @@ export async function calculateNextInfinityTrack(
     penaltySize = Math.max(0, Math.floor(penaltySize / 2));
   }
 
-  // Handle absolute pool exhaustion gracefully
+  // Handle absolute pool exhaustion gracefully. Prefer genuinely analyzed
+  // tracks — simulated-fallback features are barred from Infinity unless the
+  // library holds nothing else.
   if (finalCandidates.length === 0) {
-      const randomFallback = await queryWithRetry('SELECT * FROM tracks ORDER BY RANDOM() LIMIT 1');
+      const randomFallback = await queryWithRetry(`
+        SELECT t.* FROM tracks t
+        LEFT JOIN track_features tf ON tf.track_id = t.id
+        ORDER BY (tf.track_id IS NOT NULL AND tf.is_simulated = FALSE) DESC, RANDOM()
+        LIMIT 1
+      `);
       return randomFallback.rows[0];
   }
 

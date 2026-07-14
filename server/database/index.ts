@@ -1,6 +1,8 @@
 import { Pool } from 'pg';
 import path from 'path';
 import fs from 'fs';
+import { ARTWORK_EXTRACTION_VERSION } from '../services/artworkVersion';
+import { normalizeGenreIdentity } from '../utils/genreIdentity';
 
 let pool: Pool | null = null;
 let initPromise: Promise<Pool> | null = null;
@@ -192,11 +194,12 @@ export async function initDB(): Promise<Pool> {
 
         DO $$
         BEGIN
-          -- art_hash: NULL = needs processing; '' = processed, no embedded art;
+          -- art_hash: NULL = needs processing; '' = processed, no local art;
           -- otherwise the content hash of the encoded cover (see services/artCache.ts).
           -- file_mtime: epoch ms of the source file, for change detection on re-scan.
           -- file_size: bytes of the source file, surfaced as Subsonic Child.size.
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS art_hash TEXT;
+          ALTER TABLE tracks ADD COLUMN IF NOT EXISTS artwork_version INTEGER;
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS file_mtime BIGINT;
           ALTER TABLE tracks ADD COLUMN IF NOT EXISTS file_size BIGINT;
           -- Raw (base64-decoded) path bytes, materialized + indexed so directory
@@ -208,6 +211,19 @@ export async function initDB(): Promise<Pool> {
           WHEN OTHERS THEN null;
         END $$;
         CREATE INDEX IF NOT EXISTS tracks_art_hash_idx ON tracks(art_hash);
+
+        -- One-time targeted artwork backfill. Existing successful covers and
+        -- non-ASF no-art rows are known-good under v1. ASF/audio rows previously
+        -- recorded as artless stay stale so the fixed WM/Picture recovery runs
+        -- on the next sync walk. addTrack stamps every completed attempt, so
+        -- genuinely artless WMA files are not retried forever.
+        UPDATE tracks
+           SET artwork_version = ${ARTWORK_EXTRACTION_VERSION}
+         WHERE artwork_version IS NULL
+           AND NOT (
+             COALESCE(format, '') ILIKE 'ASF/audio%'
+             AND COALESCE(art_hash, '') = ''
+           );
 
         -- Backfill decoded_path for pre-existing rows. Idempotent: matches 0 rows
         -- once populated (addTrack sets it on every insert). Safe on all rows —
@@ -535,6 +551,15 @@ export async function initDB(): Promise<Pool> {
           created_at TIMESTAMPTZ DEFAULT NOW()
         );
 
+        DO $$
+        BEGIN
+          ALTER TABLE genres ADD COLUMN IF NOT EXISTS normalized_key TEXT;
+          ALTER TABLE genres ADD COLUMN IF NOT EXISTS merged_into UUID REFERENCES genres(id) ON DELETE SET NULL;
+        EXCEPTION WHEN OTHERS THEN null;
+        END $$;
+        CREATE INDEX IF NOT EXISTS genres_normalized_key_idx ON genres(normalized_key);
+        CREATE INDEX IF NOT EXISTS genres_merged_into_idx ON genres(merged_into);
+
         -- Add FK columns to tracks (nullable, backfilled by migration)
         DO $$
         BEGIN
@@ -548,6 +573,18 @@ export async function initDB(): Promise<Pool> {
         CREATE INDEX IF NOT EXISTS tracks_artist_id_idx ON tracks(artist_id);
         CREATE INDEX IF NOT EXISTS tracks_album_id_idx ON tracks(album_id);
         CREATE INDEX IF NOT EXISTS tracks_genre_id_idx ON tracks(genre_id);
+
+        -- Normalized primary + secondary genre membership. Raw Picard strings
+        -- remain in tracks.genre/tracks.genres; this table is Aurora's resolved
+        -- library view and can therefore be rebuilt when a grouping is restored.
+        CREATE TABLE IF NOT EXISTS track_genres (
+          track_id TEXT NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+          genre_id UUID NOT NULL REFERENCES genres(id) ON DELETE CASCADE,
+          position INTEGER NOT NULL DEFAULT 0 CHECK (position >= 0),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (track_id, genre_id)
+        );
+        CREATE INDEX IF NOT EXISTS track_genres_genre_id_idx ON track_genres(genre_id, track_id);
 
         -- External metadata cache columns
         DO $$
@@ -713,6 +750,22 @@ export async function initDB(): Promise<Pool> {
           UNIQUE(candidate_key, signature)
         );
         CREATE INDEX IF NOT EXISTS artist_duplicate_reviews_key_idx ON artist_duplicate_reviews(candidate_key, signature);
+
+        CREATE TABLE IF NOT EXISTS genre_duplicate_reviews (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          candidate_key TEXT NOT NULL,
+          signature TEXT NOT NULL,
+          decision TEXT NOT NULL CHECK (decision IN ('dismissed', 'grouped', 'restored')),
+          canonical_genre_id UUID REFERENCES genres(id) ON DELETE SET NULL,
+          genre_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+          score_evidence JSONB,
+          decided_by UUID REFERENCES users(id) ON DELETE SET NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        CREATE INDEX IF NOT EXISTS genre_duplicate_reviews_key_idx
+          ON genre_duplicate_reviews(candidate_key, signature, created_at DESC);
+        CREATE INDEX IF NOT EXISTS genre_duplicate_reviews_canonical_idx
+          ON genre_duplicate_reviews(canonical_genre_id, created_at DESC);
 
         CREATE TABLE IF NOT EXISTS user_playback_stats (
           user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -1025,7 +1078,7 @@ export async function getDatabaseStats() {
       tracks: "SELECT count(*) FROM tracks",
       artists: "SELECT count(*) FROM artists WHERE merged_into IS NULL",
       albums: "SELECT count(*) FROM albums",
-      genres: "SELECT count(*) FROM genres",
+      genres: "SELECT count(*) FROM genres WHERE merged_into IS NULL",
       playlists: "SELECT count(*) FROM playlists"
     };
 
@@ -1123,7 +1176,7 @@ const SNAKE_DUP_COLUMNS = [
   'album_artist', 'track_number', 'disc_number', 'release_type', 'is_compilation',
   'play_count', 'last_played_at', 'file_size', 'artist_id', 'album_id', 'genre_id',
   'mb_recording_id', 'mb_track_id', 'mb_album_id', 'mb_artist_id', 'mb_album_artist_id',
-  'mb_release_group_id', 'mb_work_id', 'art_hash', 'playlist_added_at', 'is_loved', 'raw_urls',
+  'mb_release_group_id', 'mb_work_id', 'art_hash', 'artwork_version', 'playlist_added_at', 'is_loved', 'raw_urls', 'canonical_genre',
 ];
 
 function mapTrackRow(row: any) {
@@ -1142,6 +1195,7 @@ function mapTrackRow(row: any) {
     artistId: row.artist_id,
     albumId: row.album_id,
     genreId: row.genre_id,
+    canonicalGenre: row.canonical_genre || row.genre,
     mbRecordingId: row.mb_recording_id,
     mbTrackId: row.mb_track_id,
     mbAlbumId: row.mb_album_id,
@@ -1171,12 +1225,13 @@ export async function getAllTracks(userId: string | null = null) {
   // single pass using ult_user_id_idx / ult_track_id_idx. Matters at 100k tracks.
   const res = userId
     ? await db.query(`
-        SELECT t.*, (ult.track_id IS NOT NULL) AS is_loved
+        SELECT t.*, g.name AS canonical_genre, (ult.track_id IS NOT NULL) AS is_loved
         FROM tracks t
+        LEFT JOIN genres g ON g.id = t.genre_id
         LEFT JOIN user_loved_tracks ult
           ON ult.track_id = t.id AND ult.user_id = $1
       `, [userId])
-    : await db.query('SELECT t.*, FALSE AS is_loved FROM tracks t');
+    : await db.query('SELECT t.*, g.name AS canonical_genre, FALSE AS is_loved FROM tracks t LEFT JOIN genres g ON g.id = t.genre_id');
   // Full-library / admin-tool load doesn't need embedded file URLs — no full-
   // `library` consumer reads them. mapTrackRow already strips the raw `raw_urls`
   // dup; also drop the parsed array here. (Per-entity endpoints keep rawUrls.)
@@ -1261,14 +1316,14 @@ export async function getPathsWithMeta(): Promise<Map<string, { mtime: number | 
   // file mtime is unchanged, so a transient failure (a file scanned mid-copy,
   // a cover sharp couldn't decode) self-heals on the next scan instead of
   // staying stranded — undiscoverable — forever.
-  const res = await db.query('SELECT path, file_mtime, art_hash, format FROM tracks');
+  const res = await db.query('SELECT path, file_mtime, art_hash, artwork_version, format FROM tracks');
   const map = new Map<string, { mtime: number | null; artHash: string | null; needsReparse: boolean }>();
   for (const r of res.rows) {
     if (!r.path) continue;
     map.set(r.path, {
       mtime: r.file_mtime != null ? Number(r.file_mtime) : null,
       artHash: r.art_hash ?? null,
-      needsReparse: r.format == null,
+      needsReparse: r.format == null || Number(r.artwork_version || 0) < ARTWORK_EXTRACTION_VERSION,
     });
   }
   return map;
@@ -1287,6 +1342,45 @@ export async function getArtHashForPath(b64Path: string): Promise<string | null>
   const res = await db.query('SELECT art_hash FROM tracks WHERE path = $1 LIMIT 1', [b64Path]);
   if (res.rows.length === 0) return null;
   return res.rows[0].art_hash ?? null;
+}
+
+export interface ArtworkInfo {
+  artHash: string | null;
+  artworkVersion: number;
+  albumId: string | null;
+  album: string | null;
+  artist: string | null;
+  mbAlbumId: string | null;
+  cachedImageUrl: string | null;
+}
+
+export async function getArtworkInfoForPath(b64Path: string): Promise<ArtworkInfo | null> {
+  const db = await initDB();
+  const res = await db.query(`
+    SELECT
+      t.art_hash,
+      t.artwork_version,
+      t.album_id,
+      COALESCE(a.title, t.album) AS album,
+      COALESCE(a.artist_name, t.album_artist, t.artist) AS artist,
+      COALESCE(t.mb_album_id, a.mbid) AS mb_album_id,
+      a.image_url
+    FROM tracks t
+    LEFT JOIN albums a ON a.id = t.album_id
+    WHERE t.path = $1
+    LIMIT 1
+  `, [b64Path]);
+  if (res.rows.length === 0) return null;
+  const row = res.rows[0];
+  return {
+    artHash: row.art_hash ?? null,
+    artworkVersion: Number(row.artwork_version || 0),
+    albumId: row.album_id || null,
+    album: row.album || null,
+    artist: row.artist || null,
+    mbAlbumId: row.mb_album_id || null,
+    cachedImageUrl: row.image_url || null,
+  };
 }
 
 // Returns a Buffer array of decoded UTF-8 paths matching a specific directory prefix.
@@ -1345,8 +1439,8 @@ export async function addTrack(track: any) {
   const sanitizeArray = (arr: any) => Array.isArray(arr) ? arr.map(sanitizeString) : arr;
 
   await db.query(`
-    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls, art_hash, file_mtime, file_size, decoded_path, lossless)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, decode($14, 'base64'), $33)
+    INSERT INTO tracks (id, title, artist, album_artist, artists, album, genre, duration, track_number, disc_number, year, release_type, is_compilation, path, bitrate, format, artist_id, album_id, genre_id, genres, isrc, mb_recording_id, mb_track_id, mb_album_id, mb_artist_id, mb_album_artist_id, mb_release_group_id, mb_work_id, raw_urls, art_hash, artwork_version, file_mtime, file_size, decoded_path, lossless)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30, $31, $32, $33, decode($14, 'base64'), $34)
     ON CONFLICT (id) DO UPDATE SET
       title = EXCLUDED.title,
       artist = EXCLUDED.artist,
@@ -1379,6 +1473,7 @@ export async function addTrack(track: any) {
       -- COALESCE so a metadata-parse-failure re-insert (which passes no art
       -- fields) never wipes an already-encoded cover.
       art_hash = COALESCE(EXCLUDED.art_hash, tracks.art_hash),
+      artwork_version = COALESCE(EXCLUDED.artwork_version, tracks.artwork_version),
       file_mtime = COALESCE(EXCLUDED.file_mtime, tracks.file_mtime),
       file_size = COALESCE(EXCLUDED.file_size, tracks.file_size),
       decoded_path = EXCLUDED.decoded_path,
@@ -1417,6 +1512,7 @@ export async function addTrack(track: any) {
       -- Trigger the upsert when only the artwork or the file mtime changed, so
       -- a re-tag (identical text metadata, new cover) still records the update.
       (EXCLUDED.art_hash IS NOT NULL AND tracks.art_hash IS DISTINCT FROM EXCLUDED.art_hash) OR
+      (EXCLUDED.artwork_version IS NOT NULL AND tracks.artwork_version IS DISTINCT FROM EXCLUDED.artwork_version) OR
       (EXCLUDED.file_mtime IS NOT NULL AND tracks.file_mtime IS DISTINCT FROM EXCLUDED.file_mtime) OR
       (EXCLUDED.file_size IS NOT NULL AND tracks.file_size IS DISTINCT FROM EXCLUDED.file_size) OR
       (EXCLUDED.lossless IS NOT NULL AND tracks.lossless IS DISTINCT FROM EXCLUDED.lossless)
@@ -1451,10 +1547,16 @@ export async function addTrack(track: any) {
     track.mbWorkId || null,
     track.rawUrls ? JSON.stringify(track.rawUrls) : null,
     track.artHash ?? null,
+    track.artworkVersion ?? null,
     track.fileMtime ?? null,
     track.fileSize ?? null,
     typeof track.lossless === 'boolean' ? track.lossless : null,
   ]);
+
+  const associationNames = Array.isArray(track.genres) && track.genres.length > 0
+    ? track.genres
+    : splitGenreNames(track.genre);
+  await replaceTrackGenreAssociations(db, id, associationNames.length > 0 ? associationNames : [UNKNOWN_GENRE]);
 
   if (track.audioFeatures) {
     const vector8dStr = `[${track.audioFeatures.acoustic_vector.join(',')}]`;
@@ -1870,8 +1972,11 @@ export async function purgeOrphanedEntities(): Promise<{ albums: number; artists
       RETURNING id
     `),
     db.query(`
-      DELETE FROM genres
-      WHERE id NOT IN (SELECT DISTINCT genre_id FROM tracks WHERE genre_id IS NOT NULL)
+      DELETE FROM genres g
+      WHERE g.merged_into IS NULL
+        AND NOT EXISTS (SELECT 1 FROM tracks t WHERE t.genre_id = g.id)
+        AND NOT EXISTS (SELECT 1 FROM track_genres tg WHERE tg.genre_id = g.id)
+        AND NOT EXISTS (SELECT 1 FROM genres alias WHERE alias.merged_into = g.id)
       RETURNING id
     `),
   ]);
@@ -2072,6 +2177,10 @@ function clearEntityCaches() {
   genreCache.clear();
 }
 
+export function invalidateGenreEntityCache() {
+  genreCache.clear();
+}
+
 // Sanitize strings to remove null bytes which crash Postgres
 const sanitizeString = (str: any) => typeof str === 'string' ? str.replace(/\x00/g, '') : str;
 
@@ -2084,6 +2193,17 @@ async function resolveMergedArtist(db: Pool, id: string): Promise<string> {
     currentId = next;
   }
   return currentId;
+}
+
+async function resolveMergedGenre(db: Pool, id: string): Promise<string> {
+  let currentId = id;
+  for (let i = 0; i < 8; i++) {
+    const row = await db.query('SELECT merged_into FROM genres WHERE id = $1', [currentId]);
+    const next = row.rows[0]?.merged_into;
+    if (!next || next === currentId) return currentId;
+    currentId = next;
+  }
+  throw new Error('Genre redirect chain is invalid');
 }
 
 export async function getOrCreateArtist(name?: string | null, mbid?: string | null): Promise<string> {
@@ -2332,25 +2452,62 @@ export async function recomputeIsVaPseudo(artistId?: string | null): Promise<voi
 export async function getOrCreateGenre(name?: string | null): Promise<string> {
   const safeName = sanitizeString(name)?.trim() || UNKNOWN_GENRE;
   const lowerName = safeName.toLowerCase();
+  const normalizedKey = normalizeGenreIdentity(safeName);
 
   const cached = genreCache.get(lowerName);
   if (cached) return cached;
 
   const db = await initDB();
   
-  const existing = await db.query('SELECT id FROM genres WHERE LOWER(name) = $1', [lowerName]);
+  const existing = await db.query('SELECT id, merged_into, normalized_key FROM genres WHERE LOWER(name) = $1', [lowerName]);
   if (existing.rows.length > 0) {
-    genreCache.set(lowerName, existing.rows[0].id);
-    return existing.rows[0].id;
+    const row = existing.rows[0];
+    if (row.normalized_key !== normalizedKey) {
+      await db.query('UPDATE genres SET normalized_key = $1 WHERE id = $2', [normalizedKey, row.id]);
+    }
+    const id = row.merged_into ? await resolveMergedGenre(db, row.id) : row.id;
+    genreCache.set(lowerName, id);
+    return id;
   }
 
   const res = await db.query(
-    `INSERT INTO genres (name) VALUES ($1) ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`,
-    [safeName]
+    `INSERT INTO genres (name, normalized_key) VALUES ($1, $2)
+     ON CONFLICT (name) DO UPDATE SET normalized_key = EXCLUDED.normalized_key
+     RETURNING id, merged_into`,
+    [safeName, normalizedKey]
   );
-  const id = (res.rows[0] as any).id as string;
+  const row = res.rows[0] as any;
+  const id = row.merged_into ? await resolveMergedGenre(db, row.id) : row.id as string;
   genreCache.set(lowerName, id);
   return id;
+}
+
+async function replaceTrackGenreAssociations(
+  db: Pool,
+  trackId: string,
+  rawGenres: string[],
+): Promise<string[]> {
+  const names = Array.from(new Set(rawGenres.map(name => name.trim()).filter(Boolean)));
+  const genreIds: string[] = [];
+  for (const name of names) genreIds.push(await getOrCreateGenre(name));
+  const uniqueIds = Array.from(new Set(genreIds));
+
+  await db.query('DELETE FROM track_genres WHERE track_id = $1', [trackId]);
+  if (uniqueIds.length > 0) {
+    const params: Array<string | number> = [];
+    const values = uniqueIds.map((genreId, index) => {
+      params.push(trackId, genreId, index);
+      const offset = index * 3;
+      return `($${offset + 1}, $${offset + 2}, $${offset + 3})`;
+    });
+    await db.query(
+      `INSERT INTO track_genres (track_id, genre_id, position)
+       VALUES ${values.join(', ')}
+       ON CONFLICT (track_id, genre_id) DO UPDATE SET position = EXCLUDED.position`,
+      params,
+    );
+  }
+  return uniqueIds;
 }
 
 export async function getArtistById(id: string) {
@@ -2701,7 +2858,8 @@ export async function getTrackCredits(trackId: string): Promise<any[]> {
 
 export async function getGenreById(id: string) {
   const db = await initDB();
-  const res = await db.query('SELECT * FROM genres WHERE id = $1', [id]);
+  const canonicalId = await resolveMergedGenre(db, id);
+  const res = await db.query('SELECT * FROM genres WHERE id = $1', [canonicalId]);
   return res.rows[0] || null;
 }
 
@@ -2770,7 +2928,7 @@ export async function getAllAlbums() {
         -- LOCAL /api/art URL for the card instead of falling back to the
         -- (rate-limited) external art proxy when the album has no image_url.
         (array_agg(t.art_hash ORDER BY t.track_number NULLS LAST) FILTER (WHERE COALESCE(t.art_hash, '') <> ''))[1] AS art_hash,
-        string_agg(DISTINCT NULLIF(btrim(t.genre), ''), ',') AS derived_genres,
+        string_agg(DISTINCT NULLIF(btrim(canonical_genre.name), ''), ',') AS derived_genres,
         CASE
           WHEN COUNT(DISTINCT t.release_type) FILTER (WHERE COALESCE(t.release_type, '') <> '') > 1 THEN 'Various'
           WHEN COUNT(*) FILTER (WHERE COALESCE(t.release_type, '') <> '') > 0
@@ -2778,6 +2936,7 @@ export async function getAllAlbums() {
           ELSE 'Album'
         END AS derived_release_type
       FROM tracks t
+      LEFT JOIN genres canonical_genre ON canonical_genre.id = t.genre_id
       WHERE t.album_id = a.id
     ) agg ON TRUE
     ORDER BY a.title ASC
@@ -2787,7 +2946,17 @@ export async function getAllAlbums() {
 
 export async function getAllGenres() {
   const db = await initDB();
-  const res = await db.query('SELECT * FROM genres ORDER BY name ASC');
+  const res = await db.query(`
+    SELECT g.*,
+      COUNT(DISTINCT tg.track_id)::int AS track_count,
+      COUNT(DISTINCT alias.id)::int AS alias_count
+    FROM genres g
+    LEFT JOIN track_genres tg ON tg.genre_id = g.id
+    LEFT JOIN genres alias ON alias.merged_into = g.id
+    WHERE g.merged_into IS NULL
+    GROUP BY g.id
+    ORDER BY g.name ASC
+  `);
   return res.rows;
 }
 
@@ -2819,9 +2988,10 @@ export async function getGenreTaxonomyPaths(): Promise<{ available: boolean; pat
 
   const res = await db.query(`
     WITH lib AS (
-      SELECT DISTINCT lower(trim(genre)) AS g
-      FROM tracks
-      WHERE genre IS NOT NULL AND trim(genre) <> ''
+      SELECT DISTINCT lower(trim(g.name)) AS g
+      FROM track_genres tg
+      JOIN genres g ON g.id = tg.genre_id
+      WHERE g.merged_into IS NULL AND trim(g.name) <> ''
     )
     SELECT lib.g AS name,
            COALESCE(direct.path, alias.path, sm.path) AS path
@@ -2983,31 +3153,23 @@ export async function getTracksByAlbum(albumId: string, userId: string | null = 
   return res.rows.map(mapTrackRow);
 }
 
-export async function getTracksByGenre(genreId: string, genreName?: string | null, userId: string | null = null) {
+export async function getTracksByGenre(genreId: string, _genreName?: string | null, userId: string | null = null) {
   const db = await initDB();
-  // Match the primary genre_id, and (to mirror the old client-side filter) any
-  // track whose genre name or multi-genre list contains this genre. `genres` is
-  // stored as a JSON array string like ["Rock"], so match the quoted token to
-  // avoid substring bleed ("Rock" vs "Rock and Roll"). The per-user loved join
-  // mirrors getAllTracks so detail views keep loved-state across refresh.
-  const name = (genreName || '').trim();
+  const canonicalGenreId = await resolveMergedGenre(db, genreId);
+  // `track_genres` contains resolved primary and secondary membership, so a
+  // canonical detail page includes every grouped spelling without matching
+  // serialized raw metadata by substring.
   const lovedSelect = userId ? '(ult.track_id IS NOT NULL)' : 'FALSE';
   const lovedJoin = userId ? 'LEFT JOIN user_loved_tracks ult ON ult.track_id = t.id AND ult.user_id = $LOVED' : '';
-  if (!name) {
-    const sql = `SELECT t.*, ${lovedSelect} AS is_loved FROM tracks t ${lovedJoin} WHERE t.genre_id = $1`;
-    const res = userId
-      ? await db.query(sql.replace('$LOVED', '$2'), [genreId, userId])
-      : await db.query(sql, [genreId]);
-    return res.rows.map(mapTrackRow);
-  }
   const sql = `SELECT t.*, ${lovedSelect} AS is_loved
      FROM tracks t ${lovedJoin}
-     WHERE t.genre_id = $1
-        OR lower(btrim(t.genre)) = lower($2)
-        OR t.genres ILIKE $3`;
+     WHERE EXISTS (
+       SELECT 1 FROM track_genres tg
+       WHERE tg.track_id = t.id AND tg.genre_id = $1
+     )`;
   const res = userId
-    ? await db.query(sql.replace('$LOVED', '$4'), [genreId, name, `%"${name}"%`, userId])
-    : await db.query(sql, [genreId, name, `%"${name}"%`]);
+    ? await db.query(sql.replace('$LOVED', '$2'), [canonicalGenreId, userId])
+    : await db.query(sql, [canonicalGenreId]);
   return res.rows.map(mapTrackRow);
 }
 
@@ -3624,6 +3786,27 @@ export async function mergeArtistsManually(opts: {
   clearEntityCaches();
 }
 
+const TRACK_GENRE_ASSOCIATION_BACKFILL_SETTING = 'trackGenreAssociationBackfillV1';
+
+async function backfillTrackGenreAssociations(db: Pool): Promise<void> {
+  if (await getSystemSetting(TRACK_GENRE_ASSOCIATION_BACKFILL_SETTING) === true) return;
+
+  const res = await db.query('SELECT id, genre, genres FROM tracks ORDER BY id');
+  let updated = 0;
+  for (const row of res.rows) {
+    const parsed = parseStringArrayField(row.genres);
+    const rawGenres = parsed.length > 0 ? parsed : splitGenreNames(row.genre);
+    const names = rawGenres.length > 0 ? rawGenres : [UNKNOWN_GENRE];
+    const genreIds = await replaceTrackGenreAssociations(db, row.id, names);
+    if (genreIds[0]) {
+      await db.query('UPDATE tracks SET genre_id = $1 WHERE id = $2 AND genre_id IS DISTINCT FROM $1', [genreIds[0], row.id]);
+    }
+    updated++;
+  }
+  await setSystemSetting(TRACK_GENRE_ASSOCIATION_BACKFILL_SETTING, true);
+  console.log(`[DB Migration] Backfilled canonical genre associations for ${updated} tracks`);
+}
+
 // Backfill entity IDs for tracks that don't have them yet. The legacy featured
 // artist correction is intentionally one-time; new scans already normalize this.
 export async function migrateEntityIds() {
@@ -3632,7 +3815,8 @@ export async function migrateEntityIds() {
   await migrateCompoundArtistCredits(db);
   await syncAlbumArtistNames(db);
 
-  // One-time deduplication to fix case-sensitive album/genre duplicates.
+  // Legacy album deduplication. Genre variants are now admin-reviewed and
+  // therefore must remain as redirectable rows instead of being deleted here.
   try {
     const albumsRes = await db.query('SELECT * FROM albums ORDER BY created_at ASC');
     const seenAlbums = new Map<string, string>();
@@ -3649,24 +3833,13 @@ export async function migrateEntityIds() {
       }
     }
 
-    const genresRes = await db.query('SELECT * FROM genres ORDER BY created_at ASC');
-    const seenGenres = new Map<string, string>();
-    for (const row of genresRes.rows) {
-      const lowerName = row.name.toLowerCase();
-      if (seenGenres.has(lowerName)) {
-        const canonicalId = seenGenres.get(lowerName)!;
-        await db.query('UPDATE tracks SET genre_id = $1 WHERE genre_id = $2', [canonicalId, row.id]);
-        await db.query('DELETE FROM genres WHERE id = $1', [row.id]);
-      } else {
-        seenGenres.set(lowerName, row.id);
-      }
-    }
-    
     // Clear caches after deduplication
     clearEntityCaches();
   } catch(e) {
     console.error('[DB Migration] Deduplication failed:', e);
   }
+
+  await backfillTrackGenreAssociations(db);
 
   const featureArtistBackfillDone = await getSystemSetting(FEATURE_ARTIST_BACKFILL_SETTING) === true;
   const compoundCreditSplitDone = await getSystemSetting(COMPOUND_CREDIT_SPLIT_SETTING) === true;
@@ -4578,7 +4751,9 @@ export async function getGenrePathFromKNN(acoustic8D: number[], embedding?: numb
       SELECT sm.path
       FROM tracks t
       JOIN track_features tf ON t.id = tf.track_id
-      JOIN subgenre_mappings sm ON lower(trim(t.genre)) = sm.sub_genre
+      JOIN genres g ON g.id = t.genre_id
+      JOIN subgenre_mappings sm
+        ON regexp_replace(lower(trim(g.name)), '[^[:alnum:]_[:space:]-]', '', 'g') = sm.sub_genre
       WHERE tf.acoustic_vector_8d IS NOT NULL 
         AND tf.embedding_vector IS NOT NULL
       ORDER BY (tf.acoustic_vector_8d <-> $1::vector) + (tf.embedding_vector <=> $2::vector) ASC
@@ -4595,7 +4770,9 @@ export async function getGenrePathFromKNN(acoustic8D: number[], embedding?: numb
       SELECT sm.path
       FROM tracks t
       JOIN track_features tf ON t.id = tf.track_id
-      JOIN subgenre_mappings sm ON lower(trim(t.genre)) = sm.sub_genre
+      JOIN genres g ON g.id = t.genre_id
+      JOIN subgenre_mappings sm
+        ON regexp_replace(lower(trim(g.name)), '[^[:alnum:]_[:space:]-]', '', 'g') = sm.sub_genre
       WHERE tf.acoustic_vector_8d IS NOT NULL 
       ORDER BY tf.acoustic_vector_8d <-> $1::vector ASC
       LIMIT 10

@@ -15,6 +15,7 @@ import { startMbCreditsEnrichment, getMbCreditsProgress, startGeniusCreditsEnric
 import { enrichArtistImages, enrichArtistImagesInBackground } from '../services/artistImageEnrichment.service';
 import { getCreditsStatus, refreshArtistAudioProfiles, searchLibrary, getExistingTrackIds } from '../database';
 import { createRateLimiter } from '../middleware/rateLimit';
+import { areAnalysisModelsReady } from '../services/downloadModels';
 
 const router = Router();
 
@@ -132,6 +133,84 @@ router.post('/artists/manual-merge', requireAdmin, async (req, res) => {
   } catch (error: any) {
     console.error('[ArtistDuplicates] manual merge error:', error);
     res.status(500).json({ error: error.message || 'Failed to merge artists' });
+  }
+});
+
+router.get('/genre-duplicates', requireAdmin, async (_req, res) => {
+  try {
+    const { getGenreReviewState } = await import('../services/genreCanonicalization.service');
+    res.json(await getGenreReviewState());
+  } catch (error: any) {
+    console.error('[GenreDuplicates] list error:', error);
+    res.status(500).json({ error: error.message || 'Failed to load genre duplicate candidates' });
+  }
+});
+
+router.post('/genre-duplicates/dismiss', requireAdmin, async (req, res) => {
+  try {
+    const { candidateKey, signature, genreIds } = req.body || {};
+    if (!candidateKey || !signature || !Array.isArray(genreIds) || genreIds.length < 1) {
+      return res.status(400).json({ error: 'candidateKey, signature, and genreIds are required' });
+    }
+    const { dismissGenreCandidate } = await import('../services/genreCanonicalization.service');
+    await dismissGenreCandidate({
+      candidateKey: String(candidateKey),
+      signature: String(signature),
+      genreIds: genreIds.map(String),
+      userId: req.user?.userId || null,
+    });
+    res.json({ status: 'dismissed' });
+  } catch (error: any) {
+    console.error('[GenreDuplicates] dismiss error:', error);
+    res.status(500).json({ error: error.message || 'Failed to dismiss genre candidate' });
+  }
+});
+
+router.post('/genres/merge', requireAdmin, async (req, res) => {
+  try {
+    const {
+      canonicalGenreId,
+      aliasGenreIds,
+      candidateKey,
+      signature,
+      scoreEvidence,
+      acknowledgeTaxonomyConflict,
+    } = req.body || {};
+    if (!canonicalGenreId || !Array.isArray(aliasGenreIds) || aliasGenreIds.length < 1) {
+      return res.status(400).json({ error: 'canonicalGenreId and aliasGenreIds are required' });
+    }
+    const { groupGenres } = await import('../services/genreCanonicalization.service');
+    await groupGenres({
+      canonicalGenreId: String(canonicalGenreId),
+      aliasGenreIds: aliasGenreIds.map(String),
+      candidateKey: candidateKey ? String(candidateKey) : undefined,
+      signature: signature ? String(signature) : undefined,
+      scoreEvidence,
+      acknowledgeTaxonomyConflict: acknowledgeTaxonomyConflict === true,
+      userId: req.user?.userId || null,
+    });
+    res.json({ status: 'grouped' });
+  } catch (error: any) {
+    console.error('[GenreDuplicates] merge error:', error);
+    const isConflict = error?.code === 'GENRE_TAXONOMY_CONFLICT';
+    res.status(isConflict ? 409 : 400).json({
+      error: error.message || 'Failed to group genres',
+      code: isConflict ? 'GENRE_TAXONOMY_CONFLICT' : undefined,
+    });
+  }
+});
+
+router.post('/genres/:aliasId/restore', requireAdmin, async (req, res) => {
+  try {
+    const { restoreGenreAlias } = await import('../services/genreCanonicalization.service');
+    await restoreGenreAlias({
+      aliasGenreId: String(req.params.aliasId),
+      userId: req.user?.userId || null,
+    });
+    res.json({ status: 'restored' });
+  } catch (error: any) {
+    console.error('[GenreDuplicates] restore error:', error);
+    res.status(400).json({ error: error.message || 'Failed to restore genre alias' });
   }
 });
 
@@ -484,13 +563,14 @@ async function processMetadataBatch(input: Array<Buffer | ScanItem>, concurrency
               mbWorkId: metadata.mbWorkId || null,
               rawUrls: metadata.rawUrls || null,
               artHash: metadata.artHash,
+              artworkVersion: metadata.artworkVersion,
               fileMtime: item.mtime ?? null,
               fileSize: item.size ?? null,
             });
 
             // If a re-tag changed the cover, the previous hash may now be
             // orphaned — queue it for a refcount check after the batch.
-            if (item.knownArtHash && metadata.artHash && item.knownArtHash !== metadata.artHash) {
+            if (item.knownArtHash && metadata.artHash !== undefined && item.knownArtHash !== metadata.artHash) {
               displacedArtHashes.add(item.knownArtHash);
             }
 
@@ -994,7 +1074,10 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
 
     // ── Analysis ──
     const tracksNeedingAnalysis = await getTracksWithoutFeatures();
-    if (tracksNeedingAnalysis.length > 0) {
+    const analysisModelsReady = tracksNeedingAnalysis.length > 0
+      ? await areAnalysisModelsReady()
+      : false;
+    if (tracksNeedingAnalysis.length > 0 && analysisModelsReady) {
       scanStatus.phase = 'analysis';
       scanStatus.totalFiles = tracksNeedingAnalysis.length;
       scanStatus.scannedFiles = 0;
@@ -1003,6 +1086,8 @@ export async function runSyncWalk(dirPath: string): Promise<{ removed: number; a
       const concurrency = await getAnalysisConcurrency();
       await processAnalysisBatch(tracksNeedingAnalysis, concurrency);
       console.log(`[Scanner] Analysis phase complete: ${tracksNeedingAnalysis.length} track(s) analyzed`);
+    } else if (tracksNeedingAnalysis.length > 0) {
+      console.log(`[Scanner] Analysis deferred for ${tracksNeedingAnalysis.length} track(s): ML models are not ready`);
     }
 
     // ── Loudness (EBU R128) — after features so two full-decode passes don't contend.
@@ -1140,6 +1225,13 @@ router.post('/analyze', async (req, res) => {
       error: 'A scan or analysis is already in progress',
       phase: scanStatus.phase,
       detail: `Currently in ${scanStatus.phase} phase. Please wait for it to complete.`
+    });
+  }
+
+  if (!await areAnalysisModelsReady()) {
+    return res.status(409).json({
+      error: 'Audio analysis models are not ready.',
+      detail: 'Download MusiCNN and Discogs-EffNet before starting analysis.',
     });
   }
 

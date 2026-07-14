@@ -12,6 +12,7 @@ const MODELS = [
   { name: 'MusiCNN', filename: 'msd-musicnn-1.pb', url: MUSICNN_URL },
   { name: 'Discogs-EffNet', filename: 'discogs-effnet-bs64-1.pb', url: EFFNET_URL }
 ];
+const MIN_MODEL_BYTES = 1000;
 
 export interface ModelFile {
   name: string;
@@ -41,9 +42,12 @@ function downloadFile(url: string, dest: string, onProgress: (bytes: number, tot
     const doDownload = (downloadUrl: string) => {
       https.get(downloadUrl, (response) => {
         if (response.statusCode === 301 || response.statusCode === 302) {
+          response.resume();
+          if (!response.headers.location) return reject(new Error('Model download redirect was missing a location.'));
           return doDownload(response.headers.location!);
         }
         if (response.statusCode !== 200) {
+          response.resume();
           return reject(new Error(`HTTP ${response.statusCode}: ${downloadUrl}`));
         }
         const totalBytes = parseInt(response.headers['content-length'] || '0', 10);
@@ -54,8 +58,13 @@ function downloadFile(url: string, dest: string, onProgress: (bytes: number, tot
           onProgress(downloaded, totalBytes);
         });
         response.pipe(file);
-        file.on('finish', () => { file.close(); resolve(); });
-        file.on('error', (err) => { file.close(); if (fs.existsSync(dest)) fs.unlinkSync(dest); reject(err); });
+        file.on('finish', () => file.close(error => error ? reject(error) : resolve()));
+        file.on('error', (err) => {
+          file.close();
+          if (fs.existsSync(dest)) fs.unlinkSync(dest);
+          reject(err);
+        });
+        response.on('error', reject);
       }).on('error', reject);
     };
     doDownload(url);
@@ -70,13 +79,14 @@ export async function getModelStatus(): Promise<{ name: string; dir: string; fil
   const status = [];
   for (const model of MODELS) {
     const dest = path.join(MODELS_DIR, model.filename);
+    const tempDest = `${dest}.part`;
     let size = 0;
     let cached = false;
     try {
       if (fs.existsSync(dest)) {
         const stat = fs.statSync(dest);
         size = stat.size;
-        cached = size > 1000; // .pb files are several MB
+        cached = size > MIN_MODEL_BYTES; // .pb files are several MB
       }
     } catch {}
     status.push({
@@ -89,62 +99,83 @@ export async function getModelStatus(): Promise<{ name: string; dir: string; fil
         url: model.url,
         size,
         cached,
-        downloading: false
+        downloading: isDownloading && fs.existsSync(tempDest)
       }]
     });
   }
   return status;
 }
 
-export async function downloadModels(): Promise<void> {
+export async function areAnalysisModelsReady(): Promise<boolean> {
+  const status = await getModelStatus();
+  return status.length > 0 && status.every(model => model.files.every(file => file.cached));
+}
+
+export async function downloadModels(force = false): Promise<void> {
   if (isDownloading) return;
   
   // Check if already cached
   const status = await getModelStatus();
-  if (status.every(m => m.files.every(f => f.cached))) {
+  if (!force && status.every(m => m.files.every(f => f.cached))) {
     return;
   }
 
   isDownloading = true;
+  const failures: string[] = [];
 
   try {
     fs.mkdirSync(MODELS_DIR, { recursive: true });
 
     for (const model of MODELS) {
       const dest = path.join(MODELS_DIR, model.filename);
+      const tempDest = `${dest}.part`;
 
       // Skip if already downloaded
-      if (fs.existsSync(dest) && fs.statSync(dest).size > 1000) {
+      if (!force && fs.existsSync(dest) && fs.statSync(dest).size > MIN_MODEL_BYTES) {
         emitProgress({ model: model.name, file: model.filename, status: 'done', bytesDownloaded: fs.statSync(dest).size, totalBytes: fs.statSync(dest).size });
         continue;
       }
 
+      try {
+        if (fs.existsSync(tempDest)) fs.unlinkSync(tempDest);
+      } catch {}
+
       emitProgress({ model: model.name, file: model.filename, status: 'downloading', bytesDownloaded: 0, totalBytes: 0 });
 
       try {
-        await downloadFile(model.url, dest, (bytes, total) => {
+        await downloadFile(model.url, tempDest, (bytes, total) => {
           emitProgress({ model: model.name, file: model.filename, status: 'downloading', bytesDownloaded: bytes, totalBytes: total });
         });
+        const downloadedSize = fs.statSync(tempDest).size;
+        if (downloadedSize <= MIN_MODEL_BYTES) throw new Error('Downloaded model file was incomplete.');
+        // Keep a known-good model in place until its replacement is complete.
+        // rename is atomic on the deployment filesystem used by Aurora.
+        fs.renameSync(tempDest, dest);
         emitProgress({ model: model.name, file: model.filename, status: 'done', bytesDownloaded: fs.statSync(dest).size, totalBytes: fs.statSync(dest).size });
         console.log(`[Models] Downloaded ${model.name} → ${model.filename}`);
       } catch (err: any) {
+        try { if (fs.existsSync(tempDest)) fs.unlinkSync(tempDest); } catch {}
         console.error(`[Models] Failed to download ${model.name}:`, err.message);
         emitProgress({ model: model.name, file: model.filename, status: 'error', bytesDownloaded: 0, totalBytes: 0, error: err.message });
+        failures.push(`${model.name}: ${err.message}`);
       }
     }
+    if (failures.length > 0) throw new Error(failures.join('; '));
   } catch (err: any) {
     console.error('[Models] Download error:', err.message);
+    throw err;
   } finally {
     isDownloading = false;
   }
 }
 
 export async function clearAndRedownloadModels(): Promise<void> {
-  // Remove all .pb model files
+  // Remove abandoned partials, but keep known-good models in place until each
+  // replacement has downloaded completely and can be atomically promoted.
   for (const model of MODELS) {
     const dest = path.join(MODELS_DIR, model.filename);
     try {
-      if (fs.existsSync(dest)) fs.unlinkSync(dest);
+      if (fs.existsSync(`${dest}.part`)) fs.unlinkSync(`${dest}.part`);
     } catch {}
   }
   // Also clean up legacy tfjs directory if it exists
@@ -154,7 +185,7 @@ export async function clearAndRedownloadModels(): Promise<void> {
       fs.rmSync(tfjsDir, { recursive: true, force: true });
     }
   } catch {}
-  await downloadModels();
+  await downloadModels(true);
 }
 
 export function isDownloadInProgress(): boolean {

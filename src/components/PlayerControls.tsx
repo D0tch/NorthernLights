@@ -13,6 +13,7 @@ import { formatTime } from '../utils/formatTime';
 import { playbackManager } from '../utils/PlaybackManager';
 import { usePlayerPlacement } from '../hooks/usePlayerPlacement';
 import type { PlaybackLoadPath } from '../store/index';
+import type { StreamingQualityPreset } from '../utils/streaming';
 import {
   IconPrev,
   IconPlay,
@@ -112,12 +113,22 @@ type ChainNode = { label: string; sub?: string };
 const formatBitrate = (bitrate?: number) =>
   bitrate && bitrate > 0 ? `${Math.round(bitrate / 1000)} kbps` : null;
 
-const outputCodecForLoadPath = (loadPath: PlaybackLoadPath): string | null => {
+const outputCodecForLoadPath = (
+  loadPath: PlaybackLoadPath,
+  streamingQuality: StreamingQualityPreset,
+  adaptiveActiveBitrateKbps: number | null,
+): string | null => {
   switch (loadPath) {
     case 'direct':
       return null;
     case 'prepared-hls':
     case 'fallback-hls':
+      if (streamingQuality === 'auto') {
+        return adaptiveActiveBitrateKbps
+          ? `Auto · ${adaptiveActiveBitrateKbps} kbps`
+          : 'Auto';
+      }
+      return 'HLS · AAC';
     case 'cast':
       return 'HLS · AAC';
     default:
@@ -297,6 +308,8 @@ export const PlayerControls: React.FC = () => {
   }, [queueSource, currentTrack]);
 
   const loadPath = usePlayerStore((state) => state.playbackTelemetry.loadPath);
+  const adaptiveActiveBitrateKbps = usePlayerStore((state) => state.playbackTelemetry.adaptiveActiveBitrateKbps);
+  const streamingQuality = usePlayerStore((state) => state.streamingQuality);
   const castConnected = usePlayerStore((state) => state.castConnected);
   const audioOutputActive = usePlayerStore((state) => state.audioOutputActive);
   const audioOutputDeviceLabel = usePlayerStore((state) => state.audioOutputDeviceLabel);
@@ -377,7 +390,7 @@ export const PlayerControls: React.FC = () => {
   // ── Signal-chain data derivation ──────────────────────────────────────
   const sourceFormat = currentTrack?.format?.toUpperCase() ?? null;
   const sourceBitrate = formatBitrate(currentTrack?.bitrate);
-  const outputCodec = outputCodecForLoadPath(loadPath);
+  const outputCodec = outputCodecForLoadPath(loadPath, streamingQuality, adaptiveActiveBitrateKbps);
 
   let deviceLabel = 'Browser';
   if (castConnected && castDeviceName) {

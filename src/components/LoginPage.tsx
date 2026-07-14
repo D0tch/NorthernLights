@@ -62,7 +62,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
       <div className="auth-card-enter relative z-10 w-full max-w-sm bg-[var(--glass-bg)] border border-[var(--glass-border)] shadow-2xl rounded-3xl p-8 backdrop-blur-3xl my-auto">
         {/* Header */}
         <div className="flex flex-col items-center mb-8">
-          <div className="w-14 h-14 bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded-full flex items-center justify-center mb-4">
+          <div className="w-14 h-14 bg-primary/20 text-[var(--color-primary)] rounded-full flex items-center justify-center mb-4">
             <Music2 className="w-7 h-7" />
           </div>
           <h1 className="text-2xl font-extrabold tracking-tight text-[var(--color-text-primary)]"
@@ -89,7 +89,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
               placeholder="username"
               autoFocus
               autoComplete="username"
-              className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
+              className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
             />
           </div>
 
@@ -107,7 +107,7 @@ export const LoginPage: React.FC<LoginPageProps> = ({
                 onChange={e => setPassword(e.target.value)}
                 placeholder="••••••••"
                 autoComplete="current-password"
-                className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 pr-11 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
+                className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 pr-11 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
               />
               <button
                 type="button"
@@ -124,14 +124,14 @@ export const LoginPage: React.FC<LoginPageProps> = ({
           </div>
 
           {sessionMessage && !error && (
-            <div role="status" className="text-[var(--color-text-primary)] text-sm bg-[var(--color-primary)]/10 border border-[var(--color-primary)]/20 rounded-xl px-4 py-2">
+            <div role="status" className="text-[var(--color-text-primary)] text-sm bg-primary/10 border border-primary/20 rounded-xl px-4 py-2">
               {sessionMessage}
             </div>
           )}
 
           {/* Error */}
           {error && (
-            <div role="alert" className="text-[var(--color-error)] text-sm bg-[var(--color-error)]/10 border border-[var(--color-error)]/20 rounded-xl px-4 py-2">
+            <div role="alert" className="text-[var(--color-error)] text-sm bg-error/10 border border-error/20 rounded-xl px-4 py-2">
               {error}
             </div>
           )}

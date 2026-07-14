@@ -115,7 +115,7 @@ library.
 ## On-demand full-library cache
 
 Two admin tools genuinely need per-track data: the Genre Matrix
-(`GenreMatrixTab`) and Artist Entities / duplicate merge (`ArtistEntitiesTab`).
+(`GenreMatrixTab`) and Library Entities review (`LibraryEntitiesTab`).
 They call `ensureFullLibraryLoaded()` on mount, which fetches
 `/api/library/tracks` once and populates `state.library`. The main app never
 triggers this, so the heavy payload only loads when an admin opens those tabs.

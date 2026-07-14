@@ -79,7 +79,7 @@ const SearchResults = React.memo(function SearchResults({
                                 onClick={() => onArtistClick(artist.id)}
                                 className="global-search-result-row flex items-center gap-3 w-full text-left p-2 rounded-xl hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
                             >
-                                <div className="w-10 h-10 rounded-full bg-[var(--color-primary)]/20 flex items-center justify-center flex-shrink-0 text-[var(--color-primary)] font-bold">
+                                <div className="w-10 h-10 rounded-full bg-primary/20 flex items-center justify-center flex-shrink-0 text-[var(--color-primary)] font-bold">
                                     <ArtistInitial name={artist.name} className="text-base" />
                                 </div>
                                 <span className="font-medium text-[var(--color-text-primary)] truncate">

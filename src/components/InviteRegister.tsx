@@ -118,7 +118,7 @@ export const InviteRegister: React.FC = () => {
       <div className="fixed inset-0 z-[100] bg-[var(--color-bg-primary)] flex items-center justify-center p-4">
         <AuthBackdrop />
         <div className="auth-card-enter relative z-10 w-full max-w-sm bg-[var(--glass-bg)] border border-[var(--glass-border)] shadow-2xl rounded-3xl p-8 backdrop-blur-3xl flex flex-col items-center gap-4">
-          <div className="w-14 h-14 bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded-full flex items-center justify-center">
+          <div className="w-14 h-14 bg-primary/20 text-[var(--color-primary)] rounded-full flex items-center justify-center">
             <Loader2 className="w-7 h-7 animate-spin" />
           </div>
           <p className="text-sm text-[var(--color-text-secondary)]">validating invite…</p>
@@ -184,7 +184,7 @@ export const InviteRegister: React.FC = () => {
       <div className="auth-card-enter relative z-10 w-full max-w-sm bg-[var(--glass-bg)] border border-[var(--glass-border)] shadow-2xl rounded-3xl p-8 backdrop-blur-3xl my-auto">
         {/* Header */}
         <div className="flex flex-col items-center mb-8">
-          <div className="w-14 h-14 bg-[var(--color-primary)]/20 text-[var(--color-primary)] rounded-full flex items-center justify-center mb-4">
+          <div className="w-14 h-14 bg-primary/20 text-[var(--color-primary)] rounded-full flex items-center justify-center mb-4">
             <UserPlus className="w-7 h-7" />
           </div>
           <h1 className="text-2xl font-extrabold tracking-tight text-[var(--color-text-primary)]"
@@ -216,7 +216,7 @@ export const InviteRegister: React.FC = () => {
               placeholder="Choose a username"
               autoFocus
               autoComplete="username"
-              className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
+              className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
             />
           </div>
 
@@ -233,7 +233,7 @@ export const InviteRegister: React.FC = () => {
                 onChange={e => setPassword(e.target.value)}
                 placeholder="Choose a password"
                 autoComplete="new-password"
-                className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 pr-11 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
+                className="w-full bg-[var(--color-surface)] border border-[var(--glass-border)] rounded-xl px-4 py-3 pr-11 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)]"
               />
               <button
                 type="button"
@@ -270,9 +270,9 @@ export const InviteRegister: React.FC = () => {
                 onChange={e => setConfirmPassword(e.target.value)}
                 placeholder="Repeat your password"
                 autoComplete="new-password"
-                className={`w-full bg-[var(--color-surface)] border rounded-xl px-4 py-3 pr-11 focus:outline-none focus:ring-2 focus:ring-[var(--color-primary)]/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] ${
+                className={`w-full bg-[var(--color-surface)] border rounded-xl px-4 py-3 pr-11 focus:outline-none focus:ring-2 focus:ring-primary/50 transition-ui text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] ${
                   confirmPassword && !passwordsMatch
-                    ? 'border-[var(--color-error)]/50'
+                    ? 'border-error/50'
                     : 'border-[var(--glass-border)]'
                 }`}
               />
@@ -292,7 +292,7 @@ export const InviteRegister: React.FC = () => {
 
           {/* Error */}
           {error && (
-            <div role="alert" className="text-[var(--color-error)] text-sm bg-[var(--color-error)]/10 border border-[var(--color-error)]/20 rounded-xl px-4 py-2">
+            <div role="alert" className="text-[var(--color-error)] text-sm bg-error/10 border border-error/20 rounded-xl px-4 py-2">
               {error}
             </div>
           )}

@@ -44,6 +44,7 @@ export interface TrackInfo {
   artistId?: string;
   albumId?: string;
   genreId?: string;
+  canonicalGenre?: string;
   genres?: string[] | string;
   
   // MusicBrainz IDs

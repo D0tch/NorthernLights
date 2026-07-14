@@ -1384,14 +1384,14 @@ export const Hub: React.FC = () => {
       />
 
       {generationError && aiPlaylists.length > 0 && (
-        <div className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-sm font-medium text-[var(--color-error)]">
+        <div className="rounded-lg border border-error/30 bg-error/10 px-4 py-3 text-sm font-medium text-[var(--color-error)]">
           {generationError}
         </div>
       )}
       {(hubFetchError || smartBundleError) && (
         <div
           role="alert"
-          className="rounded-lg border border-[var(--color-error)]/30 bg-[var(--color-error)]/10 px-4 py-3 text-sm font-medium text-[var(--color-error)] flex items-center justify-between gap-3"
+          className="rounded-lg border border-error/30 bg-error/10 px-4 py-3 text-sm font-medium text-[var(--color-error)] flex items-center justify-between gap-3"
         >
           <span>{hubFetchError || smartBundleError}</span>
           <button

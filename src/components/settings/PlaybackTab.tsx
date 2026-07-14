@@ -1,7 +1,8 @@
 import React, { useEffect, useState, useMemo } from 'react';
-import { usePlayerStore } from '../../store/index';
+import { usePlayerStore, type PrebufferPolicy } from '../../store/index';
 import { useNetworkInfo } from '../../hooks/useNetworkInfo';
-import { Check, RefreshCw, RotateCcw, Speaker } from 'lucide-react';
+import { Speaker } from 'lucide-react';
+import type { StreamingQualityPreset } from '../../utils/streaming';
 
 const formatTelemetryTime = (timestamp: number | null): string => {
     if (!timestamp) return 'No data yet';
@@ -22,6 +23,7 @@ const formatRecoveryPath = (path: string): string => {
     switch (path) {
         case 'normal-hls-after-prepare-failure': return 'Normal HLS after prepare failure';
         case 'normal-hls-after-promotion-failure': return 'Normal HLS after promotion failure';
+        case 'fixed-quality-after-adaptive-failure': return 'Fixed quality after adaptive failure';
         default: return 'None';
     }
 };
@@ -64,20 +66,23 @@ export const PlaybackTab: React.FC = () => {
     const audioOutputDeviceLabel = usePlayerStore(state => state.audioOutputDeviceLabel);
     const audioOutputSelecting = usePlayerStore(state => state.audioOutputSelecting);
     const audioOutputError = usePlayerStore(state => state.audioOutputError);
-    const selectAudioOutput = usePlayerStore(state => state.selectAudioOutput);
+    const audioOutputPermission = usePlayerStore(state => state.audioOutputPermission);
+    const audioOutputRequestingAccess = usePlayerStore(state => state.audioOutputRequestingAccess);
     const setAudioOutputDevice = usePlayerStore(state => state.setAudioOutputDevice);
-    const refreshAudioOutputs = usePlayerStore(state => state.refreshAudioOutputs);
-    const clearAudioOutput = usePlayerStore(state => state.clearAudioOutput);
+    const selectAudioOutput = usePlayerStore(state => state.selectAudioOutput);
+    const ensureAudioOutputAccess = usePlayerStore(state => state.ensureAudioOutputAccess);
     const networkInfo = useNetworkInfo();
     
     const [playbackTab, setPlaybackTab] = useState<'streaming' | 'output' | 'infinity' | 'llm'>('streaming');
     const [showLlmAdvanced, setShowLlmAdvanced] = useState(false);
 
+    // Opening the Output tab triggers the one-time device-access prompt (if
+    // needed) and refreshes the device list.
     useEffect(() => {
         if (playbackTab === 'output') {
-            void refreshAudioOutputs();
+            void ensureAudioOutputAccess();
         }
-    }, [playbackTab, refreshAudioOutputs]);
+    }, [playbackTab, ensureAudioOutputAccess]);
 
     // Tick once a second while a sleep timer is active to show the countdown.
     const [sleepNow, setSleepNow] = useState(() => Date.now());
@@ -148,10 +153,10 @@ export const PlaybackTab: React.FC = () => {
                         <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Streaming Quality</label>
                         <select
                             value={streamingQuality}
-                            onChange={e => setSettings({ streamingQuality: e.target.value as any })}
+                            onChange={e => setSettings({ streamingQuality: e.target.value as StreamingQualityPreset })}
                             className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
                         >
-                            <option value="auto">Auto (Normal — 128 kbps)</option>
+                            <option value="auto">Auto — Adaptive (64–320 kbps)</option>
                             <option value="64k">Low (64 kbps) — Saves data</option>
                             <option value="128k">Normal (128 kbps) — Good balance</option>
                             <option value="160k">High (160 kbps)</option>
@@ -162,7 +167,7 @@ export const PlaybackTab: React.FC = () => {
                             {streamingQuality === 'source'
                                 ? 'Bit-perfect passthrough when the browser can play the file natively (FLAC, ALAC, WAV, MP3, AAC, Ogg, Opus) — bypasses HLS entirely and streams the raw bytes with Range seek. Falls back to high-bitrate AAC HLS for codecs the browser cannot decode (e.g. WMA). Chromecast still streams 128 kbps AAC HLS regardless of this setting.'
                                 : streamingQuality === 'auto'
-                                ? 'Automatically uses Normal quality (128 kbps AAC). This provides a good balance between quality and bandwidth.'
+                                ? 'Adapts AAC quality between 64 and 320 kbps using measured bandwidth and buffer health. Lossy files do not exceed their known source bitrate, Data Saver caps Auto at 64 kbps, and Chromecast remains fixed at 128 kbps AAC.'
                                 : `Audio will be transcoded to AAC at ${streamingQuality}bps. Both browser playback and Chromecast now honor this bitrate when a track starts. Higher bitrates sound better but use more bandwidth and storage.`
                             }
                         </p>
@@ -172,7 +177,7 @@ export const PlaybackTab: React.FC = () => {
                         <label className="block text-sm font-medium text-[var(--color-text-primary)] mb-2">Prebuffer Policy</label>
                         <select
                             value={prebufferPolicy}
-                            onChange={e => setSettings({ prebufferPolicy: e.target.value as any })}
+                            onChange={e => setSettings({ prebufferPolicy: e.target.value as PrebufferPolicy })}
                             className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none"
                         >
                             <option value="off">Off — No background preparation</option>
@@ -183,8 +188,8 @@ export const PlaybackTab: React.FC = () => {
                             {prebufferPolicy === 'off'
                                 ? 'Disables HLS prewarm and local prepared audio. Use this if a browser or device behaves badly with background preparation.'
                                 : prebufferPolicy === 'aggressive'
-                                ? 'Currently prepares the immediate next track like Conservative, reserved for deeper prebuffering once proven safe.'
-                                : 'Keeps the current stable behavior: server prewarm plus local prepared audio for the immediate next queued track.'
+                                ? 'Keeps the next track ready for local promotion and also prewarms the following HLS session. Uses more server CPU and temporary storage.'
+                                : 'Prepares only the immediate next track on the server and in the local audio pipeline.'
                             }
                         </p>
                     </div>
@@ -379,7 +384,37 @@ export const PlaybackTab: React.FC = () => {
                                     <span className="text-[var(--color-text-muted)]">Prebuffer</span>
                                     <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.prebufferPolicy}</span>
                                 </div>
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Auto bitrate</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">
+                                        {playbackTelemetry.adaptiveActiveBitrateKbps !== null ? `${playbackTelemetry.adaptiveActiveBitrateKbps} kbps` : 'N/A'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Bandwidth</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">
+                                        {playbackTelemetry.adaptiveBandwidthEstimateKbps !== null ? `${playbackTelemetry.adaptiveBandwidthEstimateKbps} kbps` : 'N/A'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Renditions</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.adaptiveLevelCount || 'N/A'}</span>
+                                </div>
+                                <div className="flex justify-between gap-3">
+                                    <span className="text-[var(--color-text-muted)]">Auto switches</span>
+                                    <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.adaptiveSwitchCount}</span>
+                                </div>
                             </div>
+                            {playbackTelemetry.adaptiveNativePlayback && (
+                                <p className="text-xs text-[var(--color-text-muted)] mt-2">
+                                    Native HLS is selecting Auto quality; the active rendition is not observable in this browser.
+                                </p>
+                            )}
+                            {playbackTelemetry.adaptiveFallbackState !== 'none' && (
+                                <p className="text-xs text-[var(--color-text-muted)] mt-2">
+                                    Auto fallback: <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.adaptiveFallbackState}</span>
+                                </p>
+                            )}
                             {playbackTelemetry.prebufferSkippedReason && (
                                 <p className="text-xs text-[var(--color-text-muted)] mt-2">
                                     Prebuffer skipped: <span className="font-mono text-[var(--color-text-primary)]">{playbackTelemetry.prebufferSkippedReason}</span>
@@ -436,7 +471,7 @@ export const PlaybackTab: React.FC = () => {
                         </div>
                         {networkInfo.type === 'unknown' && (
                             <p className="text-xs text-[var(--color-text-muted)] mt-2 italic">
-                                Network info unavailable (common on iOS). Quality is fixed to your selected preset.
+                                Network info unavailable (common on iOS). Auto starts with a 500 kbps estimate and adapts from playback measurements.
                             </p>
                         )}
                     </div>
@@ -446,138 +481,83 @@ export const PlaybackTab: React.FC = () => {
             {playbackTab === 'output' && (
                 <div>
                     <p className="text-sm text-[var(--color-text-muted)] mb-6">
-                        Choose the local audio output used by browser playback. Chromecast has its own route and takes priority while connected.
+                        Choose which speaker browser playback uses. Chromecast has its own route and takes priority while connected.
                     </p>
 
-                    <div className="mb-6 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-4">
-                        <div className="flex items-start justify-between gap-4">
-                            <div className="min-w-0">
-                                <p className="text-sm font-medium text-[var(--color-text-primary)]">Audio Output</p>
-                                <div className="mt-2 flex items-center gap-2 min-w-0">
-                                    <Speaker
-                                        size={18}
-                                        className="flex-shrink-0"
-                                        style={{
-                                            color: audioOutputActive ? 'var(--color-primary)' : 'var(--color-text-muted)',
-                                            filter: audioOutputActive ? 'drop-shadow(0 0 4px var(--color-primary))' : 'none',
-                                        }}
-                                    />
-                                    <span className="text-sm text-[var(--color-text-primary)] truncate">
-                                        {audioOutputActive
-                                            ? audioOutputDeviceLabel || 'Selected output'
-                                            : audioOutputDeviceLabel
-                                            ? `${audioOutputDeviceLabel} saved`
-                                            : 'System default'}
-                                    </span>
-                                </div>
-                                <p className="text-xs text-[var(--color-text-muted)] mt-2">
-                                    {audioOutputSupported
-                                        ? castConnected
-                                            ? 'Disconnect Chromecast to choose a local output.'
-                                            : audioOutputActive
-                                            ? 'Browser playback is routed to the selected local output.'
-                                            : 'System default is active. Select another exposed output below when available.'
-                                        : 'System default is active. This browser has not exposed app-level routing for other outputs.'}
+                    <div className="mb-6">
+                        <label className="flex items-center gap-2 text-sm font-medium text-[var(--color-text-primary)] mb-2">
+                            <Speaker
+                                size={16}
+                                className="flex-shrink-0"
+                                style={{ color: audioOutputActive ? 'var(--color-primary)' : 'var(--color-text-muted)' }}
+                            />
+                            Speaker
+                        </label>
+                        <select
+                            value={audioOutputActive ? audioOutputDeviceId : ''}
+                            onChange={e => { void setAudioOutputDevice(e.target.value); }}
+                            disabled={castConnected || audioOutputSelecting || !audioOutputSupported || audioOutputPermission === 'denied'}
+                            className="w-full p-2 rounded-lg border border-[var(--glass-border)] bg-[var(--color-surface)] text-[var(--color-text-primary)] focus:outline-none disabled:opacity-60"
+                        >
+                            <option value="">{audioOutputDevices.find(d => d.isDefault)?.label || 'System default'}</option>
+                            {audioOutputDevices.filter(d => !d.isDefault).map(device => (
+                                <option key={device.deviceId} value={device.deviceId}>{device.label}</option>
+                            ))}
+                        </select>
+
+                        {audioOutputSupported && !castConnected && audioOutputPermission === 'denied' ? (
+                            <div className="mt-3 p-4 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)]">
+                                <p className="text-sm text-[var(--color-text-primary)]">
+                                    Aurora needs one-time microphone permission to name your speakers and route audio to them. Audio is never recorded.
                                 </p>
-                                {audioOutputError && (
-                                    <p className="text-xs text-amber-500 mt-2">{audioOutputError}</p>
-                                )}
-                            </div>
-
-                            <div className="flex flex-col sm:flex-row gap-2 flex-shrink-0">
-                                {audioOutputPickerSupported && (
-                                    <button
-                                        type="button"
-                                        onClick={() => { void selectAudioOutput(); }}
-                                        disabled={!audioOutputSupported || castConnected || audioOutputSelecting}
-                                        className="btn btn-primary btn-sm flex items-center gap-1.5 disabled:opacity-50"
-                                    >
-                                        <Speaker size={14} />
-                                        {audioOutputSelecting ? 'Choosing...' : 'Picker'}
-                                    </button>
-                                )}
                                 <button
                                     type="button"
-                                    onClick={() => { void refreshAudioOutputs(); }}
-                                    disabled={audioOutputSelecting}
-                                    className="btn btn-ghost btn-sm flex items-center gap-1.5 disabled:opacity-50"
+                                    onClick={() => { void ensureAudioOutputAccess(); }}
+                                    className="btn btn-primary btn-sm mt-3"
                                 >
-                                    <RefreshCw size={14} />
-                                    Refresh
+                                    Allow access
                                 </button>
-                                <button
-                                    type="button"
-                                    onClick={() => { void clearAudioOutput(); }}
-                                    disabled={!audioOutputSupported || !audioOutputActive || audioOutputSelecting}
-                                    className="btn btn-ghost btn-sm flex items-center gap-1.5 disabled:opacity-50"
-                                >
-                                    <RotateCcw size={14} />
-                                    Default
-                                </button>
+                                <p className="text-xs text-[var(--color-text-muted)] mt-3">
+                                    No prompt appearing? Enable the microphone permission for this site in your browser settings, then reopen this tab.
+                                </p>
                             </div>
-                        </div>
-                    </div>
-
-                    <div className="mb-6 rounded-xl border border-[var(--glass-border)] bg-[var(--color-surface)] p-4">
-                        <div className="flex items-center justify-between gap-3 mb-3">
-                            <p className="text-sm font-medium text-[var(--color-text-primary)]">Available Outputs</p>
-                            <span className="text-xs text-[var(--color-text-muted)]">{audioOutputDevices.length} shown</span>
-                        </div>
-                        <div className="space-y-2">
-                            {audioOutputDevices.map((device) => {
-                                const selected = device.isDefault
-                                    ? !audioOutputActive
-                                    : audioOutputActive && audioOutputDeviceId === device.deviceId;
-                                const disabled = castConnected || audioOutputSelecting || (!device.isDefault && !audioOutputSupported);
-                                return (
-                                    <button
-                                        key={device.isDefault ? 'default' : device.deviceId}
-                                        type="button"
-                                        onClick={() => { void setAudioOutputDevice(device.deviceId); }}
-                                        disabled={disabled}
-                                        className="w-full flex items-center justify-between gap-3 p-3 rounded-lg border border-[var(--glass-border)] bg-[var(--color-bg-secondary)] text-left transition-ui hover:border-[var(--color-primary)]/40 disabled:opacity-60 disabled:hover:border-[var(--glass-border)]"
-                                    >
-                                        <span className="min-w-0 flex items-center gap-2">
-                                            <Speaker
-                                                size={17}
-                                                className="flex-shrink-0"
-                                                style={{ color: selected ? 'var(--color-primary)' : 'var(--color-text-muted)' }}
-                                            />
-                                            <span className="min-w-0">
-                                                <span className="block text-sm text-[var(--color-text-primary)] truncate">{device.label}</span>
-                                                <span className="block text-xs text-[var(--color-text-muted)]">
-                                                    {device.isDefault ? 'Operating system default' : audioOutputSupported ? 'Browser-exposed output' : 'Visible, routing unavailable'}
-                                                </span>
-                                            </span>
-                                        </span>
-                                        {selected && <Check size={17} className="flex-shrink-0 text-[var(--color-primary)]" />}
-                                    </button>
-                                );
-                            })}
-                        </div>
-                        {!audioOutputSupported && (
-                            <p className="text-xs text-[var(--color-text-muted)] mt-3">
-                                Aurora will keep using the system default output. Pair or switch headphones/speakers through the operating system audio controls.
+                        ) : audioOutputSupported && audioOutputPermission === 'unavailable' ? (
+                            <p className="text-xs text-[var(--color-text-muted)] mt-1.5">
+                                No microphone was found, so this browser won't reveal speaker names or allow routing. Audio follows the system default output.
+                            </p>
+                        ) : (
+                            <p className="text-xs text-[var(--color-text-muted)] mt-1.5">
+                                {castConnected
+                                    ? 'Chromecast is active — disconnect to choose a local speaker.'
+                                    : !audioOutputSupported
+                                    ? "This browser can't route playback to a specific device. Audio follows the operating system's default output."
+                                    : audioOutputRequestingAccess
+                                    ? 'Requesting device access…'
+                                    : audioOutputSelecting
+                                    ? 'Switching…'
+                                    : audioOutputActive
+                                    ? `Playing on ${audioOutputDeviceLabel || 'selected output'}.`
+                                    : audioOutputPickerSupported && audioOutputDevices.length <= 1
+                                    ? 'This browser reveals speakers through its own picker — use "Choose speaker" below.'
+                                    : 'Using the system default output.'}
                             </p>
                         )}
-                    </div>
 
-                    <div className="p-3 rounded-lg bg-[var(--color-surface)] border border-[var(--glass-border)]">
-                        <p className="text-xs font-medium text-[var(--color-text-muted)] mb-2">Routing Priority</p>
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
-                            <div className="rounded-lg border border-[var(--glass-border)] bg-[var(--color-bg-secondary)] p-3">
-                                <span className="block text-[var(--color-text-muted)]">Chromecast</span>
-                                <span className="block mt-1 font-medium text-[var(--color-text-primary)]">{castConnected ? 'Active' : 'Inactive'}</span>
-                            </div>
-                            <div className="rounded-lg border border-[var(--glass-border)] bg-[var(--color-bg-secondary)] p-3">
-                                <span className="block text-[var(--color-text-muted)]">Local output</span>
-                                <span className="block mt-1 font-medium text-[var(--color-text-primary)]">{audioOutputActive ? 'Selected' : 'Default'}</span>
-                            </div>
-                            <div className="rounded-lg border border-[var(--glass-border)] bg-[var(--color-bg-secondary)] p-3">
-                                <span className="block text-[var(--color-text-muted)]">Hardware keys</span>
-                                <span className="block mt-1 font-medium text-[var(--color-text-primary)]">Media Session</span>
-                            </div>
-                        </div>
+                        {audioOutputSupported && audioOutputPickerSupported && !castConnected && (
+                            <button
+                                type="button"
+                                onClick={() => { void selectAudioOutput(); }}
+                                disabled={audioOutputSelecting}
+                                className="btn btn-ghost btn-sm mt-3 flex items-center gap-1.5 disabled:opacity-50"
+                            >
+                                <Speaker size={14} />
+                                {audioOutputSelecting ? 'Choosing…' : 'Choose speaker…'}
+                            </button>
+                        )}
+
+                        {audioOutputError && (
+                            <p className="text-xs text-amber-500 mt-2">{audioOutputError}</p>
+                        )}
                     </div>
                 </div>
             )}

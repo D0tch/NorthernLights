@@ -136,3 +136,18 @@ This keeps weak concepts from fabricating misleading timbre centroids.
 ## 7. Infinity Mode
 
 Infinity Mode uses the same hop-cost and hierarchy logic, but in a track-to-track continuous-discovery context instead of a finite LLM playlist context. The goal is gradual drift through related areas of the library rather than a single compiled concept with explicit recovery stages.
+
+## 8. Local Genre Canonicalization
+
+Aurora keeps file metadata as the source record while allowing an administrator to group inconsistent local spellings. The `genres.merged_into` redirect and normalized `track_genres` membership layer make variants such as `Drum and Bass`, `Drum n Bass`, and `Drum & Bass` behave as one genre without rewriting Picard tags.
+
+Grouping is always reviewed:
+
+- a deterministic 0–100 similarity score combines trigram spelling, normalized token overlap, and word order
+- MusicBrainz paths are supporting evidence, not proof of identity
+- conflicting taxonomy roots require explicit confirmation
+- slash-combined tags are quarantined separately because values such as `Pop/Rock` may be intentional
+- dismissals and grouping decisions are signature-scoped and audited
+- every alias can be restored from Settings > Library Entities > Genres
+
+All genre-aware consumers resolve the canonical entity first. Genre browsing, secondary-tag membership, taxonomy paths, library-health buckets, banned paths, hop costs, Infinity Mode, Hub system playlists, album filters, and OpenSubsonic genre lists therefore share the same identity contract. Approved aliases have hop cost `0` because they enter the matrix under one canonical name and path.

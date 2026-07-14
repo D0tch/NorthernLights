@@ -3064,6 +3064,205 @@ a:focus-visible > .genre-card .genre-card__label {
   container-type: inline-size;
 }
 
+.genre-manual-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--spacing-md);
+}
+
+.genre-candidate-list,
+.genre-compact-list {
+  display: grid;
+  gap: var(--spacing-sm);
+}
+
+.genre-candidate {
+  display: grid;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md);
+  border: 1px solid color-mix(in srgb, var(--glass-border) 76%, transparent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-bg-primary) 34%, transparent);
+  content-visibility: auto;
+  contain-intrinsic-size: 240px;
+}
+
+.genre-candidate__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+}
+
+.genre-candidate__head > div:first-child {
+  display: grid;
+  gap: 2px;
+  min-width: 90px;
+}
+
+.genre-candidate__head strong {
+  font-size: 1.4rem;
+  line-height: 1;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.genre-candidate__head > div:first-child span {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.055em;
+}
+
+.genre-candidate__evidence {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.genre-candidate__evidence span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 9px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-pill);
+  color: var(--color-text-secondary);
+  background: color-mix(in srgb, var(--color-surface) 78%, transparent);
+  font-size: 0.72rem;
+  font-weight: 650;
+}
+
+.genre-choice-list {
+  display: grid;
+  gap: 6px;
+}
+
+.genre-choice-list label {
+  display: grid;
+  grid-template-columns: auto minmax(120px, 1fr) auto minmax(120px, 0.9fr);
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-height: 48px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background-color 180ms ease-out, border-color 180ms ease-out;
+}
+
+.genre-choice-list label:hover,
+.genre-choice-list label.selected {
+  border-color: var(--glass-border);
+  background: color-mix(in srgb, var(--color-surface-variant) 72%, transparent);
+}
+
+.genre-choice-list input {
+  accent-color: var(--color-primary);
+}
+
+.genre-choice-list span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.genre-choice-list .genre-choice__name {
+  color: var(--color-text-primary);
+  font-size: 0.88rem;
+  font-weight: 750;
+}
+
+.genre-candidate__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+}
+
+.genre-compact-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--spacing-sm);
+  min-height: 58px;
+  padding: 10px 12px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-xs);
+  background: color-mix(in srgb, var(--color-bg-primary) 30%, transparent);
+}
+
+.genre-compact-row > svg {
+  color: var(--color-primary);
+}
+
+.genre-compact-row > div {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.genre-compact-row strong,
+.genre-compact-row span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.genre-compact-row strong {
+  color: var(--color-text-primary);
+  font-size: 0.86rem;
+}
+
+.genre-compact-row span {
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+}
+
+@media (max-width: 639px) {
+  .genre-manual-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .genre-candidate__head {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .genre-candidate__evidence {
+    justify-content: flex-start;
+  }
+
+  .genre-choice-list label {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+  }
+
+  .genre-choice-list label span:last-child {
+    grid-column: 2 / -1;
+  }
+
+  .genre-candidate__actions,
+  .genre-candidate__actions .btn {
+    width: 100%;
+  }
+
+  .genre-candidate__actions .btn {
+    justify-content: center;
+  }
+
+  .genre-compact-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .genre-compact-row .btn {
+    grid-column: 1 / -1;
+    justify-content: center;
+  }
+}
+
 .artist-entities-settings__header {
   display: flex;
   align-items: flex-end;
@@ -4676,6 +4875,550 @@ a:focus-visible > .genre-card .genre-card__label {
   }
 }
 
+/* ─── FIRST-RUN SETUP ─── */
+.setup-wizard,
+.setup-status-error {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  min-height: 100dvh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding:
+    calc(var(--spacing-lg) + var(--safe-area-top))
+    calc(var(--spacing-md) + var(--safe-area-right))
+    calc(var(--spacing-lg) + var(--safe-area-bottom))
+    calc(var(--spacing-md) + var(--safe-area-left));
+  background: var(--color-background);
+  color: var(--color-text-primary);
+  isolation: isolate;
+}
+
+.setup-wizard__atmosphere,
+.setup-status-error::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(circle at 18% 12%, color-mix(in oklch, var(--aurora-green) 25%, transparent), transparent 36%),
+    radial-gradient(circle at 84% 82%, color-mix(in oklch, var(--aurora-teal) 20%, transparent), transparent 38%);
+  opacity: 0.72;
+}
+
+.setup-wizard__panel,
+.setup-status-error__panel {
+  width: min(100%, 48rem);
+  margin: auto;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in oklch, var(--glass-bg) 92%, var(--color-background));
+  box-shadow: var(--shadow-lg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+}
+
+.setup-wizard__panel {
+  padding: 2.75rem;
+}
+
+.setup-wizard__header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  max-width: 42rem;
+  margin: 0 auto var(--spacing-xl);
+}
+
+.setup-wizard__brand-mark,
+.setup-wizard__step-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in oklch, var(--color-primary) 24%, var(--glass-border));
+  color: var(--color-primary);
+  background: color-mix(in oklch, var(--color-primary) 10%, var(--color-surface));
+}
+
+.setup-wizard__brand-mark {
+  width: 3.5rem;
+  height: 3.5rem;
+  border-radius: 50%;
+  box-shadow: var(--shadow-glow);
+}
+
+.setup-wizard__header h1,
+.setup-wizard__step-heading h2,
+.setup-status-error__panel h1 {
+  margin: 0;
+  color: var(--color-text-primary);
+  font-family: var(--font-display);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+}
+
+.setup-wizard__header h1 {
+  font-size: 2rem;
+  line-height: 1.1;
+}
+
+.setup-wizard__header p:last-child,
+.setup-wizard__step-heading p:last-child,
+.setup-status-error__panel p {
+  max-width: 68ch;
+  margin-top: var(--spacing-xs);
+  color: var(--color-text-secondary);
+  line-height: 1.55;
+}
+
+.setup-wizard__eyebrow {
+  margin: 0 0 var(--spacing-xs);
+  color: var(--color-primary);
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.setup-wizard__steps {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  max-width: 32rem;
+  margin: 0 auto var(--spacing-2xl);
+  list-style: none;
+}
+
+.setup-wizard__steps li {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+  min-width: 0;
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-align: center;
+}
+
+.setup-wizard__steps li:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  top: 0.95rem;
+  left: calc(50% + 1.25rem);
+  width: calc(100% - 2.5rem);
+  height: 1px;
+  background: var(--glass-border);
+}
+
+.setup-wizard__steps li[data-state="complete"]:not(:last-child)::after {
+  background: color-mix(in oklch, var(--color-primary) 58%, var(--glass-border));
+}
+
+.setup-wizard__step-marker {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.9rem;
+  height: 1.9rem;
+  border: 1px solid var(--glass-border);
+  border-radius: 50%;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.setup-wizard__steps li[data-state="current"] {
+  color: var(--color-text-primary);
+}
+
+.setup-wizard__steps li[data-state="current"] .setup-wizard__step-marker {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-background);
+  box-shadow: var(--shadow-glow);
+}
+
+.setup-wizard__steps li[data-state="complete"] .setup-wizard__step-marker {
+  border-color: color-mix(in oklch, var(--color-primary) 54%, var(--glass-border));
+  background: color-mix(in oklch, var(--color-primary) 12%, var(--color-surface));
+  color: var(--color-primary);
+}
+
+.setup-wizard__step-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setup-wizard__content {
+  max-width: 42rem;
+  margin: 0 auto;
+}
+
+.setup-wizard__step {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+  animation: setup-step-enter 220ms var(--ease-out) both;
+}
+
+.setup-wizard__step-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-md);
+}
+
+.setup-wizard__step-icon {
+  width: 2.75rem;
+  height: 2.75rem;
+  border-radius: var(--radius-sm);
+}
+
+.setup-wizard__step-heading h2 {
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.setup-wizard__step-heading h2:focus {
+  outline: none;
+}
+
+.setup-wizard__fields,
+.setup-wizard__field {
+  display: flex;
+  flex-direction: column;
+}
+
+.setup-wizard__fields {
+  gap: var(--spacing-md);
+}
+
+.setup-wizard__field {
+  gap: 0.4rem;
+}
+
+.setup-wizard__field label {
+  color: var(--color-text-primary);
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.setup-wizard__field input {
+  width: 100%;
+  min-height: 3rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  background: color-mix(in oklch, var(--color-surface) 84%, var(--color-background));
+  color: var(--color-text-primary);
+  font-family: var(--font-body);
+  font-size: 1rem;
+  transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
+}
+
+.setup-wizard__field input::placeholder {
+  color: var(--color-text-muted);
+  opacity: 0.74;
+}
+
+.setup-wizard__field input:hover {
+  border-color: var(--glass-border-hover);
+}
+
+.setup-wizard__field input:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--color-primary) 18%, transparent);
+}
+
+.setup-wizard__field input[aria-invalid="true"] {
+  border-color: color-mix(in oklch, var(--color-error) 60%, var(--glass-border));
+}
+
+.setup-wizard__field > p,
+.setup-wizard__path-example {
+  color: var(--color-text-muted);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.setup-wizard__path-example {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 0.35rem 0.5rem;
+  border-radius: 0.45rem;
+  background: color-mix(in oklch, var(--color-surface-variant) 68%, transparent);
+}
+
+.setup-wizard__model-panel {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: color-mix(in oklch, var(--color-surface) 76%, var(--color-background));
+}
+
+.setup-wizard__model-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-sm);
+  min-height: 5.5rem;
+  color: var(--color-text-secondary);
+  font-size: 0.875rem;
+}
+
+.setup-wizard__model-list {
+  list-style: none;
+}
+
+.setup-wizard__model-list > li {
+  padding: 0.85rem 1rem;
+}
+
+.setup-wizard__model-list > li + li {
+  border-top: 1px solid var(--glass-border);
+}
+
+.setup-wizard__model-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.setup-wizard__model-icon {
+  display: inline-flex;
+  color: var(--color-warning);
+}
+
+.setup-wizard__model-list li[data-state="ready"] .setup-wizard__model-icon {
+  color: var(--color-success);
+}
+
+.setup-wizard__model-list li[data-state="downloading"] .setup-wizard__model-icon {
+  color: var(--color-primary);
+}
+
+.setup-wizard__model-row div {
+  min-width: 0;
+}
+
+.setup-wizard__model-row strong,
+.setup-wizard__model-row code {
+  display: block;
+}
+
+.setup-wizard__model-row strong {
+  color: var(--color-text-primary);
+  font-size: 0.875rem;
+}
+
+.setup-wizard__model-row code,
+.setup-wizard__model-row > span:last-child {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+}
+
+.setup-wizard__model-row code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.setup-wizard__model-row > span:last-child {
+  white-space: nowrap;
+}
+
+.setup-wizard__progress {
+  display: block;
+  width: 100%;
+  height: 0.35rem;
+  margin-top: 0.65rem;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-pill);
+  appearance: none;
+  accent-color: var(--color-primary);
+  background: var(--glass-border);
+}
+
+.setup-wizard__progress::-webkit-progress-bar {
+  border-radius: var(--radius-pill);
+  background: var(--glass-border);
+}
+
+.setup-wizard__progress::-webkit-progress-value {
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+}
+
+.setup-wizard__progress::-moz-progress-bar {
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+}
+
+.setup-wizard__note,
+.setup-wizard__message {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-sm);
+  margin: 0;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  padding: 0.75rem 0.85rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.setup-wizard__note {
+  background: color-mix(in oklch, var(--color-surface-variant) 62%, transparent);
+  color: var(--color-text-secondary);
+}
+
+.setup-wizard__message[data-state="error"] {
+  border-color: color-mix(in oklch, var(--color-error) 36%, var(--glass-border));
+  background: color-mix(in oklch, var(--color-error) 8%, var(--color-surface));
+  color: var(--color-error);
+}
+
+.setup-wizard__message svg {
+  flex: 0 0 auto;
+  margin-top: 0.1rem;
+}
+
+.setup-wizard__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  padding-top: var(--spacing-xs);
+}
+
+.setup-wizard__actions--single .btn,
+.setup-wizard__actions--split .btn:last-child {
+  min-width: 13rem;
+}
+
+.setup-wizard__actions--split {
+  justify-content: space-between;
+}
+
+.setup-wizard__actions .btn {
+  min-height: 2.75rem;
+}
+
+.setup-wizard__actions .btn[disabled] {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.setup-wizard__spinner {
+  animation: setup-spinner 850ms linear infinite;
+}
+
+.setup-status-error__panel {
+  max-width: 28rem;
+  padding: var(--spacing-xl);
+  text-align: center;
+}
+
+.setup-status-error__panel h1 {
+  font-size: 1.45rem;
+}
+
+.setup-status-error__panel .btn {
+  margin-top: var(--spacing-lg);
+}
+
+@keyframes setup-step-enter {
+  from { opacity: 0; transform: translateX(0.75rem); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes setup-spinner {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 639px) {
+  .setup-wizard,
+  .setup-status-error {
+    align-items: flex-start;
+    padding:
+      calc(var(--spacing-md) + var(--safe-area-top))
+      calc(var(--spacing-sm) + var(--safe-area-right))
+      calc(var(--spacing-md) + var(--safe-area-bottom))
+      calc(var(--spacing-sm) + var(--safe-area-left));
+  }
+
+  .setup-wizard__panel {
+    padding: 1.15rem;
+    border-radius: var(--radius);
+  }
+
+  .setup-wizard__header {
+    align-items: flex-start;
+    margin-bottom: var(--spacing-lg);
+  }
+
+  .setup-wizard__brand-mark {
+    width: 3rem;
+    height: 3rem;
+  }
+
+  .setup-wizard__steps {
+    margin-bottom: var(--spacing-xl);
+  }
+
+  .setup-wizard__step-heading {
+    gap: 0.75rem;
+  }
+
+  .setup-wizard__step-icon {
+    width: 2.5rem;
+    height: 2.5rem;
+  }
+
+  .setup-wizard__model-row {
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+
+  .setup-wizard__model-row > span:last-child {
+    grid-column: 2;
+  }
+
+  .setup-wizard__actions,
+  .setup-wizard__actions--split {
+    flex-direction: column-reverse;
+  }
+
+  .setup-wizard__actions .btn,
+  .setup-wizard__actions--single .btn,
+  .setup-wizard__actions--split .btn:last-child {
+    width: 100%;
+    min-width: 0;
+    min-height: 3rem;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .setup-wizard__step,
+  .setup-wizard__spinner {
+    animation: none;
+  }
+}
+
 /* ─── GLOBAL SEARCH ─── */
 .global-search-root {
   position: relative;
@@ -5808,33 +6551,21 @@ a:focus-visible > .genre-card .genre-card__label {
   animation: spin 0.8s linear infinite;
 }
 
-/* Registered so the cover colour can be *transitioned* — otherwise the small
-   art-tinted accents (art border, title shadow, chips, buttons) snap on track
-   change while the backdrops cross-fade smoothly. IMPORTANT: only small
-   elements may read this variable. The full-screen surfaces (shell base, mesh,
-   scrim) cross-fade stacked opaque layers by opacity instead — a custom
-   property transition animates on the main thread, and a screen-sized
-   color-mix gradient re-painting on every frame of the 2.5s morph is what made
-   real devices stutter and flicker. */
-@property --mobile-now-art-color {
-  syntax: "<color>";
-  inherits: true;
-  initial-value: transparent;
-}
-
 .mobile-now-playing-shell {
-  --mobile-now-art-color: var(--color-primary);
   /* Background video occupies the top portion; the scrim covers the rest. */
   --mnp-video-height: 75vh;
   /* Single source of truth for the slow, cohesive backdrop cross-fades (video
-     reveal, mesh dim, ambient fade, cover fade, per-track color crossfade). A
-     gentle ease-in-out reads as a true slow drift; --ease-out is front-loaded
-     and pops. Delay vs. playback is intentional — smoothness over immediacy. */
+     reveal, bloom dim, per-track bloom morph). A gentle ease-in-out reads as a
+     true slow drift; --ease-out is front-loaded and pops. The morph is also
+     HELD ~1s after a track change (BLOOM_HOLD_MS in MobileNowPlaying), so
+     skipping never even starts a fade — smoothness over immediacy, by design. */
   --mnp-fade: 2500ms;
   --mnp-ease: var(--ease-in-out);
-  /* Morph the accent tint over the same window as the backdrop cross-fades.
-     Only small elements read the variable, so per-frame repaints stay tiny. */
-  transition: --mobile-now-art-color var(--mnp-fade) var(--mnp-ease);
+  /* Readability envelope: fixed cap on the bloom's intensity over the page
+     background. Bounded by construction — no cover can blow out the text, so
+     there is no adaptive veil or tint machinery. Frosted daylight in light
+     mode; deeper glow in dark (see the .dark override below). */
+  --mnp-bloom-opacity: 0.62;
   position: fixed;
   inset: 0;
   z-index: 50;
@@ -5842,10 +6573,13 @@ a:focus-visible > .genre-card .genre-card__label {
   flex-direction: column;
   isolation: isolate;
   overflow: hidden;
-  /* Static. The tinted radial base lives inside each mesh layer (see
-     buildCoverMeshGradient), so per-track morphs never repaint this surface. */
+  /* Static — all per-track color lives inside the bloom layers. */
   background: var(--color-bg-primary);
   will-change: transform, opacity;
+}
+
+.dark .mobile-now-playing-shell {
+  --mnp-bloom-opacity: 0.8;
 }
 
 .mobile-now-playing-shell[data-state="open"] {
@@ -5857,89 +6591,132 @@ a:focus-visible > .genre-card .genre-card__label {
   pointer-events: none;
 }
 
-/* Vibrant multi-color mesh built from the cover's colors — the base layer and
-   the whole background when no video is shown. The container owns the video-dim
-   (1 → 0.35); the stacked layers inside own the per-track color cross-fade. */
-.mobile-now-playing-mesh {
-  position: absolute;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  opacity: 1;
-  transition: opacity var(--mnp-fade) var(--mnp-ease);
-  will-change: opacity;
+/* Two-page vertical scroller: page 1 is the now-playing screen, page 2 the
+   queue panel. Proximity snap settles on whole pages without trapping the
+   scroll inside the long queue; overscroll containment keeps rubber-banding
+   (and pull-to-refresh) inside the sheet. The backdrop (bloom, video, scrim)
+   lives inside page 1 and slides up with it as one unit. */
+.mobile-now-scroll {
+  /* offsetParent for the queue-list wrapper's offsetTop → the virtualizer's
+     scrollMargin — do not remove. */
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scroll-snap-type: y proximity;
+  overscroll-behavior-y: contain;
+  scrollbar-width: none;
 }
 
-/* One layer per palette, fully opaque (the tinted base is baked into the
-   gradient string) so the newcomer completely covers the old layer and the
-   cross-fade is opacity-only → GPU-composited, cheap. */
-.mobile-now-playing-mesh-layer {
-  position: absolute;
-  inset: 0;
+.mobile-now-scroll::-webkit-scrollbar {
+  display: none;
 }
 
-/* Blurred cover art washed behind the mesh — a soft bloom of the album's real
-   colors. The container owns the resting opacity and the video fade-out; the
-   stacked layers inside cross-fade the actual image from track to track (so it
-   morphs with the mesh instead of hard-cutting). */
-.mobile-now-playing-ambient {
-  position: absolute;
-  inset: -18%;
-  z-index: 0;
-  inline-size: 136%;
-  block-size: 136%;
-  opacity: 0.36;
-  transform: scale(1.05);
-  will-change: opacity;
-  pointer-events: none;
-  transition: opacity var(--mnp-fade) var(--mnp-ease);
+/* Page 1 reproduces the pre-scroller shell layout (column of spacers, header,
+   content) at exactly one viewport; on very short screens it grows past 100%
+   and the outer scroller absorbs the overflow. It is the containing block for
+   the backdrop stack (bloom, video, ::after scrim), and isolation keeps those
+   z-indices internal to the page. */
+.mobile-now-page {
+  position: relative;
+  isolation: isolate;
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+  scroll-snap-align: start;
 }
 
-.mobile-now-playing-ambient-layer {
-  position: absolute;
+/* The queue: an opaque panel that follows page 1 (and its backdrop) up from
+   below the fold, so rows stay readable and the backdrop needs no awareness
+   of it. NOT positioned on purpose — the queue-list wrapper's offsetTop must
+   keep resolving against .mobile-now-scroll (virtualizer scrollMargin). */
+.mobile-now-queue {
+  min-height: 100%;
+  scroll-snap-align: start;
+  background: var(--color-bg-primary);
+  border-top: 1px solid var(--glass-border);
+  border-radius: 1.25rem 1.25rem 0 0;
+  padding-bottom: calc(1rem + var(--safe-area-bottom));
+}
+
+/* Sticks while browsing the queue. Safe-area padding so the stuck header
+   clears the notch/status bar (the sheet spans the full screen). */
+.mobile-now-queue-header {
+  position: sticky;
   top: 0;
-  left: 0;
-  inline-size: 25%;
-  block-size: 25%;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem 1rem;
+  padding-top: calc(0.75rem + var(--safe-area-top));
+  background: var(--color-bg-primary);
+  border-radius: 1.25rem 1.25rem 0 0;
+}
+
+/* Aurora bloom — the ONE animated colored surface: blurred cover art with a
+   few soft palette glows, cross-faded as whole opaque layers per settled
+   track. The container owns the fixed readability envelope
+   (--mnp-bloom-opacity) and the video dim; the layers inside own the
+   per-track morph. Anchored to page 1 (see the page ::after scrim), so it
+   scrolls away with the controls. */
+.mobile-now-bloom {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  opacity: var(--mnp-bloom-opacity);
+  transition: opacity var(--mnp-fade) var(--mnp-ease);
+  will-change: opacity;
+}
+
+/* One opaque composite per track (solid base + blurred art + glows), so a
+   newcomer fully covers the layer beneath and the morph is pure opacity
+   compositing on the GPU. */
+.mobile-now-bloom-layer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--color-bg-primary);
+}
+
+/* A layer added on a track change mounts on top at opacity 0 and fades in over
+   the previous one. The first layer (sheet open) skips this so the background
+   doesn't lag behind the opening sheet. */
+.mobile-now-bloom-layer--fade {
+  will-change: opacity;
+  animation: mobile-now-layer-in var(--mnp-fade) var(--mnp-ease) both;
+}
+
+.mobile-now-bloom-art {
+  position: absolute;
+  /* Oversized bleed (−8% … 108%) hides the blur's transparent edge falloff. */
+  top: -8%;
+  left: -8%;
+  inline-size: 29%;
+  block-size: 29%;
   object-fit: cover;
   /* Rasterized at quarter resolution and scaled up 4x by the compositor: the
      blur runs on a 16x-smaller surface (a huge win on phone GPUs — full-res
-     blur(46px) at 3x DPR was ~25MB of texture per layer) and upscaling an
-     already-blurred bitmap is invisible; blur(12px) at 25% ≈ blur(48px) at
-     full size. Pre-blurred per layer so the cross-fade is plain opacity
-     compositing of two cached bitmaps — no per-frame re-rasterization. */
+     blur(48px) at 3x DPR is ~25MB of texture per layer) and upscaling an
+     already-blurred bitmap is invisible; blur(12px) at quarter size ≈
+     blur(48px) at full size. Pre-blurred per layer so the cross-fade is plain
+     opacity compositing of cached bitmaps — no per-frame re-rasterization. */
   transform: scale(4);
   transform-origin: 0 0;
   filter: blur(12px) saturate(1.3);
 }
 
-/* A layer added on a track change mounts on top at opacity 0 and fades in over
-   the previous one. The first layer (sheet open) skips this so the background
-   doesn't lag behind the opening sheet. Shared by mesh, ambient and scrim. */
-.mobile-now-playing-mesh-layer--fade,
-.mobile-now-playing-ambient-layer--fade,
-.mobile-now-playing-scrim-layer--fade {
-  will-change: opacity;
-  animation: mobile-now-layer-in var(--mnp-fade) var(--mnp-ease) both;
-}
-
-/* Adaptive readability veil. Sits above the mesh/ambient (z 0) but below the
-   video (z 1) and controls, pushing the colour backdrop toward the theme
-   background so themed text stays legible over near-white art (near-black in
-   light mode). Opacity is 0 for normal art — set from JS by cover luminance. */
-.mobile-now-bg-veil {
+.mobile-now-bloom-tint {
   position: absolute;
   inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background: var(--color-bg-primary);
-  opacity: var(--mnp-veil-opacity, 0);
-  transition: opacity var(--mnp-fade) var(--mnp-ease);
 }
 
-/* Full-screen background music video. Hidden until buffered, then cross-faded
-   in. Sits above the cover/mesh, below the scrim and controls. */
-/* Video occupies the top portion of the screen, flush to the top edge. Its
+/* Background music video. Hidden until buffered, then cross-faded in. Sits
+   above the bloom, below the scrim and controls. */
+/* Video occupies the top portion of page 1, flush to its top edge. Its
    bottom edge is hidden under the fully-opaque base of the scrim. */
 .mobile-now-video {
   position: absolute;
@@ -5981,39 +6758,38 @@ a:focus-visible > .genre-card .genre-card__label {
   opacity: 1;
 }
 
-/* When the video is showing, fade the cover-art background out so the video is
-   the primary viewing area. */
-.mobile-now-playing-shell[data-video="visible"] .mobile-now-playing-ambient {
-  opacity: 0;
+/* When the video is showing, dim the bloom right down so the video is the
+   primary viewing area (it keeps a whisper of the palette in the gaps). */
+.mobile-now-playing-shell[data-video="visible"] .mobile-now-bloom {
+  opacity: 0.25;
 }
 
-.mobile-now-playing-shell[data-video="visible"] .mobile-now-playing-mesh {
-  opacity: 0.35;
-}
-
-/* Single, PERMANENT scrim — the dark panel behind the controls must stay put
-   across track changes, so the scrim container never fades in/out. Its tint
-   (cover colour normally, neutral page background while a video plays) morphs
-   by cross-fading stacked layers: the newcomer fades in OVER the still-opaque
-   previous layer, so the panel never dips through a translucent midpoint —
-   and each layer is a one-off rasterized gradient (opacity-only animation)
-   instead of a full-screen repaint per frame. The gradient itself is built in
-   buildScrimGradient(): transparent up top so the colour mesh shows through,
-   fully opaque by 63% — above the video's 75vh (≈75%) bottom edge — to mask
-   that edge and back the controls. */
-.mobile-now-playing-scrim {
+/* Single, PERMANENT, NEUTRAL scrim — never animates and never changes with
+   track or video state, so it needs no layering machinery at all. Built only
+   from --color-bg-primary (adapts to light/dark): a light top band keeps the
+   header buttons legible over a bright video or bloom; the middle stays clear
+   so the bloom reads; fully opaque by 63% — above the video's 75vh (≈75%)
+   bottom edge — to mask that edge and back the text and controls. Lives on
+   page 1 so it scrolls away with the rest of the backdrop. */
+.mobile-now-page::after {
+  content: "";
   position: absolute;
   inset: 0;
   z-index: 2;
   pointer-events: none;
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--color-bg-primary) 45%, transparent) 0%,
+    transparent 14%,
+    transparent 34%,
+    color-mix(in srgb, var(--color-bg-primary) 55%, transparent) 50%,
+    var(--color-bg-primary) 63%
+  );
 }
 
-.mobile-now-playing-scrim-layer {
-  position: absolute;
-  inset: 0;
-}
-
-.mobile-now-playing-shell > :not(.mobile-now-playing-ambient):not(.mobile-now-playing-mesh):not(.mobile-now-video):not(.mobile-now-bg-veil):not(.mobile-now-playing-scrim) {
+/* Page-1 content paints above its backdrop stack:
+   bloom (z0) < video (z1) < ::after scrim (z2) < content (z3). */
+.mobile-now-page > :not(.mobile-now-bloom):not(.mobile-now-video) {
   position: relative;
   z-index: 3;
 }
@@ -6032,12 +6808,41 @@ a:focus-visible > .genre-card .genre-card__label {
   flex-direction: column;
   align-items: center;
   gap: 0.45rem;
+  min-inline-size: 0;
   color: var(--color-text-muted);
   font-size: 0.7rem;
   font-weight: 750;
   letter-spacing: 0.14em;
   line-height: 1;
   text-transform: uppercase;
+}
+
+/* Single line, truncated: "Now Playing" grows into "Now Playing on {device}"
+   when casting or playing on a selected output. */
+.mobile-now-heading-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-inline-size: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mobile-now-heading-device {
+  color: var(--color-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Live-cast state dot in the heading (replaces the old state chip). */
+.mobile-now-heading-dot {
+  inline-size: 0.4rem;
+  block-size: 0.4rem;
+  flex: 0 0 0.4rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  box-shadow: 0 0 0.6rem color-mix(in srgb, var(--color-primary) 60%, transparent);
 }
 
 .mobile-now-playing-content {
@@ -6059,7 +6864,7 @@ a:focus-visible > .genre-card .genre-card__label {
   block-size: min(66vw, 16rem);
   flex: 0 0 auto;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--mobile-now-art-color) 28%, var(--glass-border));
+  border: 1px solid var(--glass-border);
   border-radius: clamp(1.25rem, 5vw, 1.75rem);
   background: var(--glass-bg);
   box-shadow: 0 1.5rem 4rem color-mix(in srgb, var(--color-text-primary) 18%, transparent);
@@ -6115,7 +6920,9 @@ a:focus-visible > .genre-card .genre-card__label {
   text-overflow: ellipsis;
   white-space: nowrap;
   color: var(--color-text-primary);
-  text-shadow: 0 0.75rem 2.5rem color-mix(in srgb, var(--mobile-now-art-color) 24%, transparent);
+  /* Neutral separation shadow: lifts the title off a bright bloom or video
+     without per-track color machinery. */
+  text-shadow: 0 0.5rem 1.5rem color-mix(in srgb, var(--color-bg-primary) 55%, transparent);
   font-size: clamp(1.35rem, 5.4vw, 1.9rem);
   font-weight: 760;
   letter-spacing: -0.045em;
@@ -6137,34 +6944,9 @@ a:focus-visible > .genre-card .genre-card__label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: color-mix(in srgb, var(--mobile-now-art-color) 46%, var(--color-primary));
+  color: color-mix(in srgb, var(--color-primary) 40%, var(--color-text-muted));
   font-size: 0.78rem;
   font-weight: 650;
-}
-
-.mobile-now-state-chip {
-  display: inline-flex;
-  align-items: center;
-  max-inline-size: 100%;
-  gap: 0.45rem;
-  margin-top: 0.9rem;
-  padding: 0.45rem 0.75rem;
-  border-radius: var(--radius-pill);
-  border: 1px solid color-mix(in srgb, var(--mobile-now-art-color) 30%, var(--glass-border));
-  background: color-mix(in srgb, var(--mobile-now-art-color) 12%, transparent);
-  color: var(--color-primary);
-  font-size: 0.75rem;
-  font-weight: 700;
-  line-height: 1;
-}
-
-.mobile-now-state-dot {
-  inline-size: 0.45rem;
-  block-size: 0.45rem;
-  flex: 0 0 0.45rem;
-  border-radius: var(--radius-pill);
-  background: currentColor;
-  box-shadow: 0 0 0.75rem color-mix(in srgb, var(--color-primary) 60%, transparent);
 }
 
 .mobile-now-progress {
@@ -6173,18 +6955,19 @@ a:focus-visible > .genre-card .genre-card__label {
   animation: mobile-now-enter-soft 240ms var(--ease-out) 110ms both;
 }
 
+/* Cast volume card — only rendered on platforms whose hardware volume keys
+   don't reach the receiver (see castVolumeKeys.ts); modern Android stays
+   sliderless while casting. */
 .mobile-now-volume {
   inline-size: min(100%, 24rem);
   margin-top: 1rem;
   padding: 0.85rem 1rem;
   border: 1px solid var(--glass-border);
   border-radius: 1.25rem;
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--mobile-now-art-color) 8%, transparent), transparent 62%),
-    color-mix(in srgb, var(--color-surface) 55%, transparent);
+  background: color-mix(in srgb, var(--color-surface) 55%, transparent);
   box-shadow:
     inset 0 1px 0 color-mix(in srgb, var(--color-surface-variant) 44%, transparent),
-    0 1rem 2.75rem color-mix(in srgb, var(--mobile-now-art-color) 10%, transparent);
+    0 1rem 2.75rem color-mix(in srgb, var(--color-bg-primary) 35%, transparent);
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
   animation: mobile-now-enter-soft 220ms var(--ease-out) both;
@@ -6194,7 +6977,7 @@ a:focus-visible > .genre-card .genre-card__label {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  color: color-mix(in srgb, var(--mobile-now-art-color) 24%, var(--color-text-muted));
+  color: var(--color-text-muted);
   font-size: 0.68rem;
   font-weight: 750;
   letter-spacing: 0.14em;
@@ -6210,45 +6993,11 @@ a:focus-visible > .genre-card .genre-card__label {
   border-radius: var(--radius-pill);
   background: linear-gradient(
     90deg,
-    color-mix(in srgb, var(--mobile-now-art-color) 22%, transparent),
-    color-mix(in srgb, var(--color-primary) 20%, transparent)
+    color-mix(in srgb, var(--color-primary) 22%, transparent),
+    color-mix(in srgb, var(--aurora-teal) 30%, transparent)
   );
   accent-color: var(--color-primary);
   outline: none;
-}
-
-/* Frosted glass background so the buttons stay legible whether they sit over
-   the video (header) or on the solid panel (transport/secondary). Uses a
-   text-primary tint (contrasts on both the bg-primary panel and the video) plus
-   a blur and soft shadow. `color` is deliberately left untouched so the active /
-   loved icon colors are preserved. */
-.mobile-now-playing-shell .mobile-player-control-btn,
-.mobile-now-playing-shell .mobile-player-pill-btn {
-  border-color: color-mix(in srgb, var(--mobile-now-art-color) 22%, var(--glass-border));
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--mobile-now-art-color) 14%, transparent), transparent 72%),
-    color-mix(in srgb, var(--color-text-primary) 20%, transparent);
-  box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--color-bg-primary) 40%, transparent);
-  backdrop-filter: blur(16px) saturate(1.2);
-  -webkit-backdrop-filter: blur(16px) saturate(1.2);
-}
-
-.mobile-now-playing-shell .mobile-player-control-btn:hover,
-.mobile-now-playing-shell .mobile-player-pill-btn:hover {
-  border-color: color-mix(in srgb, var(--mobile-now-art-color) 30%, var(--glass-border));
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--mobile-now-art-color) 18%, transparent), transparent 72%),
-    color-mix(in srgb, var(--color-text-primary) 26%, transparent);
-}
-
-.mobile-now-playing-shell .mobile-player-control-btn.is-active,
-.mobile-now-playing-shell .mobile-player-pill-btn.is-active {
-  color: var(--color-primary);
-  border-color: color-mix(in srgb, var(--mobile-now-art-color) 34%, var(--color-primary));
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--mobile-now-art-color) 16%, transparent), transparent 62%),
-    color-mix(in srgb, var(--color-primary) 8%, transparent);
-  box-shadow: 0 0 1rem color-mix(in srgb, var(--mobile-now-art-color) 14%, transparent);
 }
 
 .mobile-now-volume-slider::-webkit-slider-thumb {
@@ -6268,6 +7017,35 @@ a:focus-visible > .genre-card .genre-card__label {
   border: 0;
   background: var(--color-primary);
   box-shadow: 0 0 1rem color-mix(in srgb, var(--color-primary) 34%, transparent);
+}
+
+/* NEUTRAL frosted glass — identical on every cover, so the buttons are always
+   instantly identifiable whether they sit over the video (header) or on the
+   solid panel (transport/secondary). A text-primary tint contrasts on both the
+   bg-primary panel and a bright video, with a hairline border, blur, and soft
+   shadow. `color` is deliberately left untouched so the active / loved icon
+   colors are preserved. Active state is the aurora emerald. */
+.mobile-now-playing-shell .mobile-player-control-btn,
+.mobile-now-playing-shell .mobile-player-pill-btn {
+  border-color: color-mix(in srgb, var(--color-text-primary) 16%, var(--glass-border));
+  background: color-mix(in srgb, var(--color-text-primary) 20%, transparent);
+  box-shadow: 0 0.35rem 1rem color-mix(in srgb, var(--color-bg-primary) 40%, transparent);
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+}
+
+.mobile-now-playing-shell .mobile-player-control-btn:hover,
+.mobile-now-playing-shell .mobile-player-pill-btn:hover {
+  border-color: color-mix(in srgb, var(--color-text-primary) 26%, var(--glass-border));
+  background: color-mix(in srgb, var(--color-text-primary) 26%, transparent);
+}
+
+.mobile-now-playing-shell .mobile-player-control-btn.is-active,
+.mobile-now-playing-shell .mobile-player-pill-btn.is-active {
+  color: var(--color-primary);
+  border-color: color-mix(in srgb, var(--color-primary) 45%, var(--glass-border));
+  background: color-mix(in srgb, var(--color-primary) 12%, transparent);
+  box-shadow: 0 0 1rem color-mix(in srgb, var(--color-primary) 25%, transparent);
 }
 
 .mobile-now-transport {
@@ -6327,9 +7105,10 @@ a:focus-visible > .genre-card .genre-card__label {
 }
 
 @media (max-height: 720px) {
+  /* Short screens: let the content flow past one viewport — the sheet's outer
+     two-page scroller absorbs the overflow (no nested scrolling). */
   .mobile-now-playing-content {
     justify-content: flex-start;
-    overflow-y: auto;
     padding-bottom: calc(1rem + var(--safe-area-bottom));
   }
 
@@ -6444,9 +7223,9 @@ a:focus-visible > .genre-card .genre-card__label {
   }
 }
 
-/* A freshly-mounted backdrop layer (mesh or ambient art) fades in over the
-   previous one. Within the ambient container its resting opacity is scaled down,
-   so this 0 → 1 still cross-fades correctly. */
+/* A freshly-mounted bloom layer fades in over the previous one. The container
+   scales the resting opacity (the readability envelope), so this 0 → 1 still
+   cross-fades correctly. */
 @keyframes mobile-now-layer-in {
   from {
     opacity: 0;
@@ -7967,7 +8746,7 @@ a:focus-visible > .genre-card .genre-card__label {
   height: 5%;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  background: var(--color-bg, #000);
+  background: var(--color-background, #000);
   box-shadow:
     0 0 0 2px rgba(0, 0, 0, 0.5),
     inset 0 0 2px rgba(255, 255, 255, 0.35);

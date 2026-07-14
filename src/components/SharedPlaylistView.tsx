@@ -56,7 +56,7 @@ export const SharedPlaylistView: React.FC = () => {
 
         {state === 'loading' && (
           <div className="flex items-center justify-center py-24">
-            <div className="w-10 h-10 border-4 border-[var(--color-primary)]/20 border-t-[var(--color-primary)] rounded-full animate-spin" />
+            <div className="w-10 h-10 border-4 border-primary/20 border-t-[var(--color-primary)] rounded-full animate-spin" />
           </div>
         )}
 

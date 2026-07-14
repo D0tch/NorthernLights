@@ -37,8 +37,8 @@ export const GenreDetail: React.FC = () => {
     const genreInfo = useMemo(() => genres.find(g => g.id === genreId), [genres, genreId]);
     const genreName = genreInfo?.name || '';
 
-    // Tracks for this genre come from the per-genre endpoint (which matches
-    // genre_id plus the genre name in multi-genre tags), not the in-memory library.
+    // Tracks come from the canonical primary + secondary association endpoint,
+    // not from raw-tag substring matching or the in-memory library.
     const { tracks: genreTracks, loading: genreTracksLoading } = useEntityTracks(
         genreId ? `/api/genres/${encodeURIComponent(genreId)}` : null,
     );

@@ -160,7 +160,7 @@ export const GenreMatrixTab: React.FC = () => {
         });
     };
 
-    const distinctGenres = Array.from(new Set(library.map(t => (t.genre || '').toLowerCase().trim()).filter(Boolean)));
+    const distinctGenres = Array.from(new Set(library.map(t => (t.canonicalGenre || t.genre || '').toLowerCase().trim()).filter(Boolean)));
     const mappedCount = distinctGenres.filter(g => mappings[g.toLowerCase().replace(/[^\w\s-]/g, '')]).length;
     const coveragePercent = distinctGenres.length > 0 ? Math.round((mappedCount / distinctGenres.length) * 100) : 100;
     const hasLibrary = library.length > 0;
@@ -279,7 +279,7 @@ export const GenreMatrixTab: React.FC = () => {
             </div>
 
             {/* Feature Info */}
-            <div className="mt-6 p-4 rounded-xl bg-gradient-to-r from-[var(--color-primary)]/5 to-transparent border border-[var(--color-primary)]/10">
+            <div className="mt-6 p-4 rounded-xl bg-gradient-to-r from-primary/5 to-transparent border border-primary/10">
                 <h4 className="text-sm font-semibold text-[var(--color-primary)] mb-2">How it works</h4>
                 <ul className="text-xs text-[var(--color-text-muted)] space-y-1.5">
                     <li className="flex items-start gap-2">
