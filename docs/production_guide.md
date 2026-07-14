@@ -359,6 +359,7 @@ podman logs music-postgres
 Common issues:
 
 - Blank page after deploy: run `npm run build` and restart the server.
+- "This address is not allowed": add the displayed origin exactly to `ALLOWED_ORIGINS` in `.env`, then restart Aurora and select Try again.
 - Login/OAuth callback mismatch: check `SERVER_URL` and `ALLOWED_ORIGINS`.
 - Database unavailable: start or recreate the container from the setup/database screen, or check Podman/Docker permissions.
 - Analysis returns simulated features: check `.venv`, `essentia-tensorflow`, FFmpeg, and model download status.

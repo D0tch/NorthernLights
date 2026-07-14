@@ -102,6 +102,16 @@ export class CastManager {
     private reconnectInProgress = false;
     private lastStoredSessionRejoinAt = 0;
     private lastUnmappedSessionLogAt = 0;
+    // Watchdog for dead RemotePlayer event streams: after a queue replacement
+    // the sender can stay bound to the OLD media session; when that session's
+    // terminal IDLE arrives, RemotePlayer events stop entirely while the
+    // receiver keeps playing (observed 2026-07-14 16:31→17:00 — zero sender
+    // events for 29 minutes). CURRENT_TIME_CHANGED fires every second during
+    // healthy playback, so a silent-while-playing stream is detectably dead.
+    private statusWatchdogTimer: ReturnType<typeof setInterval> | null = null;
+    private lastRemotePlayerEventAt = 0;
+    private lastWatchdogRecoveryLogAt = 0;
+    private watchdogMediaRequestId = 0;
     private readonly storedSessionRejoinThrottleMs = 5000;
     private freshSessionStartedAt = 0;
     private readonly freshSessionWindowMs = 5000;
@@ -199,6 +209,11 @@ export class CastManager {
     private _onStateChangeCallback?: (state: CastState) => void;
 
     private notifyStateChange() {
+        if (this.state === 'CONNECTED') {
+            this.startStatusWatchdog();
+        } else {
+            this.stopStatusWatchdog();
+        }
         for (const listener of this.stateChangeListeners) {
             try {
                 listener(this.state);
@@ -206,6 +221,76 @@ export class CastManager {
                 console.error('[Cast] State change listener error:', e);
             }
         }
+    }
+
+    private startStatusWatchdog() {
+        if (this.statusWatchdogTimer !== null) return;
+        this.lastRemotePlayerEventAt = Date.now();
+        this.statusWatchdogTimer = setInterval(() => {
+            void this.runStatusWatchdogTick();
+        }, 5000);
+    }
+
+    private stopStatusWatchdog() {
+        if (this.statusWatchdogTimer !== null) {
+            clearInterval(this.statusWatchdogTimer);
+            this.statusWatchdogTimer = null;
+        }
+    }
+
+    /**
+     * Self-heal when the RemotePlayer event stream dies or the synced track
+     * drifts from the receiver. Healthy playback delivers CURRENT_TIME_CHANGED
+     * every second, so "store says playing but no events for >7s" means the
+     * stream is dead — re-pull the media status and re-hydrate. If the SDK
+     * lost the media session entirely, prod the receiver with a low-level
+     * GET_STATUS so it emits a fresh status the SDK can re-bind from.
+     */
+    private async runStatusWatchdogTick() {
+        if (!this.isConnected()) return;
+        try {
+            const storeState = usePlayerStore.getState();
+            const eventSilenceMs = Date.now() - this.lastRemotePlayerEventAt;
+            const streamLooksDead = storeState.playbackState === 'playing' && eventSilenceMs > 7000;
+            if (!streamLooksDead && this.doesSessionTrackMatchStore()) return;
+
+            if (!this.getMediaSession()) {
+                this.requestMediaStatusBroadcast(eventSilenceMs);
+                return;
+            }
+
+            const refreshed = await this.refreshMediaSessionStatus('status-watchdog');
+            if (refreshed && this.hasActiveRemoteMediaSession(refreshed)) {
+                const now = Date.now();
+                if (now - this.lastWatchdogRecoveryLogAt > 30000) {
+                    this.lastWatchdogRecoveryLogAt = now;
+                    this.logCast('warn', 'Cast status watchdog re-hydrating', `eventSilenceMs=${eventSilenceMs} trackMatch=${this.doesSessionTrackMatchStore()}`);
+                }
+                await this.hydrateSenderFromRemoteSession(refreshed, 'status-watchdog');
+            }
+        } catch { /* ignore */ }
+    }
+
+    /**
+     * Low-level GET_STATUS on the media namespace. Used when the sender SDK
+     * has no media session object at all (so media.getStatus() is impossible):
+     * the receiver answers with a MEDIA_STATUS the SDK ingests to rebuild it.
+     */
+    private requestMediaStatusBroadcast(eventSilenceMs: number) {
+        try {
+            const session = this.castContext?.getCurrentSession?.();
+            if (!session || typeof session.sendMessage !== 'function') return;
+            this.watchdogMediaRequestId = (this.watchdogMediaRequestId % 100000) + 1;
+            void session.sendMessage('urn:x-cast:com.google.cast.media', {
+                type: 'GET_STATUS',
+                requestId: this.watchdogMediaRequestId,
+            });
+            const now = Date.now();
+            if (now - this.lastWatchdogRecoveryLogAt > 30000) {
+                this.lastWatchdogRecoveryLogAt = now;
+                this.logCast('warn', 'Cast status watchdog requested media status', `eventSilenceMs=${eventSilenceMs} mediaSession=none`);
+            }
+        } catch { /* ignore */ }
     }
 
     private setHealthStatus(phase: CastHealthPhase, message: string, detail?: string) {
@@ -381,6 +466,15 @@ export class CastManager {
 
     public noteUserCastLaunchIntent(reason: string = 'launcher') {
         if (this.isConnected()) return;
+
+        // Warn immediately on click; the native launcher opens its own device
+        // picker that we can't cancel, so the hard stop lives in the fresh
+        // handover path (startPlaybackForCurrentSession).
+        const originIssue = this.getOriginCastabilityIssue();
+        if (originIssue) {
+            this.logCast('warn', 'Cast launch from non-castable origin', originIssue);
+            toast.error(`Casting won't work from ${window.location.host} — the Cast device can't reach this origin. Use the HTTPS app.`);
+        }
 
         this.userSessionRequestPending = true;
         this.freshSessionStartedAt = Date.now();
@@ -565,10 +659,14 @@ export class CastManager {
         const isLoaded = Boolean(this.player.isMediaLoaded || mediaInfo || queueItems.length || this.player.title);
         if (!isLoaded) return null;
 
-        const startIndex = typeof queueData?.startIndex === 'number' ? queueData.startIndex : 0;
-        const currentItemIndex = Math.max(0, Math.min(startIndex, Math.max(queueItems.length - 1, 0)));
-        const currentItem = queueItems[currentItemIndex] || null;
-        const sourceMedia = mediaInfo || currentItem?.media || null;
+        // Track identity (currentItemId / customData / currentItemIndex) must
+        // come from player.mediaInfo or not at all. queueData.startIndex is
+        // frozen at queue-load time — after the receiver auto-advances it still
+        // points at the track the load STARTED on, so deriving identity from
+        // items[startIndex] drags the sender UI back to that track whenever the
+        // real media session is transiently null (observed as from=0 to=1
+        // followed by from=1 to=0 sync ping-pong).
+        const sourceMedia = mediaInfo || null;
         const metadata = {
             ...(sourceMedia?.metadata || {}),
         };
@@ -583,15 +681,13 @@ export class CastManager {
             : {
                 contentId: '',
                 contentType: '',
-                customData: currentItem?.media?.customData || undefined,
+                customData: undefined,
                 metadata,
             };
 
         return {
             media,
             items: queueItems,
-            currentItemId: currentItem?.itemId,
-            currentItemIndex: queueItems.length ? currentItemIndex : undefined,
             currentTime: this.player.currentTime,
             playerState: this.player.playerState || (this.player.isPaused ? chrome.cast.media.PlayerState.PAUSED : chrome.cast.media.PlayerState.PLAYING),
             repeatMode: queueData?.repeatMode,
@@ -1133,6 +1229,7 @@ export class CastManager {
             this.playerController.addEventListener(
                 cast.framework.RemotePlayerEventType.CURRENT_TIME_CHANGED,
                 () => {
+                    this.lastRemotePlayerEventAt = Date.now();
                     this.onTimeUpdate?.(this.player.currentTime);
                 }
             );
@@ -1147,6 +1244,7 @@ export class CastManager {
             this.playerController.addEventListener(
                 cast.framework.RemotePlayerEventType.PLAYER_STATE_CHANGED,
                 () => {
+                    this.lastRemotePlayerEventAt = Date.now();
                     const mediaSession = this.getHydratableMediaSession();
                     const stateKey = `state=${this.player.playerState || 'unknown'} idleReason=${mediaSession?.idleReason || 'none'} paused=${this.player.isPaused}`;
                     if (stateKey !== this.lastRemotePlayerStateKey) {
@@ -1193,27 +1291,38 @@ export class CastManager {
                 () => {
                     if (!this.isConnected()) return;
                     try {
-                        const mediaSession = this.getHydratableMediaSession(this.castContext.getCurrentSession()?.getMediaSession?.() || null);
+                        // Track-identity sync must read the REAL media session.
+                        // Around item transitions it can be transiently null;
+                        // the synthetic RemotePlayer snapshot carries no queue
+                        // identity, so syncing from it is wasted work — the
+                        // next status refires this event with a real session.
+                        const mediaSession = this.getMediaSession();
+                        if (!mediaSession) return;
                         this.logCast('ok', 'REMOTE_MEDIA_INFO_CHANGED', this.describeMediaSession(mediaSession));
                         this.syncCurrentTrackFromSession(mediaSession);
                     } catch { /* ignore */ }
                 }
             );
 
-            this.playerController.addEventListener(
-                cast.framework.RemotePlayerEventType.MEDIA_STATUS_CHANGED,
-                () => {
-                    try {
-                        const mediaSession = this.getHydratableMediaSession(this.castContext.getCurrentSession()?.getMediaSession?.() || null);
-                        const statusKey = this.describeMediaSession(mediaSession);
-                        if (statusKey !== this.lastRemoteMediaStatusKey) {
-                            this.lastRemoteMediaStatusKey = statusKey;
-                            this.logCast('ok', 'REMOTE_MEDIA_STATUS_CHANGED', statusKey);
-                        }
-                        this.syncCurrentTrackFromSession(mediaSession);
-                    } catch { /* ignore */ }
-                }
-            );
+            // Not present in current Web Sender SDKs (registering undefined
+            // never fires) — guarded so it activates if the SDK adds it.
+            if (cast.framework.RemotePlayerEventType.MEDIA_STATUS_CHANGED) {
+                this.playerController.addEventListener(
+                    cast.framework.RemotePlayerEventType.MEDIA_STATUS_CHANGED,
+                    () => {
+                        try {
+                            const mediaSession = this.getMediaSession();
+                            if (!mediaSession) return;
+                            const statusKey = this.describeMediaSession(mediaSession);
+                            if (statusKey !== this.lastRemoteMediaStatusKey) {
+                                this.lastRemoteMediaStatusKey = statusKey;
+                                this.logCast('ok', 'REMOTE_MEDIA_STATUS_CHANGED', statusKey);
+                            }
+                            this.syncCurrentTrackFromSession(mediaSession);
+                        } catch { /* ignore */ }
+                    }
+                );
+            }
 
             if (cast.framework.RemotePlayerEventType.IS_MEDIA_LOADED_CHANGED) {
                 this.playerController.addEventListener(
@@ -1439,11 +1548,6 @@ export class CastManager {
             if (index >= 0) return index;
         }
 
-        const currentItemIndex = mediaSession.currentItemIndex;
-        if (typeof currentItemIndex === 'number' && currentItemIndex >= 0 && currentItemIndex < playlist.length) {
-            return currentItemIndex;
-        }
-
         const fallbackIndex = mediaSession.media?.metadata?.index;
         if (typeof fallbackIndex === 'number' && fallbackIndex >= 0 && fallbackIndex < playlist.length) {
             return fallbackIndex;
@@ -1460,7 +1564,13 @@ export class CastManager {
                 return (!!hlsUrl && hlsUrl === mediaUrl) || (!!rawUrl && rawUrl === mediaUrl);
             });
             if (urlIndex >= 0) {
-                this.logCast('ok', 'Mapped Cast session item by media URL', `index=${urlIndex}`);
+                // Only log when the mapping actually moves the index — this
+                // path runs on every status update (entry-id matching doesn't
+                // survive this receiver's statuses) and was posting thousands
+                // of identical lines per day.
+                if (urlIndex !== usePlayerStore.getState().currentIndex) {
+                    this.logCast('ok', 'Mapped Cast session item by media URL', `index=${urlIndex}`);
+                }
                 return urlIndex;
             }
         }
@@ -1611,6 +1721,26 @@ export class CastManager {
         const mediaSession = this.getHydratableMediaSession();
         if (this.hasActiveRemoteMediaSession(mediaSession)) {
             await this.hydrateSenderFromRemoteSession(mediaSession, reason);
+            return;
+        }
+
+        // Fresh handover would load a queue whose media URLs the receiver
+        // can't fetch from this origin — it would accept the load and sit
+        // silently IDLE. End the session with an explicit error instead.
+        // (Joining an ongoing session above is fine: the receiver already
+        // holds URLs from the origin that started it.)
+        const originIssue = this.getOriginCastabilityIssue();
+        if (originIssue) {
+            this.logCast('error', 'Blocking fresh Cast handover from non-castable origin', originIssue);
+            toast.error(`Stopped casting — the Cast device can't reach ${window.location.host}. Use the HTTPS app.`);
+            try {
+                this.castContext?.endCurrentSession?.(true);
+            } catch { /* ignore */ }
+            this.resetSessionAttemptState('non-castable-origin', {
+                clearStoredSession: true,
+                healthPhase: 'error',
+                healthMessage: 'Casting is unavailable from this origin.',
+            });
             return;
         }
 
@@ -1777,6 +1907,31 @@ export class CastManager {
 
     public isConnected(): boolean {
         return this.state === 'CONNECTED';
+    }
+
+    /**
+     * The Web Receiver runs on the Cast device and fetches media from THIS
+     * page's origin. A loopback host resolves to the Cast device itself, and
+     * an http: origin is blocked as mixed content by the HTTPS receiver page —
+     * both make the receiver's loads fail silently (queue accepted, player
+     * stays IDLE, progress frozen). Returns why this origin can't serve a
+     * receiver, or null if it can.
+     */
+    private getOriginCastabilityIssue(): string | null {
+        const { protocol, hostname } = window.location;
+        const isLoopback = hostname === 'localhost'
+            || hostname === '127.0.0.1'
+            || hostname === '0.0.0.0'
+            || hostname === '::1'
+            || hostname === '[::1]'
+            || hostname.endsWith('.localhost');
+        if (isLoopback) {
+            return `media URLs would point at ${hostname}, which resolves to the Cast device itself`;
+        }
+        if (protocol !== 'https:') {
+            return 'the HTTPS receiver page cannot fetch http: media (mixed content)';
+        }
+        return null;
     }
 
     public getCastState(): CastState {
@@ -2131,10 +2286,16 @@ export class CastManager {
             queueEntryId: track.queueEntryId || createQueueEntryId(),
         });
         const request = new chrome.cast.media.QueueInsertItemsRequest([item]);
+        // Media sessions expose currentItemId, not an index — derive the
+        // position from it. Without insertBefore the item appends to the end,
+        // which is only correct when the current item is already last.
         const items = mediaSession.items;
-        const currentIndex = mediaSession.currentItemIndex;
-        if (Array.isArray(items) && typeof currentIndex === 'number' && currentIndex >= 0 && currentIndex < items.length - 1) {
-            request.insertBefore = items[currentIndex + 1].itemId;
+        const currentItemId = mediaSession.currentItemId;
+        if (Array.isArray(items) && typeof currentItemId === 'number') {
+            const currentIndex = items.findIndex((queueItem: any) => queueItem?.itemId === currentItemId);
+            if (currentIndex >= 0 && currentIndex < items.length - 1) {
+                request.insertBefore = items[currentIndex + 1].itemId;
+            }
         }
 
         try {

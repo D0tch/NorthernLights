@@ -17,6 +17,7 @@ import { useToast } from './hooks/useToast';
 import { playbackManager } from './utils/PlaybackManager';
 import { GlobalScanningIndicator } from './components/GlobalScanningIndicator';
 import { applyPendingPwaUpdate } from './utils/pwaUpdate';
+import { isServerDatabaseConnected } from './utils/serverHealth';
 
 const SetupWizard = React.lazy(() => import('./components/SetupWizard').then(module => ({ default: module.SetupWizard })));
 const LoginPage = React.lazy(() => import('./components/LoginPage').then(module => ({ default: module.LoginPage })));
@@ -160,15 +161,9 @@ const App: React.FC = () => {
 
   // Health check function accessible from render
   const checkHealth = React.useCallback(async () => {
-    try {
-      const res = await fetch('/api/health');
-      const data = await res.json();
-      setDbConnected(data.dbConnected === true);
-      return data.dbConnected === true;
-    } catch {
-      setDbConnected(false);
-      return false;
-    }
+    const connected = await isServerDatabaseConnected();
+    setDbConnected(connected);
+    return connected;
   }, []);
 
   // Trigger an initial library fetch, apply theme, and subscribe to scan events

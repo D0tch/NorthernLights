@@ -1532,6 +1532,22 @@
         cast.framework.messages.Command.QUEUE_PREV;
       context.start(receiverOptions);
       logAndPost('ok', LOG_TAG, 'context.start() returned OK');
+
+      // Senders can lose their RemotePlayer binding across queue replacements
+      // (the old media session's terminal IDLE detaches them) and then hear
+      // nothing until a new status arrives. Broadcast the full media status
+      // periodically while active so a deaf sender always has a fresh
+      // broadcast to re-bind from.
+      setInterval(function() {
+        try {
+          var broadcastState = playerManager.getPlayerState();
+          if (broadcastState === cast.framework.messages.PlayerState.PLAYING
+              || broadcastState === cast.framework.messages.PlayerState.BUFFERING
+              || broadcastState === cast.framework.messages.PlayerState.PAUSED) {
+            playerManager.broadcastStatus();
+          }
+        } catch (broadcastError) { /* ignore */ }
+      }, 15000);
     } catch (initError) {
       _rawLog('[INIT ERROR] ' + initError.message);
       if (initError.stack) _rawLog('[INIT STACK] ' + initError.stack);

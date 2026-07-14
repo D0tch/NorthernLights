@@ -56,4 +56,26 @@ describe('PreloadManager', () => {
 
     expect(global.fetch).toHaveBeenCalledTimes(1);
   });
+
+  it('warms the fixed cast flavor when cast is connected', () => {
+    const playlist = [makeTrack('current-cast'), makeTrack('next-cast')];
+
+    preloadManager.prewarmNext(playlist, 0, 'auto', { castConnected: true });
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const url = (global.fetch as jest.Mock).mock.calls[0][0] as URL;
+    expect(url.searchParams.get('quality')).toBe('128k');
+    expect(url.searchParams.get('codec')).toBe('aac');
+  });
+
+  it('warms the browser flavor without a codec param when not casting', () => {
+    const playlist = [makeTrack('current-local'), makeTrack('next-local')];
+
+    preloadManager.prewarmNext(playlist, 0, 'auto');
+
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const url = (global.fetch as jest.Mock).mock.calls[0][0] as URL;
+    expect(url.searchParams.get('quality')).toBe('auto');
+    expect(url.searchParams.has('codec')).toBe(false);
+  });
 });

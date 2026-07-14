@@ -1,6 +1,6 @@
 import type { TrackInfo } from './fileSystem';
 import { logPlaybackInfo } from './playbackDebug';
-import { applyStreamingQualityToHlsUrl, type StreamingQualityPreset } from './streaming';
+import { applyCastStreamingQualityToHlsUrl, applyStreamingQualityToHlsUrl, type StreamingQualityPreset } from './streaming';
 
 type PrewarmOptions = {
     castConnected?: boolean;
@@ -97,10 +97,17 @@ class PreloadManager {
         if (!track.url || !track.url.includes('/playlist.m3u8')) return null;
 
         try {
-            const hlsUrl = new URL(applyStreamingQualityToHlsUrl(track.url, streamingQuality), window.location.origin);
+            // Warm the flavor that will actually be requested. The custom Cast
+            // receiver always plays the fixed cast quality with codec=aac (see
+            // CastManager.buildMediaInfo); browser playback resolves the preset
+            // locally and omits codec (the server defaults it to aac).
+            const flavoredUrl = options.castConnected
+                ? applyCastStreamingQualityToHlsUrl(track.url, streamingQuality)
+                : applyStreamingQualityToHlsUrl(track.url, streamingQuality);
+            const hlsUrl = new URL(flavoredUrl, window.location.origin);
             hlsUrl.pathname = hlsUrl.pathname.replace(/\/playlist\.m3u8$/, '/prewarm');
-            if (!hlsUrl.searchParams.has('codec')) {
-                hlsUrl.searchParams.set('codec', options.castConnected ? 'aac' : 'aac');
+            if (options.castConnected && !hlsUrl.searchParams.has('codec')) {
+                hlsUrl.searchParams.set('codec', 'aac');
             }
             return hlsUrl;
         } catch {

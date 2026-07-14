@@ -110,7 +110,7 @@ The setup flow will let you create the PostgreSQL container if one is not alread
 Copy `.env.example` to `.env` and review at least:
 
 - `PORT`: default `3001`.
-- `ALLOWED_ORIGINS`: comma-separated browser origins allowed by CORS.
+- `ALLOWED_ORIGINS`: comma-separated browser origins allowed by CORS. The example permits both the Vite dev server on `http://localhost:3000` and the built app on `http://localhost:3001`.
 - `DB_*`: PostgreSQL connection settings.
 - `DB_CONTAINER_NAME` and `DB_DATA_DIR`: managed database container settings.
 - `MBDB_WORK_DIR`: temporary MusicBrainz import workspace.
@@ -164,6 +164,16 @@ Before submitting changes:
 npx tsc --noEmit
 npx vite build
 ```
+
+## Contributing
+
+Contributions are welcome. Before opening a pull request, read the project guidance so the change fits the product and its conventions:
+
+- [AGENTS.md](AGENTS.md) — project structure, coding standards, and the workflow this repo follows.
+- [PRODUCT.md](PRODUCT.md) — what Aurora is, who it's for, and the non-goals that decide what ships.
+- [DESIGN.md](DESIGN.md) — the design system: brand, color, typography, glass, and component rules.
+
+Keep pull requests focused. Run typecheck and build before submitting, and prefer extending existing systems over introducing parallel patterns.
 
 [![Buy Me a Coffee at ko-fi.com](https://storage.ko-fi.com/cdn/kofi6.png?v=6)](https://ko-fi.com/X8X51YLFS8)
 

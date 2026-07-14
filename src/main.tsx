@@ -8,6 +8,7 @@ import './utils/pwaInstall';
 import { registerSW } from 'virtual:pwa-register';
 import { usePlayerStore } from './store';
 import { setPwaUpdateHandler } from './utils/pwaUpdate';
+import { OriginAccessGate } from './components/OriginAccessGate';
 
 // Auto-recover from stale lazy chunks. After a deploy the hashed route chunks
 // change; a tab still running the old build that navigates to a not-yet-loaded
@@ -94,13 +95,19 @@ class ErrorBoundary extends React.Component<React.PropsWithChildren, ErrorBounda
 
 const rootElement = document.getElementById('root');
 if (rootElement) {
+  const playerState = usePlayerStore.getState();
+  playerState.setTheme(playerState.theme);
+  playerState.setReducedMotion(playerState.reducedMotion);
+
   const root = ReactDOM.createRoot(rootElement);
   root.render(
     <React.StrictMode>
       <ErrorBoundary>
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
+        <OriginAccessGate>
+          <BrowserRouter>
+            <App />
+          </BrowserRouter>
+        </OriginAccessGate>
       </ErrorBoundary>
     </React.StrictMode>
   );
