@@ -1,6 +1,6 @@
 import { fetchWithTimeout } from './fetchWithTimeout';
 
-export const SERVER_HEALTH_TIMEOUT_MS = 8_000;
+const SERVER_HEALTH_TIMEOUT_MS = 8_000;
 
 interface HealthResponse {
   dbConnected?: unknown;
