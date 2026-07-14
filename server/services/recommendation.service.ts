@@ -2035,8 +2035,9 @@ export async function calculateNextInfinityTrack(
     const placeholders = last10Ids.map((_, i) => `$${i + 1}`).join(',');
     const vecRes = await queryWithRetry(`
       SELECT t.id, tf.acoustic_vector_8d
-      FROM tracks t JOIN track_features tf ON t.id = tf.track_id 
+      FROM tracks t JOIN track_features tf ON t.id = tf.track_id
       WHERE t.id IN (${placeholders}) AND tf.acoustic_vector_8d IS NOT NULL
+        AND tf.is_simulated = FALSE
     `, last10Ids);
 
     // Map rows back to the ordered last10 array
@@ -2109,6 +2110,7 @@ export async function calculateNextInfinityTrack(
       SELECT t.id, tf.embedding_vector
       FROM tracks t JOIN track_features tf ON t.id = tf.track_id
       WHERE t.id IN (${placeholders2}) AND tf.embedding_vector IS NOT NULL
+        AND tf.is_simulated = FALSE
     `, last10Ids);
     if (effnetRes.rows.length > 0) {
       const lambda = 0.8;
@@ -2172,6 +2174,7 @@ export async function calculateNextInfinityTrack(
         FROM tracks t
         JOIN track_features tf ON t.id = tf.track_id
         WHERE tf.acoustic_vector_8d IS NOT NULL AND tf.embedding_vector IS NOT NULL
+        AND tf.is_simulated = FALSE
         ${renumberedHistory}
         ORDER BY distance ASC
         LIMIT $${penaltyIds.length + 3}
@@ -2181,7 +2184,8 @@ export async function calculateNextInfinityTrack(
         SELECT t.*, tf.acoustic_vector_8d <-> $1::vector AS distance
         FROM tracks t
         JOIN track_features tf ON t.id = tf.track_id
-        WHERE tf.acoustic_vector_8d IS NOT NULL ${historyClause ? `AND ${historyClause.replace(/^WHERE /, '')}` : ''}
+        WHERE tf.acoustic_vector_8d IS NOT NULL AND tf.is_simulated = FALSE
+        ${historyClause ? `AND ${historyClause.replace(/^WHERE /, '')}` : ''}
         ORDER BY distance ASC
         LIMIT $${penaltyIds.length + 2}
       `, [vectorStr, ...penaltyIds, overFetchLimit]);
@@ -2229,9 +2233,16 @@ export async function calculateNextInfinityTrack(
     penaltySize = Math.max(0, Math.floor(penaltySize / 2));
   }
 
-  // Handle absolute pool exhaustion gracefully
+  // Handle absolute pool exhaustion gracefully. Prefer genuinely analyzed
+  // tracks — simulated-fallback features are barred from Infinity unless the
+  // library holds nothing else.
   if (finalCandidates.length === 0) {
-      const randomFallback = await queryWithRetry('SELECT * FROM tracks ORDER BY RANDOM() LIMIT 1');
+      const randomFallback = await queryWithRetry(`
+        SELECT t.* FROM tracks t
+        LEFT JOIN track_features tf ON tf.track_id = t.id
+        ORDER BY (tf.track_id IS NOT NULL AND tf.is_simulated = FALSE) DESC, RANDOM()
+        LIMIT 1
+      `);
       return randomFallback.rows[0];
   }
 
