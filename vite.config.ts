@@ -213,7 +213,6 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
-      buffer: path.resolve(__dirname, './node_modules/buffer/'),
     },
   },
   base: '/',
@@ -252,15 +251,5 @@ export default defineConfig({
         changeOrigin: true
       }
     }
-  },
-  define: {
-    global: 'globalThis'
-  },
-  optimizeDeps: {
-    esbuildOptions: {
-      define: {
-        global: 'globalThis',
-      },
-    },
   },
 });

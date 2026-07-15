@@ -59,7 +59,7 @@ export const MainContent: React.FC = () => {
 
   return (
     <div className="flex-1 flex overflow-hidden">
-      <div ref={scrollRef} className={`flex-1 overflow-y-auto ${
+      <div ref={scrollRef} className={`app-scroll-viewport flex-1 ${
         playlist.length > 0
           ? playerPlacement === 'dock'
             ? 'pb-32 md:pb-24'

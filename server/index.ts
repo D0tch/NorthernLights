@@ -21,6 +21,12 @@ import { requireAuth as jwtAuthMiddleware } from './middleware/auth';
 import { createRateLimiter } from './middleware/rateLimit';
 import { initDatabaseConnection, getSessionHistory } from './state';
 import { calculateNextInfinityTrack } from './services/recommendation.service';
+import {
+  getConfiguredAllowedOrigins,
+  isCorsOriginAllowed,
+  normalizeAllowedOrigins,
+  parseBareOrigin,
+} from './utils/corsOrigin';
 
 // Route imports
 import authRoutes from './routes/auth.routes';
@@ -61,41 +67,57 @@ function escapeHtml(value: string): string {
 app.set('trust proxy', true);
 
 // Allowed origins setup
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',').map((origin) => origin.trim()).filter(Boolean)
-  : ['http://localhost:3000'];
+const allowedOrigins = getConfiguredAllowedOrigins(process.env.ALLOWED_ORIGINS, port);
 // If a custom Cast receiver origin is set, add it to CORS whitelist so
 // the receiver can fetch HLS segments from our media server
 if (process.env.CAST_RECEIVER_ORIGIN && !allowedOrigins.includes(process.env.CAST_RECEIVER_ORIGIN)) {
   allowedOrigins.push(process.env.CAST_RECEIVER_ORIGIN);
 }
 
-function parseBareOrigin(origin: string): URL | null {
-  try {
-    const parsed = new URL(origin);
-    if (parsed.username || parsed.password || parsed.pathname !== '/' || parsed.search || parsed.hash) {
-      return null;
-    }
-    return parsed;
-  } catch {
-    return null;
-  }
-}
-
-const normalizedAllowedOrigins = new Set(
-  allowedOrigins
-    .map((origin) => parseBareOrigin(origin)?.origin || null)
-    .filter((origin): origin is string => Boolean(origin))
-);
+const normalizedAllowedOrigins = normalizeAllowedOrigins(allowedOrigins);
 
 function isAllowedCorsOrigin(origin: string): boolean {
-  const parsed = parseBareOrigin(origin);
-  if (!parsed) return false;
-
-  if (normalizedAllowedOrigins.has(parsed.origin)) return true;
-
-  return parsed.origin === 'https://www.gstatic.com' || parsed.origin === 'https://cast.google.com';
+  return isCorsOriginAllowed(origin, normalizedAllowedOrigins);
 }
+
+// A browser cannot read a normal CORS rejection, so expose one non-sensitive
+// boot probe before the global CORS gate. It tells the app only whether its own
+// origin is configured, without exposing the rest of the allow-list. Reflecting
+// the request Origin is safe here because blocked callers receive no application
+// data, only the reason all subsequent API calls would be denied.
+app.get('/api/origin-status', (req, res) => {
+  const headerOrigin = typeof req.headers.origin === 'string' ? req.headers.origin : null;
+  const queryOrigin = typeof req.query.origin === 'string' ? req.query.origin : null;
+  const candidate = headerOrigin || queryOrigin || `${req.protocol}://${req.get('host')}`;
+  const parsedOrigin = parseBareOrigin(candidate);
+
+  res.setHeader('Cache-Control', 'no-store');
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+
+  if (headerOrigin) {
+    const parsedHeaderOrigin = parseBareOrigin(headerOrigin);
+    if (parsedHeaderOrigin) {
+      res.setHeader('Access-Control-Allow-Origin', parsedHeaderOrigin.origin);
+      res.setHeader('Vary', 'Origin');
+    }
+  }
+
+  if (!parsedOrigin) {
+    return res.status(400).json({
+      allowed: false,
+      origin: null,
+      code: 'INVALID_ORIGIN',
+    });
+  }
+
+  const origin = parsedOrigin.origin;
+  const allowed = isAllowedCorsOrigin(origin);
+  return res.status(allowed ? 200 : 403).json({
+    allowed,
+    origin,
+    code: allowed ? 'ORIGIN_ALLOWED' : 'ORIGIN_NOT_ALLOWED',
+  });
+});
 
 app.use(cors({
   origin: (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {

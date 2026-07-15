@@ -269,6 +269,17 @@
   scrollbar-color: rgba(255, 255, 255, 0.15) transparent;
 }
 
+/* The routed page is the app's single desktop scroll viewport. `overlay` keeps
+   classic Linux/Windows scrollbar gutters from narrowing full-bleed artwork;
+   browsers that only support the standardized values retain the `auto`
+   declaration immediately above it. */
+.app-scroll-viewport {
+  min-width: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-y: overlay;
+}
+
 /* User-toggled reduced motion (independent of the OS-level
    prefers-reduced-motion media query, which is still honored separately).
    Set via the Appearance tab; toggles `reduced-motion` on <html>. */
@@ -1017,12 +1028,114 @@ body {
 .page-container {
   padding: 1rem;
   /* NOTE: no `overflow-y: auto` here. The actual scroll viewport is MainContent's
-     wrapper (.flex-1.overflow-y-auto); this element is nested inside it and only
+     wrapper (.app-scroll-viewport); this element is nested inside it and only
      grows to its content. A redundant overflow here made it a second "scroll"
      container that never scrolled, which defeated VirtualizedCardGrid's windowing
      (react-virtual measured this element's full content height and mounted every
      card). Keep scrolling on the single ancestor viewport. */
   flex: 1;
+}
+
+/* Full-bleed library detail artwork. The outer mask is deliberately applied
+   to the complete layer, including its readability veil, so it dissolves into
+   the fixed Aurora backdrop instead of ending in a solid background-colored
+   rectangle. */
+.faded-hero {
+  position: absolute;
+  top: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 0%, #000 70%, rgba(0, 0, 0, 0.82) 80%, transparent 100%);
+          mask-image: linear-gradient(to bottom, #000 0%, #000 70%, rgba(0, 0, 0, 0.82) 80%, transparent 100%);
+}
+
+.faded-hero--standard {
+  left: 0;
+  width: 100%;
+  height: 20rem;
+}
+
+.faded-hero--wide {
+  left: 50%;
+  width: 100vw;
+  height: 32rem;
+  transform: translateX(-50%);
+}
+
+.faded-hero__image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 700ms var(--ease-out);
+}
+
+.faded-hero__image--standard.is-loaded {
+  opacity: 0.32;
+}
+
+.dark .faded-hero__image--standard.is-loaded {
+  opacity: 0.22;
+}
+
+.faded-hero__image--wide {
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.96) 0%, rgba(0, 0, 0, 0.84) 18%, rgba(0, 0, 0, 0.52) 34%, rgba(0, 0, 0, 0.20) 52%, transparent 72%);
+          mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.96) 0%, rgba(0, 0, 0, 0.84) 18%, rgba(0, 0, 0, 0.52) 34%, rgba(0, 0, 0, 0.20) 52%, transparent 72%);
+}
+
+.faded-hero__image--wide.is-loaded {
+  opacity: 0.28;
+}
+
+.dark .faded-hero__image--wide.is-loaded {
+  opacity: 0.24;
+}
+
+.faded-hero__veil {
+  position: absolute;
+  inset: 0;
+}
+
+.faded-hero__veil--standard {
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--color-background) 55%, transparent) 0%,
+    color-mix(in srgb, var(--color-background) 20%, transparent) 35%,
+    color-mix(in srgb, var(--color-background) 24%, transparent) 55%,
+    color-mix(in srgb, var(--color-background) 88%, transparent) 78%,
+    var(--color-background) 100%
+  );
+}
+
+.faded-hero__veil--wide {
+  background:
+    linear-gradient(to bottom, color-mix(in srgb, var(--color-background) 12%, transparent) 0%, transparent 12%),
+    linear-gradient(to bottom, transparent 0%, transparent 24%, color-mix(in srgb, var(--color-background) 80%, transparent) 100%),
+    linear-gradient(to top, var(--color-background) 0%, color-mix(in srgb, var(--color-background) 94%, transparent) 46%, transparent 100%) bottom / 100% 11rem no-repeat;
+}
+
+@media (min-width: 768px) {
+  .faded-hero--standard {
+    height: 27.5rem;
+  }
+
+  .faded-hero--wide {
+    height: 44rem;
+  }
+
+  .faded-hero__veil--wide {
+    background:
+      linear-gradient(to bottom, color-mix(in srgb, var(--color-background) 12%, transparent) 0%, transparent 12%),
+      linear-gradient(to bottom, transparent 0%, transparent 24%, color-mix(in srgb, var(--color-background) 80%, transparent) 100%),
+      linear-gradient(to top, var(--color-background) 0%, color-mix(in srgb, var(--color-background) 94%, transparent) 46%, transparent 100%) bottom / 100% 14rem no-repeat;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .faded-hero__image {
+    transition: none;
+  }
 }
 
 @media (min-width: 768px) {
@@ -4768,7 +4881,8 @@ a:focus-visible > .genre-card .genre-card__label {
 
 /* ─── FIRST-RUN SETUP ─── */
 .setup-wizard,
-.setup-status-error {
+.setup-status-error,
+.origin-access {
   position: fixed;
   inset: 0;
   z-index: 100;
@@ -4789,7 +4903,8 @@ a:focus-visible > .genre-card .genre-card__label {
 }
 
 .setup-wizard__atmosphere,
-.setup-status-error::before {
+.setup-status-error::before,
+.origin-access::before {
   content: "";
   position: fixed;
   inset: 0;
@@ -4802,7 +4917,8 @@ a:focus-visible > .genre-card .genre-card__label {
 }
 
 .setup-wizard__panel,
-.setup-status-error__panel {
+.setup-status-error__panel,
+.origin-access__panel {
   width: min(100%, 48rem);
   margin: auto;
   border: 1px solid var(--glass-border);
@@ -4845,7 +4961,8 @@ a:focus-visible > .genre-card .genre-card__label {
 
 .setup-wizard__header h1,
 .setup-wizard__step-heading h2,
-.setup-status-error__panel h1 {
+.setup-status-error__panel h1,
+.origin-access__panel h1 {
   margin: 0;
   color: var(--color-text-primary);
   font-family: var(--font-display);
@@ -4860,7 +4977,8 @@ a:focus-visible > .genre-card .genre-card__label {
 
 .setup-wizard__header p:last-child,
 .setup-wizard__step-heading p:last-child,
-.setup-status-error__panel p {
+.setup-status-error__panel p,
+.origin-access__panel > p {
   max-width: 68ch;
   margin-top: var(--spacing-xs);
   color: var(--color-text-secondary);
@@ -5233,6 +5351,105 @@ a:focus-visible > .genre-card .genre-card__label {
   margin-top: var(--spacing-lg);
 }
 
+.origin-access__panel {
+  max-width: 32rem;
+  padding: clamp(1.75rem, 5vw, 2.5rem);
+  text-align: center;
+}
+
+.origin-access__icon {
+  width: 3.5rem;
+  height: 3.5rem;
+  margin: 0 auto var(--spacing-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in oklch, var(--color-error) 30%, var(--glass-border));
+  border-radius: 50%;
+  color: var(--color-error);
+  background: color-mix(in oklch, var(--color-error) 10%, var(--color-surface));
+}
+
+.origin-access__icon svg {
+  width: 1.65rem;
+  height: 1.65rem;
+}
+
+.origin-access__eyebrow {
+  margin: 0 0 var(--spacing-xs) !important;
+  color: var(--color-error) !important;
+  font-family: var(--font-display);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.origin-access__panel h1 {
+  font-size: 1.65rem;
+  line-height: 1.15;
+}
+
+.origin-access__origin {
+  margin: var(--spacing-lg) 0;
+  padding: 0.9rem 1rem;
+  display: grid;
+  gap: var(--spacing-xs);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-sm);
+  background: color-mix(in oklch, var(--color-surface) 86%, var(--color-background));
+  text-align: left;
+}
+
+.origin-access__origin span {
+  color: var(--color-text-muted);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.origin-access code {
+  color: var(--color-text-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.origin-access__instruction {
+  color: var(--color-text-primary) !important;
+  font-size: 0.9rem;
+}
+
+.origin-access__panel .btn {
+  min-width: 9.5rem;
+  margin-top: var(--spacing-lg);
+}
+
+.origin-access__panel .btn[disabled] {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.origin-access__panel .btn svg,
+.origin-access__spinner {
+  width: 1rem;
+  height: 1rem;
+}
+
+.origin-access__loading {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+}
+
+.origin-access__spinner {
+  animation: setup-spinner 850ms linear infinite;
+}
+
 @keyframes setup-step-enter {
   from { opacity: 0; transform: translateX(0.75rem); }
   to { opacity: 1; transform: translateX(0); }
@@ -5244,7 +5461,8 @@ a:focus-visible > .genre-card .genre-card__label {
 
 @media (max-width: 639px) {
   .setup-wizard,
-  .setup-status-error {
+  .setup-status-error,
+  .origin-access {
     align-items: flex-start;
     padding:
       calc(var(--spacing-md) + var(--safe-area-top))
@@ -5305,7 +5523,8 @@ a:focus-visible > .genre-card .genre-card__label {
 
 @media (prefers-reduced-motion: reduce) {
   .setup-wizard__step,
-  .setup-wizard__spinner {
+  .setup-wizard__spinner,
+  .origin-access__spinner {
     animation: none;
   }
 }

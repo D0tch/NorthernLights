@@ -64,41 +64,6 @@ export class ProviderThrottle {
 export const geniusThrottle  = new ProviderThrottle(250);  // 4 req/s
 export const lastFmThrottle  = new ProviderThrottle(210);  // ~4.7 req/s
 
-// ─── Legacy Semaphore (kept for any code that still imports it) ───────────────
-
-/** @deprecated Use ProviderThrottle instead — a semaphore does not pace requests over time. */
-export class Semaphore {
-  private tasks: Array<() => void> = [];
-  private count: number;
-
-  constructor(max: number) {
-    this.count = max;
-  }
-
-  async acquire() {
-    if (this.count > 0) {
-      this.count--;
-      return;
-    }
-    await new Promise<void>((resolve) => {
-      this.tasks.push(resolve);
-    });
-  }
-
-  release() {
-    if (this.tasks.length > 0) {
-      const fn = this.tasks.shift();
-      if (fn) fn();
-    } else {
-      this.count++;
-    }
-  }
-
-  get pendingCount(): number {
-    return this.tasks.length;
-  }
-}
-
 // ─── fetchWithRetry ───────────────────────────────────────────────────────────
 
 function sleep(ms: number) {
