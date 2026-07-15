@@ -401,73 +401,8 @@ export type PrebufferPolicy = 'off' | 'conservative' | 'aggressive';
 export type AdaptiveFallbackState = 'none' | 'fixed-64k' | 'fixed-128k';
 const getPrewarmAheadCount = (policy: PrebufferPolicy): 1 | 2 => policy === 'aggressive' ? 2 : 1;
 export type LlmVetoMode = 'hard' | 'adaptive';
-export type ThemeName = 'light' | 'dark' | 'midnight' | 'solstice' | 'nebula' | 'crimson' | 'custom';
+export type ThemeName = 'light' | 'dark';
 
-// CSS custom properties the "Custom" theme is allowed to override. Kept as an
-// allowlist (rather than accepting arbitrary declarations) so the textarea in
-// AppearanceTab can only ever touch variables the rest of the app already reads.
-export const CUSTOM_THEME_VARS = [
-  '--color-background', '--color-surface', '--color-surface-variant',
-  '--color-primary', '--color-primary-dark', '--color-secondary', '--color-accent',
-  '--color-border', '--color-text-primary', '--color-text-secondary', '--color-text-muted',
-  '--color-success', '--color-error', '--color-warning',
-  '--aurora-green', '--aurora-teal', '--aurora-blue', '--aurora-extra-glow', '--aurora-pink',
-  '--glass-bg', '--glass-bg-hover', '--glass-border', '--glass-border-hover', '--glass-shadow',
-  '--shadow-glow', '--shadow-fab',
-  '--aurora-play-gradient', '--aurora-play-border', '--aurora-play-glow',
-  '--radius', '--radius-sm', '--radius-lg', '--radius-pill',
-] as const;
-
-export const DEFAULT_CUSTOM_THEME_CSS = `/* Uncomment and edit any of these to build your own theme.
-   Only the --variable names already listed below have any visual effect. */
-/* --color-background: #030308; */
-/* --color-surface: rgba(6, 10, 24, 0.72); */
-/* --color-surface-variant: rgba(13, 20, 40, 0.5); */
-/* --color-primary: #22c983; */
-/* --color-primary-dark: #10b981; */
-/* --color-secondary: #0ea5e9; */
-/* --color-accent: #f43f5e; */
-/* --color-border: rgba(34, 201, 131, 0.08); */
-/* --color-text-primary: #d8d8e8; */
-/* --color-text-secondary: #c6c6da; */
-/* --color-text-muted: #c6c6da; */
-/* --aurora-green: #22c983; */
-/* --aurora-teal: #2dd4bf; */
-/* --aurora-blue: #0ea5e9; */
-/* --aurora-extra-glow: #10b981; */
-/* --aurora-pink: #f43f5e; */
-/* --glass-border-hover: rgba(34, 201, 131, 0.15); */
-/* --shadow-glow: 0 0 30px rgba(34, 201, 131, 0.12); */
-/* --radius: 14px; */
-`;
-
-const CUSTOM_VAR_DECLARATION = /(--[a-zA-Z0-9-]+)\s*:\s*([^;\n]+);?/g;
-
-function parseCustomThemeCss(css: string): Map<string, string> {
-  const withoutComments = css.replace(/\/\*[\s\S]*?\*\//g, '');
-  const declarations = new Map<string, string>();
-  let match: RegExpExecArray | null;
-  CUSTOM_VAR_DECLARATION.lastIndex = 0;
-  while ((match = CUSTOM_VAR_DECLARATION.exec(withoutComments)) !== null) {
-    const name = match[1].trim();
-    const value = match[2].trim();
-    if ((CUSTOM_THEME_VARS as readonly string[]).includes(name)) {
-      declarations.set(name, value);
-    }
-  }
-  return declarations;
-}
-
-function clearCustomThemeVars() {
-  const root = document.documentElement.style;
-  CUSTOM_THEME_VARS.forEach(name => root.removeProperty(name));
-}
-
-function applyCustomThemeCss(css: string) {
-  const root = document.documentElement.style;
-  CUSTOM_THEME_VARS.forEach(name => root.removeProperty(name));
-  parseCustomThemeCss(css).forEach((value, name) => root.setProperty(name, value));
-}
 export type QueueMutationOptions = {
   notify?: boolean;
   undo?: boolean;
@@ -600,7 +535,6 @@ export interface PlayerState {
   shuffle: boolean;
   repeat: "none" | "one" | "all";
   theme: ThemeName;
-  customThemeCss: string;
   reducedMotion: boolean;
   mobileVideoBackgrounds: boolean;
   lastFmApiKey: string;
@@ -792,7 +726,6 @@ export interface PlayerState {
   cycleRepeat: () => void;
   setCastConnected: (connected: boolean) => void;
   setTheme: (theme: ThemeName) => void;
-  setCustomThemeCss: (css: string) => void;
   setReducedMotion: (enabled: boolean) => void;
   setMobileVideoBackgrounds: (enabled: boolean) => void;
   setLastFmApiKey: (key: string) => void;
@@ -1173,7 +1106,6 @@ export const usePlayerStore = create<PlayerState>()(
         shuffle: false as boolean,
         repeat: "none" as "none" | "one" | "all",
         theme: 'light' as ThemeName,
-        customThemeCss: DEFAULT_CUSTOM_THEME_CSS,
         reducedMotion: (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) || false,
         mobileVideoBackgrounds: true,
         lastFmApiKey: '',
@@ -1389,19 +1321,10 @@ export const usePlayerStore = create<PlayerState>()(
 
         setTheme: (theme: ThemeName) => {
           set({ theme });
-          document.documentElement.classList.toggle('dark', theme !== 'light');
-          document.documentElement.setAttribute('data-theme', theme);
-          if (theme === 'custom') {
-            applyCustomThemeCss(get().customThemeCss);
+          if (theme === 'dark') {
+            document.documentElement.classList.add('dark');
           } else {
-            clearCustomThemeVars();
-          }
-        },
-
-        setCustomThemeCss: (css: string) => {
-          set({ customThemeCss: css });
-          if (get().theme === 'custom') {
-            applyCustomThemeCss(css);
+            document.documentElement.classList.remove('dark');
           }
         },
 
@@ -2973,7 +2896,6 @@ export const usePlayerStore = create<PlayerState>()(
         shuffle: state.shuffle,
         repeat: state.repeat,
         theme: state.theme,
-        customThemeCss: state.customThemeCss,
         reducedMotion: state.reducedMotion,
         mobileVideoBackgrounds: state.mobileVideoBackgrounds,
         lastFmApiKey: state.lastFmApiKey,
